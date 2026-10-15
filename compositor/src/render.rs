@@ -5,8 +5,9 @@ use std::time::Instant;
 use smithay::{
     backend::renderer::{
         element::{
-            AsRenderElements, render_elements, surface::WaylandSurfaceRenderElement,
-            texture::TextureRenderElement, utils::RescaleRenderElement,
+            AsRenderElements, render_elements, solid::SolidColorRenderElement,
+            surface::WaylandSurfaceRenderElement, texture::TextureRenderElement,
+            utils::RescaleRenderElement,
         },
         gles::{GlesRenderer, GlesTexture},
     },
@@ -17,6 +18,7 @@ use smithay::{
 
 use crate::{
     effects::{self, ClosingWindow},
+    snap::SnapPreview,
     snapshot::Snapshot,
     window::with_state,
 };
@@ -27,12 +29,14 @@ render_elements! {
     // it; at rest the scale is exactly 1.
     Window = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     Snapshot = RescaleRenderElement<TextureRenderElement<GlesTexture>>,
+    Solid = SolidColorRenderElement,
 }
 
 pub fn output_elements(
     renderer: &mut GlesRenderer,
     space: &Space<Window>,
     closing: &[ClosingWindow],
+    snap_preview: Option<&mut SnapPreview>,
     output: &Output,
     now: Instant,
 ) -> Vec<OutputElement> {
@@ -46,16 +50,28 @@ pub fn output_elements(
     // position they had; then flip, since the renderer wants top first.
     let windows: Vec<&Window> = space.elements_for_output(output).collect();
     let mut layers: Vec<Vec<OutputElement>> = Vec::with_capacity(windows.len() + closing.len());
+    let mut top_window_layer = None;
     for (index, win) in windows.iter().enumerate() {
         for closed in closing.iter().filter(|c| c.below == index) {
             layers.push(closing_elements(closed, output_loc, scale, now));
         }
+        top_window_layer = Some(layers.len());
         layers.push(window_elements(
             renderer, space, win, output_loc, scale, now,
         ));
     }
     for closed in closing.iter().filter(|c| c.below >= windows.len()) {
         layers.push(closing_elements(closed, output_loc, scale, now));
+    }
+    // The snap preview sits just below the window being dragged (always the
+    // topmost one, since grabbing raises it).
+    if let Some(preview) = snap_preview {
+        let elements = preview
+            .render_elements(output_loc, scale, now)
+            .into_iter()
+            .map(OutputElement::Solid)
+            .collect();
+        layers.insert(top_window_layer.unwrap_or(layers.len()), elements);
     }
 
     layers.into_iter().rev().flatten().collect()
@@ -128,8 +144,14 @@ fn snapshot_element(
 }
 
 /// Whether anything needs another frame soon.
-pub fn animations_running(space: &Space<Window>, closing: &[ClosingWindow]) -> bool {
+pub fn animations_running(
+    space: &Space<Window>,
+    closing: &[ClosingWindow],
+    snap_preview: Option<&SnapPreview>,
+    now: Instant,
+) -> bool {
     !closing.is_empty()
+        || snap_preview.is_some_and(|p| p.is_animating(now))
         || space
             .elements()
             .any(|w| with_state(w, |s| effects::is_animating(s)))

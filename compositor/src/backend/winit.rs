@@ -169,8 +169,14 @@ impl State {
                     return;
                 }
             };
-            let elements =
-                render::output_elements(renderer, &self.space, &self.closing, &backend.output, now);
+            let elements = render::output_elements(
+                renderer,
+                &self.space,
+                &self.closing,
+                self.snap_preview.as_mut(),
+                &backend.output,
+                now,
+            );
             match backend.damage_tracker.render_output(
                 renderer,
                 &mut framebuffer,
@@ -204,7 +210,7 @@ impl State {
         self.closing.retain(|c| !c.is_done(now));
 
         // Keep frames coming while anything is animating; otherwise go idle.
-        if render::animations_running(&self.space, &self.closing) {
+        if render::animations_running(&self.space, &self.closing, self.snap_preview.as_ref(), now) {
             self.queue_redraw();
         }
     }

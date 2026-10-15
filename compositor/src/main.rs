@@ -9,6 +9,7 @@ mod handlers;
 mod input;
 mod keybinds;
 mod render;
+mod snap;
 mod snapshot;
 mod spawn;
 mod state;

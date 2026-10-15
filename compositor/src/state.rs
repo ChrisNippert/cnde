@@ -25,7 +25,9 @@ use smithay::{
 };
 use tracing::warn;
 
-use crate::{backend::winit::WinitBackend, effects::ClosingWindow, keybinds::ModKey};
+use crate::{
+    backend::winit::WinitBackend, effects::ClosingWindow, keybinds::ModKey, snap::SnapPreview,
+};
 
 pub struct State {
     pub start_time: Instant,
@@ -45,6 +47,8 @@ pub struct State {
     pub unmapped: Vec<Window>,
     /// Snapshots of destroyed windows, still animating out.
     pub closing: Vec<ClosingWindow>,
+    /// Drag-to-edge preview while a window is being moved.
+    pub snap_preview: Option<SnapPreview>,
     pub popups: PopupManager,
 
     pub seat: Seat<Self>,
@@ -105,6 +109,7 @@ impl State {
             space,
             unmapped: Vec::new(),
             closing: Vec::new(),
+            snap_preview: None,
             popups: PopupManager::default(),
 
             seat,

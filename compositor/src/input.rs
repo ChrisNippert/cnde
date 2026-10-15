@@ -98,8 +98,8 @@ impl State {
             Action::CloseWindow => self.close_focused(),
             Action::Maximize => self.set_focused_placement(Placement::Maximized),
             Action::Restore => self.set_focused_placement(Placement::Floating),
-            Action::SnapLeft => self.snap_focused(Placement::SnappedLeft),
-            Action::SnapRight => self.snap_focused(Placement::SnappedRight),
+            Action::SnapLeft => self.set_focused_placement(Placement::SnappedLeft),
+            Action::SnapRight => self.set_focused_placement(Placement::SnappedRight),
             Action::ToggleFullscreen => self.toggle_focused_fullscreen(),
         }
     }

@@ -176,7 +176,7 @@ Every default listed here can be rebound or reconfigured.
 | Keys | Action |
 |---|---|
 | Super+Up / Down | Maximize / restore |
-| Super+Left / Right | Snap to left / right half |
+| Super+Left / Right | Snap to left / right half (straight across if already snapped to the other side) |
 | Super+Shift+F | Toggle fullscreen |
 | Super+Alt+Left / Right | Slide the workspace strip left / right (Left = next workspace; see Workspaces) |
 | Super+Alt+Shift+Left / Right | Same, carrying the focused window along |

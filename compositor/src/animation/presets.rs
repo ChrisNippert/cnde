@@ -31,3 +31,9 @@ pub const WINDOW_CLOSE: Params = Params {
 };
 /// Closing windows shrink to this scale while fading out.
 pub const WINDOW_CLOSE_END_SCALE: f64 = 0.9;
+
+/// Drag-to-edge snap preview growing out of the dragged window.
+pub const SNAP_PREVIEW: Params = Params {
+    duration: Duration::from_millis(150),
+    curve: Curve::EaseOutCubic,
+};

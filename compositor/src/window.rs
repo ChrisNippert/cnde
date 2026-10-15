@@ -267,21 +267,9 @@ impl State {
         self.queue_pointer_refresh();
     }
 
-    /// Super+Left/Right, GNOME style: snapping toward the opposite side of an
-    /// already snapped window un-snaps it instead.
-    pub fn snap_focused(&mut self, toward: Placement) {
-        let Some(window) = self.focused_window() else {
-            return;
-        };
-        let current = Self::placement_of(&window);
-        let target = match (current, toward) {
-            (Placement::SnappedRight, Placement::SnappedLeft)
-            | (Placement::SnappedLeft, Placement::SnappedRight) => Placement::Floating,
-            _ => toward,
-        };
-        self.set_placement(&window, target, true);
-    }
-
+    /// Also used for Super+Left/Right. Unlike GNOME, snapping a left-snapped
+    /// window right goes straight to the right half instead of un-snapping;
+    /// the floating geometry is still remembered for Super+Down.
     pub fn set_focused_placement(&mut self, target: Placement) {
         if let Some(window) = self.focused_window() {
             self.set_placement(&window, target, true);
@@ -320,7 +308,10 @@ impl State {
 }
 
 /// The rectangle a non-floating placement occupies within `area`.
-fn placement_rect(placement: Placement, area: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
+pub fn placement_rect(
+    placement: Placement,
+    area: Rectangle<i32, Logical>,
+) -> Rectangle<i32, Logical> {
     let half = area.size.w / 2;
     match placement {
         Placement::SnappedLeft => Rectangle::new(area.loc, Size::from((half, area.size.h))),

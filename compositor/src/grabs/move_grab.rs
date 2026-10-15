@@ -34,6 +34,7 @@ impl PointerGrab<State> for MoveSurfaceGrab {
         let new_location = self.initial_window_location.to_f64() + delta;
         data.space
             .map_element(self.window.clone(), new_location.to_i32_round(), true);
+        data.update_snap_preview(&self.window, event.location);
         data.queue_redraw();
     }
 
@@ -60,8 +61,13 @@ impl PointerGrab<State> for MoveSurfaceGrab {
         const BTN_LEFT: u32 = 0x110;
 
         if !handle.current_pressed().contains(&BTN_LEFT) {
-            // No more buttons are pressed, release the grab.
+            // No more buttons are pressed, release the grab, applying any
+            // drag-to-edge snap that was being previewed.
+            let snap = data.snap_preview.as_ref().map(|p| p.target);
             handle.unset_grab(self, data, event.serial, event.time, true);
+            if let Some(target) = snap {
+                data.set_placement(&self.window, target, true);
+            }
         }
     }
 
@@ -155,6 +161,9 @@ impl PointerGrab<State> for MoveSurfaceGrab {
     }
 
     fn unset(&mut self, data: &mut State) {
+        if data.snap_preview.take().is_some() {
+            data.queue_redraw();
+        }
         // Hand the pointer back to whatever is now under it.
         data.queue_pointer_refresh();
     }
