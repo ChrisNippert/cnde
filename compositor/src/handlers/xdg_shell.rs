@@ -187,11 +187,12 @@ impl State {
         let Some(window) = self.window_for_surface(&root) else {
             return;
         };
-        let Some(output) = self.space.outputs().next() else {
+        // Keep menus on the monitor their window is on.
+        let Some(output) = self.output_for(&window) else {
             return;
         };
         let (Some(output_geo), Some(window_geo)) = (
-            self.space.output_geometry(output),
+            self.space.output_geometry(&output),
             self.space.element_geometry(&window),
         ) else {
             return;

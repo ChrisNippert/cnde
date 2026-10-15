@@ -60,12 +60,38 @@ impl State {
             .cloned()
     }
 
-    fn output_for(&self, window: &Window) -> Option<Output> {
+    /// The monitor `window` belongs to: the one containing the centre of its
+    /// geometry, else the one it overlaps most. Why not `outputs_for_element`:
+    /// that counts client-side shadows, so a window snapped to a monitor's
+    /// edge "touches" its neighbour too, and its order is arbitrary.
+    /// Unmapped windows belong to the monitor under the pointer (GNOME
+    /// opens new windows where you're looking).
+    pub fn output_for(&self, window: &Window) -> Option<Output> {
+        let Some(geo) = self.space.element_geometry(window) else {
+            return self.output_under_pointer();
+        };
+        let centre = geo.loc.to_f64() + geo.size.to_f64().downscale(2.0).to_point();
+        if let Some(output) = self.space.output_under(centre).next() {
+            return Some(output.clone());
+        }
         self.space
-            .outputs_for_element(window)
-            .into_iter()
+            .outputs()
+            .max_by_key(|output| {
+                self.space
+                    .output_geometry(output)
+                    .and_then(|output_geo| output_geo.intersection(geo))
+                    .map_or(0, |overlap| overlap.size.w * overlap.size.h)
+            })
+            .cloned()
+    }
+
+    fn output_under_pointer(&self) -> Option<Output> {
+        let location = self.seat.get_pointer()?.current_location();
+        self.space
+            .output_under(location)
             .next()
-            .or_else(|| self.space.outputs().next().cloned())
+            .or_else(|| self.space.outputs().next())
+            .cloned()
     }
 
     /// The area windows may occupy on the output showing `window`. Later this
