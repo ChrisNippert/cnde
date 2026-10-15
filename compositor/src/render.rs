@@ -1,22 +1,31 @@
 //! Builds the per-output list of render elements, front to back.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use smithay::{
     backend::renderer::{
         element::{
-            AsRenderElements, render_elements, solid::SolidColorRenderElement,
-            surface::WaylandSurfaceRenderElement, texture::TextureRenderElement,
+            AsRenderElements, Kind,
+            memory::MemoryRenderBufferRenderElement,
+            render_elements,
+            solid::SolidColorRenderElement,
+            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
+            texture::TextureRenderElement,
             utils::RescaleRenderElement,
         },
         gles::{GlesRenderer, GlesTexture},
     },
     desktop::{Space, Window},
+    input::pointer::{CursorImageStatus, CursorImageSurfaceData},
     output::Output,
-    utils::{Logical, Rectangle, Scale},
+    reexports::wayland_server::Resource,
+    utils::{Logical, Point, Rectangle, Scale},
+    wayland::compositor::with_states,
 };
+use tracing::warn;
 
 use crate::{
+    cursor::Cursors,
     effects::{self, ClosingWindow},
     snap::SnapPreview,
     snapshot::Snapshot,
@@ -30,6 +39,71 @@ render_elements! {
     Window = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     Snapshot = RescaleRenderElement<TextureRenderElement<GlesTexture>>,
     Solid = SolidColorRenderElement,
+    Cursor = MemoryRenderBufferRenderElement<GlesRenderer>,
+    Surface = WaylandSurfaceRenderElement<GlesRenderer>,
+}
+
+/// The pointer, if it's on this output: a themed image, or the surface a
+/// client set as its cursor. `Kind::Cursor` lets the DRM compositor put it on
+/// the hardware cursor plane, so moving the mouse doesn't recomposite.
+pub fn cursor_elements(
+    renderer: &mut GlesRenderer,
+    cursors: &mut Cursors,
+    status: &mut CursorImageStatus,
+    pointer: Point<f64, Logical>,
+    output_geo: Rectangle<i32, Logical>,
+    time: Duration,
+) -> Vec<OutputElement> {
+    if !output_geo.to_f64().contains(pointer) {
+        return Vec::new();
+    }
+    // Clients may destroy their cursor surface without telling us.
+    if let CursorImageStatus::Surface(surface) = status
+        && !surface.is_alive()
+    {
+        *status = CursorImageStatus::default_named();
+    }
+
+    let position = pointer - output_geo.loc.to_f64();
+    let scale = Scale::from(1.0);
+    match status {
+        CursorImageStatus::Hidden => Vec::new(),
+        CursorImageStatus::Named(icon) => {
+            let (buffer, hotspot) = cursors.get(*icon, time);
+            let location = (position - hotspot.to_f64()).to_physical(scale);
+            match MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                location,
+                &buffer,
+                None,
+                None,
+                None,
+                Kind::Cursor,
+            ) {
+                Ok(element) => vec![OutputElement::Cursor(element)],
+                Err(err) => {
+                    warn!(?err, "failed to upload cursor image");
+                    Vec::new()
+                }
+            }
+        }
+        CursorImageStatus::Surface(surface) => {
+            let hotspot = with_states(surface, |states| {
+                states
+                    .data_map
+                    .get::<CursorImageSurfaceData>()
+                    .and_then(|data| data.lock().ok().map(|attrs| attrs.hotspot))
+                    .unwrap_or_default()
+            });
+            let location = (position - hotspot.to_f64())
+                .to_physical(scale)
+                .to_i32_round();
+            render_elements_from_surface_tree(renderer, surface, location, scale, 1.0, Kind::Cursor)
+                .into_iter()
+                .map(OutputElement::Surface)
+                .collect()
+        }
+    }
 }
 
 pub fn output_elements(

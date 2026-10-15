@@ -3,12 +3,12 @@
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-        KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     desktop::Window,
     input::{
         keyboard::FilterResult,
-        pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent, RelativeMotionEvent},
     },
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
@@ -42,6 +42,26 @@ impl State {
                     event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
                 self.on_pointer_motion(location, event.time_msec());
             }
+            InputEvent::PointerMotion { event, .. } => {
+                let Some(pointer) = self.seat.get_pointer() else {
+                    return;
+                };
+                let current = pointer.current_location();
+                let location = self.clamp_to_outputs(current, current + event.delta());
+                self.on_pointer_motion(location, event.time_msec());
+                // Unaccelerated deltas for games and 3D apps (relative-pointer).
+                let under = self.surface_under(location);
+                pointer.relative_motion(
+                    self,
+                    under,
+                    &RelativeMotionEvent {
+                        delta: event.delta(),
+                        delta_unaccel: event.delta_unaccel(),
+                        utime: event.time(),
+                    },
+                );
+                pointer.frame(self);
+            }
             InputEvent::PointerButton { event, .. } => {
                 self.on_pointer_button(event.button_code(), event.state(), event.time_msec());
             }
@@ -72,6 +92,12 @@ impl State {
                     }
                     return FilterResult::Forward;
                 }
+                // VT switching comes from the keymap (Ctrl+Alt+Fn produces
+                // XF86Switch_VT_n), so it's matched on the modified keysym.
+                if let Some(action) = keybinds::vt_switch(handle.modified_sym()) {
+                    state.suppressed_keys.push(keycode);
+                    return FilterResult::Intercept(Some(action));
+                }
                 let Some(sym) = handle.raw_latin_sym_or_raw_current_sym() else {
                     return FilterResult::Forward;
                 };
@@ -101,7 +127,37 @@ impl State {
             Action::SnapLeft => self.set_focused_placement(Placement::SnappedLeft),
             Action::SnapRight => self.set_focused_placement(Placement::SnappedRight),
             Action::ToggleFullscreen => self.toggle_focused_fullscreen(),
+            Action::SwitchVt(vt) => self.switch_vt(vt),
         }
+    }
+
+    /// Keep the pointer on screen: moves into another monitor are allowed,
+    /// otherwise it stays on its current monitor, pinned to the edge.
+    fn clamp_to_outputs(
+        &self,
+        current: Point<f64, Logical>,
+        target: Point<f64, Logical>,
+    ) -> Point<f64, Logical> {
+        if self.space.output_under(target).next().is_some() {
+            return target;
+        }
+        let geo = self
+            .space
+            .output_under(current)
+            .next()
+            .or_else(|| self.space.outputs().next())
+            .and_then(|output| self.space.output_geometry(output));
+        let Some(geo) = geo else {
+            return current;
+        };
+        let geo = geo.to_f64();
+        // Stay strictly inside: the right/bottom edges belong to the next pixel.
+        let max_x = geo.loc.x + geo.size.w - 1.0;
+        let max_y = geo.loc.y + geo.size.h - 1.0;
+        Point::from((
+            target.x.clamp(geo.loc.x, max_x),
+            target.y.clamp(geo.loc.y, max_y),
+        ))
     }
 
     fn mod_held(&self) -> bool {
@@ -130,6 +186,10 @@ impl State {
             },
         );
         pointer.frame(self);
+        // We draw the cursor ourselves on real hardware.
+        if self.backend.draws_cursor() {
+            self.queue_redraw();
+        }
     }
 
     fn on_pointer_button(&mut self, button: u32, button_state: ButtonState, time: u32) {

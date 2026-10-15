@@ -84,7 +84,7 @@ impl State {
 
     fn snapshot(&mut self, window: &Window) -> Option<Snapshot> {
         let scale = Scale::from(self.output_for(window)?.current_scale().fractional_scale());
-        Snapshot::capture(self.backend.renderer(), window, scale)
+        Snapshot::capture(self.backend.renderer()?, window, scale)
     }
 
     /// Keep showing a destroyed window as a fading, shrinking snapshot. Must

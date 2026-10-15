@@ -384,6 +384,9 @@ Each milestone ends in something you can use.
 
 1. **Nested compositor:** a winit window that shows a terminal, with floating window move/resize, focus, a keyboard layout, and basic open/close animations.
 2. **Real hardware:** udev backend, multi-monitor, proper frame pacing, damage tracking, cursor.
+   Also `wlr-layer-shell`, which `cnde-shell` needs later anyway. Until the shell
+   exists (Milestone 3), the **temporary stand-ins** are **fuzzel** on Super (tap)
+   as the launcher and **waybar** for clock and battery. Both get removed when the shell lands.
 3. **Shell v1:** panel, launcher, notifications, OSDs, a lock screen.
 4. **Daily driver:** XWayland, portals (screenshot and screencast), session files, idle and suspend, fractional scaling. *This is the real finish line.*
 5. **Workspaces, overview and tiling mode.**

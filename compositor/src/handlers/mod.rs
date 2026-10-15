@@ -36,8 +36,12 @@ impl SeatHandler for State {
         &mut self.seat_state
     }
 
-    // Nested, the host draws the cursor. Client cursors arrive in Milestone 2.
-    fn cursor_image(&mut self, _seat: &Seat<Self>, _image: CursorImageStatus) {}
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        self.cursor_status = image;
+        if self.backend.draws_cursor() {
+            self.queue_redraw();
+        }
+    }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let dh = &self.display_handle;
@@ -66,7 +70,7 @@ delegate_output!(State);
 
 impl DmabufHandler for State {
     fn dmabuf_state(&mut self) -> &mut DmabufState {
-        &mut self.backend.dmabuf_state
+        self.backend.dmabuf_state()
     }
 
     fn dmabuf_imported(

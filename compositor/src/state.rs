@@ -1,12 +1,23 @@
 // Adapted from smithay: smallvil/src/state.rs
 
-use std::{ffi::OsString, sync::Arc, time::Instant};
+use std::{
+    ffi::OsString,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use smithay::{
-    desktop::{PopupManager, Space, Window, WindowSurfaceType},
-    input::{Seat, SeatState, keyboard::Keycode, pointer::MotionEvent},
+    desktop::{PopupManager, Space, Window, WindowSurfaceType, utils::send_frames_surface_tree},
+    input::{
+        Seat, SeatState,
+        keyboard::Keycode,
+        pointer::{CursorImageStatus, MotionEvent},
+    },
+    output::Output,
     reexports::{
-        calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic},
+        calloop::{
+            EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction, generic::Generic,
+        },
         wayland_server::{
             Display, DisplayHandle,
             backend::{ClientData, ClientId, DisconnectReason},
@@ -25,17 +36,16 @@ use smithay::{
 };
 use tracing::warn;
 
-use crate::{
-    backend::winit::WinitBackend, effects::ClosingWindow, keybinds::ModKey, snap::SnapPreview,
-};
+use crate::{backend::Backend, effects::ClosingWindow, keybinds::ModKey, snap::SnapPreview};
 
 pub struct State {
     pub start_time: Instant,
     pub socket_name: OsString,
     pub display_handle: DisplayHandle,
     pub loop_signal: LoopSignal,
+    pub loop_handle: LoopHandle<'static, State>,
 
-    pub backend: WinitBackend,
+    pub backend: Backend,
     /// Set whenever something on screen changed; the backend renders once per request.
     pub redraw_queued: bool,
     /// Set when windows moved or resized under the pointer; see `refresh_pointer_focus`.
@@ -52,6 +62,8 @@ pub struct State {
     pub popups: PopupManager,
 
     pub seat: Seat<Self>,
+    /// What the pointer should look like, as last requested by a client.
+    pub cursor_status: CursorImageStatus,
     pub mod_key: ModKey,
     /// Keys whose press triggered a compositor binding; their releases are
     /// swallowed too so clients never see half a key event.
@@ -73,7 +85,9 @@ impl State {
     pub fn new(
         event_loop: &mut EventLoop<'static, Self>,
         display: Display<Self>,
-        backend: WinitBackend,
+        backend: Backend,
+        mod_key: ModKey,
+        seat_name: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let dh = display.handle();
 
@@ -85,14 +99,12 @@ impl State {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let mut seat_state = SeatState::new();
 
-        let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, "seat0");
-        // Nested, the host always gives us a keyboard and pointer. Hotplug
-        // tracking comes with the libinput backend.
+        let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, seat_name);
+        // Always advertise a keyboard and pointer: clients expect them, and
+        // input devices come and go underneath (libinput hotplug).
+        // Layout comes from XKB_DEFAULT_* until the config crate exists.
         seat.add_keyboard(Default::default(), 200, 25)?;
         seat.add_pointer();
-
-        let mut space = Space::default();
-        space.map_output(&backend.output, (0, 0));
 
         let socket_name = Self::init_wayland_listener(display, event_loop)?;
 
@@ -101,20 +113,21 @@ impl State {
             socket_name,
             display_handle: dh,
             loop_signal: event_loop.get_signal(),
+            loop_handle: event_loop.handle(),
 
             backend,
             redraw_queued: true,
             pointer_focus_dirty: false,
 
-            space,
+            space: Space::default(),
             unmapped: Vec::new(),
             closing: Vec::new(),
             snap_preview: None,
             popups: PopupManager::default(),
 
             seat,
-            // Nested inside GNOME etc. the host grabs Super, so use Alt there.
-            mod_key: ModKey::Alt,
+            cursor_status: CursorImageStatus::default_named(),
+            mod_key,
             suppressed_keys: Vec::new(),
 
             compositor_state,
@@ -171,7 +184,25 @@ impl State {
         }
         if self.redraw_queued {
             self.redraw_queued = false;
-            self.backend.request_redraw();
+            match &self.backend {
+                Backend::Winit(winit) => winit.request_redraw(),
+                Backend::Udev(_) => self.udev_queue_redraw_all(),
+            }
+        }
+    }
+
+    /// Tell clients visible on `output` to draw their next frame.
+    pub fn send_frame_callbacks(&self, output: &Output) {
+        let elapsed = self.start_time.elapsed();
+        for window in self.space.elements_for_output(output) {
+            window.send_frame(output, elapsed, Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            });
+        }
+        if let CursorImageStatus::Surface(surface) = &self.cursor_status {
+            send_frames_surface_tree(surface, output, elapsed, Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            });
         }
     }
 

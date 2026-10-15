@@ -7,7 +7,6 @@ use smithay::input::keyboard::{Keysym, ModifiersState, keysyms};
 /// because the host desktop grabs Super for itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModKey {
-    #[allow(dead_code)] // used by the udev backend in Milestone 2
     Super,
     Alt,
 }
@@ -23,6 +22,16 @@ pub enum Action {
     SnapLeft,
     SnapRight,
     ToggleFullscreen,
+    /// Ctrl+Alt+F1..F12 on real hardware.
+    SwitchVt(i32),
+}
+
+/// Ctrl+Alt+Fn: the keymap turns these into XF86Switch_VT_n keysyms.
+pub fn vt_switch(modified: Keysym) -> Option<Action> {
+    let raw = modified.raw();
+    (keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12)
+        .contains(&raw)
+        .then(|| Action::SwitchVt((raw - keysyms::KEY_XF86Switch_VT_1 + 1) as i32))
 }
 
 pub fn action_for(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> Option<Action> {
@@ -95,6 +104,19 @@ mod tests {
             action_for(ModKey::Super, &m, Keysym::from(keysyms::KEY_Left)),
             None
         );
+    }
+
+    #[test]
+    fn vt_keysyms_map_to_vt_numbers() {
+        assert_eq!(
+            vt_switch(Keysym::from(keysyms::KEY_XF86Switch_VT_1)),
+            Some(Action::SwitchVt(1))
+        );
+        assert_eq!(
+            vt_switch(Keysym::from(keysyms::KEY_XF86Switch_VT_12)),
+            Some(Action::SwitchVt(12))
+        );
+        assert_eq!(vt_switch(Keysym::from(keysyms::KEY_F1)), None);
     }
 
     #[test]

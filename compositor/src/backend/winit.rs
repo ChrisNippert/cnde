@@ -1,6 +1,6 @@
 // Adapted from smithay: smallvil/src/winit.rs (dmabuf setup: anvil/src/winit.rs)
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use smithay::{
     backend::{
@@ -16,6 +16,7 @@ use smithay::{
 };
 use tracing::{trace, warn};
 
+use super::Backend;
 use crate::{render, state::State};
 
 const REFRESH_MHZ: i32 = 60_000;
@@ -113,7 +114,10 @@ pub fn insert_event_source(
     handle
         .insert_source(events, |event, _, state| match event {
             WinitEvent::Resized { size, scale_factor } => {
-                state.backend.output.change_current_state(
+                let Backend::Winit(winit) = &state.backend else {
+                    return;
+                };
+                winit.output.change_current_state(
                     Some(Mode {
                         size,
                         refresh: REFRESH_MHZ,
@@ -160,8 +164,10 @@ impl State {
         // the nested window is cheap; we still render only when something changed.
         // The udev backend gets ages from its DRM swapchain instead.
         let age = 0;
+        let Backend::Winit(backend) = &mut self.backend else {
+            return;
+        };
         let damage = {
-            let backend = &mut self.backend;
             let (renderer, mut framebuffer) = match backend.graphics.bind() {
                 Ok(bound) => bound,
                 Err(err) => {
@@ -194,18 +200,13 @@ impl State {
 
         if let Some(damage) = damage {
             trace!(rects = damage.len(), "submitting frame");
-            if let Err(err) = self.backend.graphics.submit(Some(&damage)) {
+            if let Err(err) = backend.graphics.submit(Some(&damage)) {
                 warn!(?err, "failed to submit frame");
             }
         }
 
-        let output = self.backend.output.clone();
-        let elapsed = self.start_time.elapsed();
-        for window in self.space.elements() {
-            window.send_frame(&output, elapsed, Some(Duration::ZERO), |_, _| {
-                Some(output.clone())
-            });
-        }
+        let output = backend.output.clone();
+        self.send_frame_callbacks(&output);
 
         self.closing.retain(|c| !c.is_done(now));
 
