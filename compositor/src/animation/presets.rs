@@ -5,10 +5,6 @@ use std::time::Duration;
 
 use super::{Curve, Params};
 
-/// Global speed multiplier; 0.0 disables motion ("reduce motion").
-/// Becomes a config option once the config crate exists.
-pub const SPEED_MULTIPLIER: f64 = 1.0;
-
 pub const WINDOW_OPEN: Params = Params {
     duration: Duration::from_millis(250),
     curve: Curve::EaseOutExpo,

@@ -52,6 +52,7 @@ pub fn cursor_elements(
     status: &mut CursorImageStatus,
     pointer: Point<f64, Logical>,
     output_geo: Rectangle<i32, Logical>,
+    scale: Scale<f64>,
     time: Duration,
 ) -> Vec<OutputElement> {
     if !output_geo.to_f64().contains(pointer) {
@@ -65,7 +66,6 @@ pub fn cursor_elements(
     }
 
     let position = pointer - output_geo.loc.to_f64();
-    let scale = Scale::from(1.0);
     match status {
         CursorImageStatus::Hidden => Vec::new(),
         CursorImageStatus::Named(icon) => {

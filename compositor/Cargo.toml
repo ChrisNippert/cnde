@@ -9,6 +9,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 bitflags = "2"
 xcursor = "0.3"
+cnde-config = { path = "../config" }
+# inotify for config hot-reload (same major version smithay uses).
+rustix = { version = "1", features = ["fs"] }
 # Connector scanning for monitor hotplug. Its EDID (`display-info`) feature
 # wants an older libdisplay-info than Arch ships, so it's off for now.
 smithay-drm-extras = { version = "0.1", default-features = false }

@@ -29,18 +29,18 @@ use smithay::{
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{UdevBackend as UdevDevices, UdevEvent, all_gpus, primary_gpu},
     },
-    output::{Mode as WlMode, Output, PhysicalProperties, Scale},
+    output::{Mode as WlMode, Output, PhysicalProperties, Scale as OutputScale},
     reexports::{
         calloop::{
             EventLoop, LoopHandle, RegistrationToken,
             timer::{TimeoutAction, Timer},
         },
         drm::control::{ModeTypeFlags, connector, crtc},
-        input::{DeviceCapability, Libinput},
+        input::{Device as InputDevice, Libinput},
         rustix::fs::OFlags,
         wayland_server::backend::GlobalId,
     },
-    utils::{DeviceFd, Transform},
+    utils::{DeviceFd, Point, Scale, Transform},
     wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufState},
 };
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
@@ -76,6 +76,8 @@ pub struct UdevBackend {
     pub dmabuf_state: DmabufState,
     dmabuf_global: Option<DmabufGlobal>,
     pub cursors: Cursors,
+    /// Live libinput devices, so config changes can be re-applied to them.
+    input_devices: Vec<InputDevice>,
 }
 
 struct Gpu {
@@ -166,6 +168,7 @@ pub fn create() -> Result<
             dmabuf_state: DmabufState::new(),
             dmabuf_global: None,
             cursors: Cursors::load(),
+            input_devices: Vec::new(),
         },
         notifier,
     ))
@@ -190,8 +193,19 @@ pub fn init(
         .map_err(|()| "failed to assign libinput to the seat")?;
     let libinput_backend = LibinputInputBackend::new(udev.libinput.clone());
     handle.insert_source(libinput_backend, |mut event, _, state| {
-        if let InputEvent::DeviceAdded { device } = &mut event {
-            configure_input_device(device);
+        match &mut event {
+            InputEvent::DeviceAdded { device } => {
+                state.configure_input_device(device);
+                if let Some(udev) = state.udev() {
+                    udev.input_devices.push(device.clone());
+                }
+            }
+            InputEvent::DeviceRemoved { device } => {
+                if let Some(udev) = state.udev() {
+                    udev.input_devices.retain(|d| d != device);
+                }
+            }
+            _ => {}
         }
         state.process_input_event(event);
     })?;
@@ -223,18 +237,6 @@ pub fn init(
         return Err("the primary GPU could not be opened".into());
     }
     Ok(())
-}
-
-/// GNOME-like touchpad defaults. Becomes configurable with the config crate.
-fn configure_input_device(device: &mut smithay::reexports::input::Device) {
-    if device.has_capability(DeviceCapability::Pointer) && device.config_tap_finger_count() > 0 {
-        let _ = device.config_tap_set_enabled(true);
-        let _ = device.config_tap_set_drag_enabled(true);
-        let _ = device.config_dwt_set_enabled(true);
-        if device.config_scroll_has_natural_scroll() {
-            let _ = device.config_scroll_set_natural_scroll_enabled(true);
-        }
-    }
 }
 
 impl State {
@@ -452,23 +454,15 @@ impl State {
         );
         let global = output.create_global::<State>(&self.display_handle);
 
-        // Lay monitors out left to right, top-aligned (per-monitor arrangement
-        // comes with the settings/config work).
-        let x = self
-            .space
-            .outputs()
-            .filter_map(|o| self.space.output_geometry(o))
-            .map(|geo| geo.loc.x + geo.size.w)
-            .max()
-            .unwrap_or(0);
+        // Parked off to the side; `apply_output_layout` below places it.
         output.set_preferred(wl_mode);
         output.change_current_state(
             Some(wl_mode),
             Some(Transform::Normal),
-            Some(Scale::Integer(1)),
-            Some((x, 0).into()),
+            Some(OutputScale::Integer(1)),
+            None,
         );
-        self.space.map_output(&output, (x, 0));
+        self.space.map_output(&output, (i32::MAX / 2, 0));
 
         let Some(gpu) = self.udev().and_then(|u| u.gpu.as_mut()) else {
             return;
@@ -507,6 +501,7 @@ impl State {
                 frame_callback_timer: None,
             },
         );
+        self.apply_output_layout();
         self.queue_output_redraw(crtc);
     }
 
@@ -523,6 +518,61 @@ impl State {
         info!(name = %surface.output.name(), connector = ?connector.handle(), "monitor disconnected");
         self.space.unmap_output(&surface.output);
         self.display_handle.remove_global::<State>(surface.global);
+    }
+
+    /// Re-apply mouse/touchpad settings to every connected device.
+    pub fn reconfigure_input_devices(&mut self) {
+        let devices = self
+            .udev()
+            .map(|u| u.input_devices.clone())
+            .unwrap_or_default();
+        for mut device in devices {
+            self.configure_input_device(&mut device);
+        }
+    }
+
+    /// Position and scale every monitor: configured ones where the config
+    /// says, the rest left to right after them, top-aligned.
+    pub fn apply_output_layout(&mut self) {
+        if !matches!(self.backend, Backend::Udev(_)) {
+            return;
+        }
+        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        let mut placed: Vec<(Output, Point<i32, smithay::utils::Logical>, f64)> = Vec::new();
+        let mut auto = Vec::new();
+        for output in outputs {
+            let config = self.config.output(&output.name());
+            let scale = config.and_then(|c| c.scale).unwrap_or(1.0);
+            match config.and_then(|c| c.position) {
+                Some(pos) => placed.push((output, (pos.x, pos.y).into(), scale)),
+                None => auto.push((output, scale)),
+            }
+        }
+        let logical_width = |output: &Output, scale: f64| {
+            output.current_mode().map_or(0, |mode| {
+                mode.size.to_f64().to_logical(scale).to_i32_round::<i32>().w
+            })
+        };
+        for (output, scale) in auto {
+            let x = placed
+                .iter()
+                .map(|(o, pos, s)| pos.x + logical_width(o, *s))
+                .max()
+                .unwrap_or(0);
+            placed.push((output, (x, 0).into(), scale));
+        }
+        for (output, position, scale) in placed {
+            let output_scale = if scale.fract() == 0.0 {
+                OutputScale::Integer(scale as i32)
+            } else {
+                OutputScale::Fractional(scale)
+            };
+            output.change_current_state(None, None, Some(output_scale), Some(position));
+            self.space.map_output(&output, position);
+        }
+        self.relayout_after_output_change();
+        self.fixup_window_positions();
+        self.queue_pointer_refresh();
     }
 
     /// Pull windows that ended up on no monitor (after an unplug) back onto one.
@@ -615,6 +665,7 @@ impl State {
                 &mut self.cursor_status,
                 pointer,
                 output_geo,
+                Scale::from(output.current_scale().fractional_scale()),
                 elapsed,
             ));
         }

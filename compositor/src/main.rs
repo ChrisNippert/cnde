@@ -3,6 +3,7 @@
 
 mod animation;
 mod backend;
+mod config;
 mod cursor;
 mod effects;
 mod grabs;
@@ -39,6 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut event_loop: EventLoop<State> = EventLoop::try_new()?;
     let display: Display<State> = Display::new()?;
+    let (config, config_path) = config::load_initial();
 
     let mut state = if nested {
         let (winit, events) = backend::winit::init(&display.handle())?;
@@ -51,6 +53,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ModKey::Alt,
             "seat0",
         )?;
+        state.config = config;
+        state.config_path = config_path;
         state.space.map_output(&output, (0, 0));
         backend::winit::insert_event_source(&event_loop.handle(), events)?;
         state
@@ -64,9 +68,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ModKey::Super,
             &seat_name,
         )?;
+        state.config = config;
+        state.config_path = config_path;
         backend::udev::init(&mut state, &mut event_loop, session_events)?;
         state
     };
+    state.apply_config(None);
+    if let Some(path) = state.config_path.clone() {
+        config::watch(&event_loop.handle(), path);
+    }
+    for command in &state.config.autostart.commands {
+        spawn::spawn_command_line(command, &state.socket_name);
+    }
 
     info!(
         socket = ?state.socket_name,

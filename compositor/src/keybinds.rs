@@ -24,6 +24,17 @@ pub enum Action {
     ToggleFullscreen,
     /// Ctrl+Alt+F1..F12 on real hardware.
     SwitchVt(i32),
+    /// Tapping the mod key alone.
+    Launcher,
+}
+
+/// Whether `sym` is the mod key itself (left or right).
+pub fn is_mod_key(mod_key: ModKey, sym: Keysym) -> bool {
+    let raw = sym.raw();
+    match mod_key {
+        ModKey::Super => raw == keysyms::KEY_Super_L || raw == keysyms::KEY_Super_R,
+        ModKey::Alt => raw == keysyms::KEY_Alt_L || raw == keysyms::KEY_Alt_R,
+    }
 }
 
 /// Ctrl+Alt+Fn: the keymap turns these into XF86Switch_VT_n keysyms.

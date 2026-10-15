@@ -36,6 +36,10 @@ use smithay::{
 };
 use tracing::warn;
 
+use std::path::PathBuf;
+
+use cnde_config::Config;
+
 use crate::{backend::Backend, effects::ClosingWindow, keybinds::ModKey, snap::SnapPreview};
 
 pub struct State {
@@ -46,6 +50,9 @@ pub struct State {
     pub loop_handle: LoopHandle<'static, State>,
 
     pub backend: Backend,
+    pub config: Config,
+    /// Where `config` came from; `None` if there's no home directory.
+    pub config_path: Option<PathBuf>,
     /// Set whenever something on screen changed; the backend renders once per request.
     pub redraw_queued: bool,
     /// Set when windows moved or resized under the pointer; see `refresh_pointer_focus`.
@@ -65,6 +72,11 @@ pub struct State {
     /// What the pointer should look like, as last requested by a client.
     pub cursor_status: CursorImageStatus,
     pub mod_key: ModKey,
+    /// The mod key went down alone; releasing it without anything else
+    /// happening in between counts as a tap (opens the launcher).
+    pub mod_tap_armed: bool,
+    /// Set by the key filter when a tap completed; acted on after it returns.
+    pub mod_tapped: bool,
     /// Keys whose press triggered a compositor binding; their releases are
     /// swallowed too so clients never see half a key event.
     pub suppressed_keys: Vec<Keycode>,
@@ -116,6 +128,8 @@ impl State {
             loop_handle: event_loop.handle(),
 
             backend,
+            config: Config::default(),
+            config_path: None,
             redraw_queued: true,
             pointer_focus_dirty: false,
 
@@ -128,6 +142,8 @@ impl State {
             seat,
             cursor_status: CursorImageStatus::default_named(),
             mod_key,
+            mod_tap_armed: false,
+            mod_tapped: false,
             suppressed_keys: Vec::new(),
 
             compositor_state,

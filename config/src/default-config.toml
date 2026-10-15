@@ -1,0 +1,44 @@
+# cnde configuration. Changes apply as soon as you save.
+# If something is wrong (a typo, a value out of range), the last working
+# config stays in effect and the error is logged.
+#
+# Everything is commented out: these are the defaults. Uncomment to change.
+
+[input.keyboard]
+# layout = "us"            # e.g. "us,de"; empty uses XKB_DEFAULT_LAYOUT
+# variant = ""
+# options = ""             # e.g. "caps:escape"
+# repeat_delay = 200       # ms before a held key repeats
+# repeat_rate = 25         # repeats per second
+
+[input.mouse]
+# speed = 0.0              # -1.0 (slow) to 1.0 (fast)
+# accel_profile = "adaptive"   # or "flat"
+# natural_scroll = false
+
+[input.touchpad]
+# speed = 0.0
+# accel_profile = "adaptive"
+# natural_scroll = true
+# tap_to_click = true
+# tap_and_drag = true
+# disable_while_typing = true
+
+# Per-monitor settings. Names are logged when a monitor connects ("DP-2",
+# "eDP-1", ...). Monitors without an entry are placed left to right.
+#
+# [[output]]
+# name = "DP-2"
+# position = { x = 0, y = 0 }
+# scale = 1.0
+
+[animations]
+# speed = 1.0              # 0.5 = twice as fast, 0.0 = no animations
+
+[launcher]
+# Runs when Super is tapped on its own (temporary, until the cnde shell).
+# command = "fuzzel"
+
+[autostart]
+# Run once at startup, e.g. a bar while the cnde shell doesn't exist yet.
+# commands = ["waybar"]

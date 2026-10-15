@@ -85,6 +85,16 @@ impl State {
             SERIAL_COUNTER.next_serial(),
             event.time_msec(),
             |state, mods, handle| {
+                let is_mod = keybinds::is_mod_key(mod_key, handle.modified_sym());
+                if key_state == KeyState::Released && is_mod && state.mod_tap_armed {
+                    state.mod_tap_armed = false;
+                    // Forward the release: clients saw the press.
+                    state.mod_tapped = true;
+                    return FilterResult::Forward;
+                }
+                if key_state == KeyState::Pressed {
+                    state.mod_tap_armed = is_mod;
+                }
                 if key_state == KeyState::Released {
                     if let Some(i) = state.suppressed_keys.iter().position(|k| *k == keycode) {
                         state.suppressed_keys.swap_remove(i);
@@ -114,6 +124,9 @@ impl State {
         if let Some(Some(action)) = action {
             self.run_action(action);
         }
+        if std::mem::take(&mut self.mod_tapped) {
+            self.run_action(Action::Launcher);
+        }
     }
 
     fn run_action(&mut self, action: Action) {
@@ -128,6 +141,12 @@ impl State {
             Action::SnapRight => self.set_focused_placement(Placement::SnappedRight),
             Action::ToggleFullscreen => self.toggle_focused_fullscreen(),
             Action::SwitchVt(vt) => self.switch_vt(vt),
+            Action::Launcher => {
+                let command = self.config.launcher.command.clone();
+                if !command.trim().is_empty() {
+                    spawn::spawn_command_line(&command, &self.socket_name);
+                }
+            }
         }
     }
 
@@ -197,6 +216,8 @@ impl State {
             return;
         };
         let serial = SERIAL_COUNTER.next_serial();
+        // Mod+click (e.g. Super+drag) is not a tap.
+        self.mod_tap_armed = false;
         debug!(button, ?button_state, location = ?pointer.current_location(), "pointer button");
 
         if button_state == ButtonState::Pressed && !pointer.is_grabbed() {

@@ -5,7 +5,22 @@
 
 pub mod presets;
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
+};
+
+/// Global duration multiplier from `animations.speed` in the config;
+/// 0.0 disables motion ("reduce motion"). Stored as f64 bits.
+static SPEED: AtomicU64 = AtomicU64::new(1.0f64.to_bits());
+
+pub fn set_speed(speed: f64) {
+    SPEED.store(speed.max(0.0).to_bits(), Ordering::Relaxed);
+}
+
+fn speed() -> f64 {
+    f64::from_bits(SPEED.load(Ordering::Relaxed))
+}
 
 #[allow(dead_code)] // the full palette for presets, not all in use yet
 #[derive(Debug, Clone, Copy)]
@@ -53,7 +68,7 @@ impl Animation {
     pub fn new(from: f64, to: f64, params: Params) -> Self {
         Self {
             start: Instant::now(),
-            duration: params.duration.mul_f64(presets::SPEED_MULTIPLIER),
+            duration: params.duration.mul_f64(speed()),
             from,
             to,
             curve: params.curve,
