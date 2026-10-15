@@ -1,0 +1,15 @@
+[package]
+name = "cnde-compositor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
+bitflags = "2"
+
+[dependencies.smithay]
+version = "0.7"
+default-features = false
+features = ["backend_winit", "backend_drm", "wayland_frontend", "desktop", "renderer_gl"]
