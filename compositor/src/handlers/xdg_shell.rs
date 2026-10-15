@@ -36,6 +36,7 @@ impl XdgShellHandler for State {
         self.unmapped
             .retain(|w| w.toplevel().is_some_and(|t| t != &surface));
         if let Some(window) = self.window_for_surface(surface.wl_surface()) {
+            self.start_close_animation(&window);
             self.unmap_window(&window);
         }
     }
@@ -122,7 +123,7 @@ impl State {
     fn placement_request(&mut self, surface: &ToplevelSurface, target: Placement) {
         debug!(?target, "client requested placement");
         match self.window_for_surface(surface.wl_surface()) {
-            Some(window) => self.set_placement(&window, target),
+            Some(window) => self.set_placement(&window, target, true),
             // The protocol requires a configure in reply even if we change nothing.
             None => {
                 if surface.is_initial_configure_sent() {

@@ -5,52 +5,132 @@ use std::time::Instant;
 use smithay::{
     backend::renderer::{
         element::{
-            AsRenderElements, surface::WaylandSurfaceRenderElement, utils::RescaleRenderElement,
+            AsRenderElements, render_elements, surface::WaylandSurfaceRenderElement,
+            texture::TextureRenderElement, utils::RescaleRenderElement,
         },
-        gles::GlesRenderer,
+        gles::{GlesRenderer, GlesTexture},
     },
     desktop::{Space, Window},
     output::Output,
-    utils::Scale,
+    utils::{Logical, Rectangle, Scale},
 };
 
-use crate::window;
+use crate::{
+    effects::{self, ClosingWindow},
+    snapshot::Snapshot,
+    window::with_state,
+};
 
-/// Every window surface is wrapped in a rescale element so animations can
-/// scale it about its centre; at rest the scale is exactly 1.
-pub type WindowElement = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>;
+render_elements! {
+    pub OutputElement<=GlesRenderer>;
+    // Every element is wrapped in a rescale so animations can move and stretch
+    // it; at rest the scale is exactly 1.
+    Window = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+    Snapshot = RescaleRenderElement<TextureRenderElement<GlesTexture>>,
+}
 
 pub fn output_elements(
     renderer: &mut GlesRenderer,
     space: &Space<Window>,
+    closing: &[ClosingWindow],
     output: &Output,
     now: Instant,
-) -> Vec<WindowElement> {
+) -> Vec<OutputElement> {
     let Some(output_geo) = space.output_geometry(output) else {
         return Vec::new();
     };
+    let output_loc = output_geo.loc.to_f64();
     let scale = Scale::from(output.current_scale().fractional_scale());
 
-    let mut elements = Vec::new();
-    // The space stores elements bottom to top; the renderer wants top first.
-    for win in space.elements_for_output(output).rev() {
-        let Some(location) = space.element_location(win) else {
-            continue;
-        };
-        let geometry = win.geometry();
-        let render_location =
-            (location - geometry.loc - output_geo.loc).to_physical_precise_round(scale);
-        let centre = (location - output_geo.loc + geometry.size.downscale(2).to_point())
-            .to_physical_precise_round(scale);
-
-        let look = window::animated_look(win, now);
-        let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-            win.render_elements(renderer, render_location, scale, look.alpha);
-        elements.extend(
-            surfaces
-                .into_iter()
-                .map(|element| RescaleRenderElement::from_element(element, centre, look.scale)),
-        );
+    // Build bottom to top, so closing windows can slot back into the stacking
+    // position they had; then flip, since the renderer wants top first.
+    let windows: Vec<&Window> = space.elements_for_output(output).collect();
+    let mut layers: Vec<Vec<OutputElement>> = Vec::with_capacity(windows.len() + closing.len());
+    for (index, win) in windows.iter().enumerate() {
+        for closed in closing.iter().filter(|c| c.below == index) {
+            layers.push(closing_elements(closed, output_loc, scale, now));
+        }
+        layers.push(window_elements(
+            renderer, space, win, output_loc, scale, now,
+        ));
     }
-    elements
+    for closed in closing.iter().filter(|c| c.below >= windows.len()) {
+        layers.push(closing_elements(closed, output_loc, scale, now));
+    }
+
+    layers.into_iter().rev().flatten().collect()
+}
+
+/// One live window, top element first: the crossfading snapshot (if a
+/// resize is running) above the window's own surfaces.
+fn window_elements(
+    renderer: &mut GlesRenderer,
+    space: &Space<Window>,
+    win: &Window,
+    output_loc: smithay::utils::Point<f64, Logical>,
+    scale: Scale<f64>,
+    now: Instant,
+) -> Vec<OutputElement> {
+    let Some(live) = space.element_geometry(win) else {
+        return Vec::new();
+    };
+    with_state(win, |state| {
+        let frame = effects::window_frame(state, live.to_f64(), now);
+        let rect = Rectangle::new(frame.rect.loc - output_loc, frame.rect.size);
+        let mut elements = Vec::new();
+
+        if let (Some(alpha), Some(snapshot)) = (
+            frame.snapshot_alpha,
+            state.resize_anim.as_ref().and_then(|r| r.snapshot.as_ref()),
+        ) {
+            elements.push(snapshot_element(snapshot, rect, scale, alpha * frame.alpha));
+        }
+
+        // Draw the surfaces so the window geometry's top-left lands on
+        // `rect.loc`, then stretch about that point to fill `rect`.
+        let geometry = win.geometry();
+        let origin = rect.loc.to_physical(scale).to_i32_round();
+        let render_location = (rect.loc - geometry.loc.to_f64())
+            .to_physical(scale)
+            .to_i32_round();
+        let stretch = Scale {
+            x: rect.size.w / geometry.size.w.max(1) as f64,
+            y: rect.size.h / geometry.size.h.max(1) as f64,
+        };
+        let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+            win.render_elements(renderer, render_location, scale, frame.alpha);
+        elements.extend(surfaces.into_iter().map(|surface| {
+            OutputElement::Window(RescaleRenderElement::from_element(surface, origin, stretch))
+        }));
+        elements
+    })
+}
+
+fn closing_elements(
+    closed: &ClosingWindow,
+    output_loc: smithay::utils::Point<f64, Logical>,
+    scale: Scale<f64>,
+    now: Instant,
+) -> Vec<OutputElement> {
+    let (snapshot, rect, alpha) = closed.frame(now);
+    let rect = Rectangle::new(rect.loc - output_loc, rect.size);
+    vec![snapshot_element(snapshot, rect, scale, alpha)]
+}
+
+fn snapshot_element(
+    snapshot: &Snapshot,
+    rect: Rectangle<f64, Logical>,
+    scale: Scale<f64>,
+    alpha: f32,
+) -> OutputElement {
+    let (element, origin, stretch) = snapshot.render_element(rect, scale, alpha);
+    OutputElement::Snapshot(RescaleRenderElement::from_element(element, origin, stretch))
+}
+
+/// Whether anything needs another frame soon.
+pub fn animations_running(space: &Space<Window>, closing: &[ClosingWindow]) -> bool {
+    !closing.is_empty()
+        || space
+            .elements()
+            .any(|w| with_state(w, |s| effects::is_animating(s)))
 }

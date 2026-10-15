@@ -4,18 +4,20 @@
 use std::{cell::RefCell, time::Instant};
 
 use smithay::{
-    desktop::{Space, Window},
+    desktop::Window,
+    output::Output,
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
         wayland_server::protocol::wl_surface::WlSurface,
     },
-    utils::{Logical, Rectangle, SERIAL_COUNTER, Size},
+    utils::{Logical, Rectangle, SERIAL_COUNTER, Scale, Size},
 };
-
 use tracing::debug;
 
 use crate::{
     animation::{Animation, presets},
+    effects::{self, ClosingWindow, ResizeAnim},
+    snapshot::Snapshot,
     state::State,
 };
 
@@ -35,6 +37,7 @@ pub struct WindowState {
     /// Floating geometry to return to when leaving maximize/snap/fullscreen.
     pub restore: Option<Rectangle<i32, Logical>>,
     pub open_anim: Option<Animation>,
+    pub resize_anim: Option<ResizeAnim>,
     /// Geometry size at the last commit, to notice client-driven resizes.
     pub last_size: Size<i32, Logical>,
 }
@@ -48,43 +51,6 @@ pub fn with_state<T>(window: &Window, f: impl FnOnce(&mut WindowState) -> T) -> 
     f(&mut cell.borrow_mut())
 }
 
-/// How a window should look right now, from its running animations.
-pub struct Look {
-    pub scale: f64,
-    pub alpha: f32,
-}
-
-pub fn animated_look(window: &Window, now: Instant) -> Look {
-    with_state(window, |state| {
-        let Some(anim) = &state.open_anim else {
-            return Look {
-                scale: 1.0,
-                alpha: 1.0,
-            };
-        };
-        let progress = anim.value_at(now);
-        if anim.is_done(now) {
-            state.open_anim = None;
-        }
-        let start = presets::WINDOW_OPEN_START_SCALE;
-        Look {
-            scale: start + (1.0 - start) * progress,
-            alpha: progress as f32,
-        }
-    })
-}
-
-pub fn animations_running(space: &Space<Window>, now: Instant) -> bool {
-    space.elements().any(|window| {
-        with_state(window, |state| {
-            state
-                .open_anim
-                .as_ref()
-                .is_some_and(|anim| !anim.is_done(now))
-        })
-    })
-}
-
 impl State {
     pub fn window_for_surface(&self, surface: &WlSurface) -> Option<Window> {
         self.space
@@ -94,16 +60,48 @@ impl State {
             .cloned()
     }
 
-    /// The area windows may occupy on the output showing `window`. Later this
-    /// subtracts layer-shell exclusive zones (the panel).
-    fn work_area(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
-        let output = self
-            .space
+    fn output_for(&self, window: &Window) -> Option<Output> {
+        self.space
             .outputs_for_element(window)
             .into_iter()
             .next()
-            .or_else(|| self.space.outputs().next().cloned())?;
-        self.space.output_geometry(&output)
+            .or_else(|| self.space.outputs().next().cloned())
+    }
+
+    /// The area windows may occupy on the output showing `window`. Later this
+    /// subtracts layer-shell exclusive zones (the panel).
+    fn work_area(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
+        self.space.output_geometry(&self.output_for(window)?)
+    }
+
+    /// Where `window`'s geometry is drawn right now, mid-animation included.
+    fn visual_rect(&self, window: &Window) -> Option<Rectangle<f64, Logical>> {
+        let live = self.space.element_geometry(window)?.to_f64();
+        Some(with_state(window, |s| {
+            effects::window_frame(s, live, Instant::now()).rect
+        }))
+    }
+
+    fn snapshot(&mut self, window: &Window) -> Option<Snapshot> {
+        let scale = Scale::from(self.output_for(window)?.current_scale().fractional_scale());
+        Snapshot::capture(self.backend.renderer(), window, scale)
+    }
+
+    /// Keep showing a destroyed window as a fading, shrinking snapshot. Must
+    /// run before the window is unmapped, while its buffers still exist.
+    pub fn start_close_animation(&mut self, window: &Window) {
+        let Some(rect) = self.visual_rect(window) else {
+            return;
+        };
+        let Some(below) = self.space.elements().position(|w| w == window) else {
+            return;
+        };
+        let snapshot = self.snapshot(window);
+        debug!(captured = snapshot.is_some(), "window closing");
+        if let Some(snapshot) = snapshot {
+            self.closing.push(ClosingWindow::new(snapshot, rect, below));
+            self.queue_redraw();
+        }
     }
 
     /// Called on a toplevel's first buffer commit.
@@ -181,8 +179,10 @@ impl State {
     }
 
     /// Move `window` into `target` placement: remember the floating geometry,
-    /// tell the client its new size and states, and position it.
-    pub fn set_placement(&mut self, window: &Window, target: Placement) {
+    /// tell the client its new size and states, and position it. With
+    /// `animate`, the window glides from where it is now once the client has
+    /// redrawn at the new size.
+    pub fn set_placement(&mut self, window: &Window, target: Placement, animate: bool) {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
@@ -195,6 +195,12 @@ impl State {
             return;
         };
         let mapped_location = self.space.element_location(window);
+        let animation_start = if animate && mapped_location.is_some() {
+            self.visual_rect(window)
+                .map(|from| (from, self.snapshot(window)))
+        } else {
+            None
+        };
 
         let restore = with_state(window, |s| {
             if current == Placement::Floating
@@ -243,12 +249,19 @@ impl State {
             }
             s.size = rect.map(|r| r.size);
         });
-        if toplevel.is_initial_configure_sent() {
-            toplevel.send_pending_configure();
-        }
+        let serial = if toplevel.is_initial_configure_sent() {
+            toplevel.send_pending_configure()
+        } else {
+            None
+        };
 
         if let (Some(rect), Some(_)) = (rect, mapped_location) {
             self.space.map_element(window.clone(), rect.loc, true);
+        }
+        if let Some((from, snapshot)) = animation_start {
+            with_state(window, |s| {
+                s.resize_anim = Some(ResizeAnim::new(from, snapshot, serial));
+            });
         }
         self.queue_redraw();
         self.queue_pointer_refresh();
@@ -266,12 +279,12 @@ impl State {
             | (Placement::SnappedLeft, Placement::SnappedRight) => Placement::Floating,
             _ => toward,
         };
-        self.set_placement(&window, target);
+        self.set_placement(&window, target, true);
     }
 
     pub fn set_focused_placement(&mut self, target: Placement) {
         if let Some(window) = self.focused_window() {
-            self.set_placement(&window, target);
+            self.set_placement(&window, target, true);
         }
     }
 
@@ -282,7 +295,7 @@ impl State {
             } else {
                 Placement::Fullscreen
             };
-            self.set_placement(&window, target);
+            self.set_placement(&window, target, true);
         }
     }
 

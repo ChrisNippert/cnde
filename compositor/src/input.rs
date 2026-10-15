@@ -222,7 +222,8 @@ impl State {
                 with_state(&window, |s| s.restore.map(|r| r.size)).unwrap_or(geo.size);
             let pointer_pos = start_data.location;
             let fraction_x = (pointer_pos.x - geo.loc.x as f64) / geo.size.w.max(1) as f64;
-            self.set_placement(&window, Placement::Floating);
+            // No animation: the window must stick to the pointer.
+            self.set_placement(&window, Placement::Floating, false);
             let new_loc = Point::<f64, Logical>::from((
                 pointer_pos.x - fraction_x * restore_size.w as f64,
                 geo.loc.y as f64,
@@ -260,7 +261,7 @@ impl State {
         // Resizing a maximized/snapped window turns it floating at its current size.
         if Self::placement_of(&window) != Placement::Floating {
             with_state(&window, |s| s.restore = Some(geo));
-            self.set_placement(&window, Placement::Floating);
+            self.set_placement(&window, Placement::Floating, false);
         }
 
         toplevel.with_pending_state(|state| {

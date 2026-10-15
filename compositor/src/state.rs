@@ -25,7 +25,7 @@ use smithay::{
 };
 use tracing::warn;
 
-use crate::{backend::winit::WinitBackend, keybinds::ModKey};
+use crate::{backend::winit::WinitBackend, effects::ClosingWindow, keybinds::ModKey};
 
 pub struct State {
     pub start_time: Instant,
@@ -43,6 +43,8 @@ pub struct State {
     /// Toplevels that exist but haven't attached a buffer yet. They are mapped
     /// (placed + animated in) on their first buffer commit.
     pub unmapped: Vec<Window>,
+    /// Snapshots of destroyed windows, still animating out.
+    pub closing: Vec<ClosingWindow>,
     pub popups: PopupManager,
 
     pub seat: Seat<Self>,
@@ -102,6 +104,7 @@ impl State {
 
             space,
             unmapped: Vec::new(),
+            closing: Vec::new(),
             popups: PopupManager::default(),
 
             seat,

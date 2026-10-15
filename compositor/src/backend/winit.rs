@@ -16,7 +16,7 @@ use smithay::{
 };
 use tracing::{trace, warn};
 
-use crate::{render, state::State, window};
+use crate::{render, state::State};
 
 const REFRESH_MHZ: i32 = 60_000;
 const CLEAR_COLOR: [f32; 4] = [0.12, 0.12, 0.14, 1.0];
@@ -140,6 +140,10 @@ impl WinitBackend {
         self.graphics.window().request_redraw();
     }
 
+    pub fn renderer(&mut self) -> &mut GlesRenderer {
+        self.graphics.renderer()
+    }
+
     pub fn import_dmabuf(&mut self, dmabuf: &Dmabuf) -> bool {
         self.graphics.renderer().import_dmabuf(dmabuf, None).is_ok()
     }
@@ -165,7 +169,8 @@ impl State {
                     return;
                 }
             };
-            let elements = render::output_elements(renderer, &self.space, &backend.output, now);
+            let elements =
+                render::output_elements(renderer, &self.space, &self.closing, &backend.output, now);
             match backend.damage_tracker.render_output(
                 renderer,
                 &mut framebuffer,
@@ -196,8 +201,10 @@ impl State {
             });
         }
 
+        self.closing.retain(|c| !c.is_done(now));
+
         // Keep frames coming while anything is animating; otherwise go idle.
-        if window::animations_running(&self.space, now) {
+        if render::animations_running(&self.space, &self.closing) {
             self.queue_redraw();
         }
     }

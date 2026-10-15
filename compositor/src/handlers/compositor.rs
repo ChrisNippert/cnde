@@ -11,8 +11,9 @@ use smithay::{
         buffer::BufferHandler,
         compositor::{
             CompositorClientState, CompositorHandler, CompositorState, get_parent,
-            is_sync_subsurface,
+            is_sync_subsurface, with_states,
         },
+        shell::xdg::XdgToplevelSurfaceData,
         shm::{ShmHandler, ShmState},
     },
 };
@@ -52,6 +53,21 @@ impl CompositorHandler for State {
                 if with_state(&window, |s| std::mem::replace(&mut s.last_size, size)) != size {
                     self.queue_pointer_refresh();
                 }
+                // A pending maximize/snap animation starts once the client has
+                // drawn at the size we asked for.
+                let acked = window.toplevel().and_then(|t| {
+                    with_states(t.wl_surface(), |states| {
+                        states
+                            .data_map
+                            .get::<XdgToplevelSurfaceData>()
+                            .and_then(|data| data.lock().ok()?.current_serial)
+                    })
+                });
+                with_state(&window, |s| {
+                    if let Some(resize) = &mut s.resize_anim {
+                        resize.on_commit(acked);
+                    }
+                });
             }
         }
 

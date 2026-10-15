@@ -15,3 +15,19 @@ pub const WINDOW_OPEN: Params = Params {
 };
 /// Windows grow from this scale to 1.0 while fading in.
 pub const WINDOW_OPEN_START_SCALE: f64 = 0.9;
+
+/// Maximize, snap, fullscreen and restore.
+pub const WINDOW_RESIZE: Params = Params {
+    duration: Duration::from_millis(250),
+    curve: Curve::EaseOutExpo,
+};
+/// How long a resize waits for the client to redraw at its new size before
+/// animating anyway (with the old buffer stretched).
+pub const RESIZE_COMMIT_TIMEOUT: Duration = Duration::from_millis(150);
+
+pub const WINDOW_CLOSE: Params = Params {
+    duration: Duration::from_millis(180),
+    curve: Curve::EaseOutCubic,
+};
+/// Closing windows shrink to this scale while fading out.
+pub const WINDOW_CLOSE_END_SCALE: f64 = 0.9;

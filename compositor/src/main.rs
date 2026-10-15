@@ -3,11 +3,13 @@
 
 mod animation;
 mod backend;
+mod effects;
 mod grabs;
 mod handlers;
 mod input;
 mod keybinds;
 mod render;
+mod snapshot;
 mod spawn;
 mod state;
 mod window;
