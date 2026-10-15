@@ -29,7 +29,10 @@ use smithay::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
-        shell::xdg::{XdgShellState, decoration::XdgDecorationState},
+        shell::{
+            wlr_layer::{Layer, WlrLayerShellState},
+            xdg::{XdgShellState, decoration::XdgDecorationState},
+        },
         shm::ShmState,
         socket::ListeningSocketSource,
     },
@@ -84,6 +87,7 @@ pub struct State {
     // Smithay protocol state
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
+    pub layer_shell_state: WlrLayerShellState,
     #[allow(dead_code)] // owns the global; dropping it removes the protocol
     pub xdg_decoration_state: XdgDecorationState,
     pub shm_state: ShmState,
@@ -105,6 +109,7 @@ impl State {
 
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
+        let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
@@ -148,6 +153,7 @@ impl State {
 
             compositor_state,
             xdg_shell_state,
+            layer_shell_state,
             xdg_decoration_state,
             shm_state,
             output_manager_state,
@@ -215,6 +221,7 @@ impl State {
                 Some(output.clone())
             });
         }
+        self.send_layer_frame_callbacks(output, elapsed);
         if let CursorImageStatus::Surface(surface) = &self.cursor_status {
             send_frames_surface_tree(surface, output, elapsed, Some(Duration::ZERO), |_, _| {
                 Some(output.clone())
@@ -262,17 +269,44 @@ impl State {
         pointer.frame(self);
     }
 
+    /// The surface under `pos`, honouring stacking: overlay and top layers,
+    /// then windows, then bottom and background layers.
     pub fn surface_under(
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space
+        if let Some((_, surface, loc)) =
+            self.layer_surface_under(self.layers_above_windows(pos), pos)
+        {
+            return Some((surface, loc));
+        }
+        let window = self
+            .space
             .element_under(pos)
             .and_then(|(window, location)| {
                 window
                     .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
                     .map(|(s, p)| (s, (p + location).to_f64()))
-            })
+            });
+        window.or_else(|| {
+            self.layer_surface_under(&[Layer::Bottom, Layer::Background], pos)
+                .map(|(_, surface, loc)| (surface, loc))
+        })
+    }
+
+    /// Layers drawn above windows at `pos`: the panel (top layer) hides
+    /// behind a fullscreen window.
+    pub fn layers_above_windows(&self, pos: Point<f64, Logical>) -> &'static [Layer] {
+        let fullscreen = self
+            .space
+            .output_under(pos)
+            .next()
+            .is_some_and(|output| self.fullscreen_on(output));
+        if fullscreen {
+            &[Layer::Overlay]
+        } else {
+            &[Layer::Overlay, Layer::Top]
+        }
     }
 }
 

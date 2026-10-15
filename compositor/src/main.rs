@@ -10,6 +10,7 @@ mod grabs;
 mod handlers;
 mod input;
 mod keybinds;
+mod layers;
 mod render;
 mod snap;
 mod snapshot;

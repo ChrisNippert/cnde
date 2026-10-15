@@ -15,12 +15,12 @@ use smithay::{
         },
         gles::{GlesRenderer, GlesTexture},
     },
-    desktop::{Space, Window},
+    desktop::{Space, Window, layer_map_for_output},
     input::pointer::{CursorImageStatus, CursorImageSurfaceData},
     output::Output,
     reexports::wayland_server::Resource,
     utils::{Logical, Point, Rectangle, Scale},
-    wayland::compositor::with_states,
+    wayland::{compositor::with_states, shell::wlr_layer::Layer},
 };
 use tracing::warn;
 
@@ -29,7 +29,7 @@ use crate::{
     effects::{self, ClosingWindow},
     snap::SnapPreview,
     snapshot::Snapshot,
-    window::with_state,
+    window::{Placement, with_state},
 };
 
 render_elements! {
@@ -147,8 +147,44 @@ pub fn output_elements(
             .collect();
         layers.insert(top_window_layer.unwrap_or(layers.len()), elements);
     }
+    let window_elements = layers.into_iter().rev().flatten();
 
-    layers.into_iter().rev().flatten().collect()
+    // Layer-shell stacking (see layers.rs); a fullscreen window covers the panel.
+    let fullscreen = windows
+        .last()
+        .is_some_and(|w| with_state(w, |s| s.placement == Placement::Fullscreen));
+    let mut elements = layer_elements(renderer, output, Layer::Overlay, scale);
+    if !fullscreen {
+        elements.extend(layer_elements(renderer, output, Layer::Top, scale));
+    }
+    elements.extend(window_elements);
+    if fullscreen {
+        elements.extend(layer_elements(renderer, output, Layer::Top, scale));
+    }
+    elements.extend(layer_elements(renderer, output, Layer::Bottom, scale));
+    elements.extend(layer_elements(renderer, output, Layer::Background, scale));
+    elements
+}
+
+/// Every layer surface of one kind on `output`, top first.
+fn layer_elements(
+    renderer: &mut GlesRenderer,
+    output: &Output,
+    layer: Layer,
+    scale: Scale<f64>,
+) -> Vec<OutputElement> {
+    let map = layer_map_for_output(output);
+    let mut elements = Vec::new();
+    for surface in map.layers_on(layer).rev() {
+        let Some(geometry) = map.layer_geometry(surface) else {
+            continue;
+        };
+        let location = geometry.loc.to_physical_precise_round(scale);
+        let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+            surface.render_elements(renderer, location, scale, 1.0);
+        elements.extend(surfaces.into_iter().map(OutputElement::Surface));
+    }
+    elements
 }
 
 /// One live window, top element first: the crossfading snapshot (if a

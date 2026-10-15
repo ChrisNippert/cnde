@@ -140,23 +140,25 @@ fn parse_desktop_exec(contents: &str) -> Option<Vec<String>> {
     None
 }
 
-/// Whitespace split that respects double quotes. Enough for Exec lines and
-/// `$TERMINAL`; not a shell.
+/// Whitespace split that respects quotes: double quotes (with backslash
+/// escapes, as in .desktop Exec lines) and single quotes (literal, as in a
+/// shell). Enough for Exec lines, `$TERMINAL` and config commands; not a shell.
 fn split_command_line(line: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
-    let mut in_quotes = false;
+    let mut quote: Option<char> = None;
     let mut chars = line.chars();
     while let Some(c) = chars.next() {
-        match c {
-            '"' => in_quotes = !in_quotes,
-            '\\' if in_quotes => current.extend(chars.next()),
-            c if c.is_whitespace() && !in_quotes => {
+        match (quote, c) {
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), '\\') => current.extend(chars.next()),
+            (None, c) if c.is_whitespace() => {
                 if !current.is_empty() {
                     args.push(std::mem::take(&mut current));
                 }
             }
-            c => current.push(c),
+            (_, c) => current.push(c),
         }
     }
     if !current.is_empty() {
@@ -184,6 +186,10 @@ mod tests {
         assert_eq!(
             split_command_line(r#"foo "bar baz" qux"#),
             vec!["foo", "bar baz", "qux"]
+        );
+        assert_eq!(
+            split_command_line(r#"sh -c 'sleep 2; echo "hi"'"#),
+            vec!["sh", "-c", r#"sleep 2; echo "hi""#]
         );
     }
 }

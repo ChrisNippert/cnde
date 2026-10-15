@@ -118,7 +118,8 @@ impl State {
     /// Called on every motion of an interactive move.
     pub fn update_snap_preview(&mut self, window: &Window, pointer: Point<f64, Logical>) {
         let output = self.space.output_under(pointer).next().cloned();
-        let area = output.and_then(|o| self.space.output_geometry(&o));
+        // Snap within what panels leave free, like maximize does.
+        let area = output.and_then(|o| self.usable_area(&o));
         let target = area.and_then(|area| snap_target(pointer, area));
 
         if self.snap_preview.as_ref().map(|p| p.target) == target {

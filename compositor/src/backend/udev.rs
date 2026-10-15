@@ -29,6 +29,7 @@ use smithay::{
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{UdevBackend as UdevDevices, UdevEvent, all_gpus, primary_gpu},
     },
+    desktop::layer_map_for_output,
     output::{Mode as WlMode, Output, PhysicalProperties, Scale as OutputScale},
     reexports::{
         calloop::{
@@ -516,6 +517,11 @@ impl State {
             self.loop_handle.remove(token);
         }
         info!(name = %surface.output.name(), connector = ?connector.handle(), "monitor disconnected");
+        // Panels on that monitor go away; clients like waybar re-create
+        // theirs when a monitor comes back.
+        for layer in layer_map_for_output(&surface.output).layers() {
+            layer.layer_surface().send_close();
+        }
         self.space.unmap_output(&surface.output);
         self.display_handle.remove_global::<State>(surface.global);
     }

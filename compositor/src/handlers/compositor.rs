@@ -71,7 +71,9 @@ impl CompositorHandler for State {
             }
         }
 
-        self.handle_toplevel_mapping(surface);
+        if !self.handle_layer_commit(surface) {
+            self.handle_toplevel_mapping(surface);
+        }
         xdg_shell::handle_commit(&mut self.popups, &self.space, &self.unmapped, surface);
         resize_grab::handle_commit(&mut self.space, surface);
         self.queue_redraw();

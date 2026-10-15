@@ -222,6 +222,29 @@ impl State {
 
         if button_state == ButtonState::Pressed && !pointer.is_grabbed() {
             let location = pointer.current_location();
+            // Clicking a panel/launcher above the windows focuses it if it
+            // wants the keyboard, and never the window underneath.
+            if let Some((layer, _, _)) =
+                self.layer_surface_under(self.layers_above_windows(location), location)
+            {
+                if layer.can_receive_keyboard_focus()
+                    && self.exclusive_layer().is_none()
+                    && let Some(keyboard) = self.seat.get_keyboard()
+                {
+                    keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);
+                }
+                pointer.button(
+                    self,
+                    &ButtonEvent {
+                        button,
+                        state: button_state,
+                        serial,
+                        time,
+                    },
+                );
+                pointer.frame(self);
+                return;
+            }
             let window = self.space.element_under(location).map(|(w, _)| w.clone());
             self.focus_window(window.as_ref());
 

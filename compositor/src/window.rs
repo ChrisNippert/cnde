@@ -94,10 +94,14 @@ impl State {
             .cloned()
     }
 
-    /// The area windows may occupy on the output showing `window`. Later this
-    /// subtracts layer-shell exclusive zones (the panel).
-    fn work_area(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
-        self.space.output_geometry(&self.output_for(window)?)
+    /// The area a window in `placement` may occupy on its monitor: the whole
+    /// monitor when fullscreen, otherwise what panels leave free.
+    fn area_for(&self, window: &Window, placement: Placement) -> Option<Rectangle<i32, Logical>> {
+        let output = self.output_for(window)?;
+        match placement {
+            Placement::Fullscreen => self.space.output_geometry(&output),
+            _ => self.usable_area(&output),
+        }
     }
 
     /// Where `window`'s geometry is drawn right now, mid-animation included.
@@ -133,11 +137,11 @@ impl State {
     /// Called on a toplevel's first buffer commit.
     pub fn map_new_window(&mut self, window: Window) {
         self.unmapped.retain(|w| w != &window);
-        let Some(area) = self.work_area(&window) else {
+        let placement = with_state(&window, |s| s.placement);
+        let Some(area) = self.area_for(&window, placement) else {
             return;
         };
 
-        let placement = with_state(&window, |s| s.placement);
         let location = match placement {
             Placement::Floating => {
                 let size = window.geometry().size;
@@ -167,6 +171,14 @@ impl State {
         self.queue_pointer_refresh();
     }
 
+    /// Whether the topmost window on `output` is fullscreen.
+    pub fn fullscreen_on(&self, output: &Output) -> bool {
+        self.space
+            .elements_for_output(output)
+            .last()
+            .is_some_and(|w| Self::placement_of(w) == Placement::Fullscreen)
+    }
+
     pub fn focused_window(&self) -> Option<Window> {
         let focus = self.seat.get_keyboard()?.current_focus()?;
         self.window_for_surface(&focus)
@@ -188,9 +200,13 @@ impl State {
                 toplevel.send_pending_configure();
             }
         }
-        let surface = window
-            .and_then(|w| w.toplevel())
-            .map(|t| t.wl_surface().clone());
+        let surface = match self.exclusive_layer() {
+            // An open launcher keeps the keyboard until it closes.
+            Some(layer) => Some(layer.wl_surface().clone()),
+            None => window
+                .and_then(|w| w.toplevel())
+                .map(|t| t.wl_surface().clone()),
+        };
         keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
     }
 
@@ -217,7 +233,7 @@ impl State {
         if current == target {
             return;
         }
-        let Some(area) = self.work_area(window) else {
+        let Some(area) = self.area_for(window, target) else {
             return;
         };
         let mapped_location = self.space.element_location(window);
@@ -322,7 +338,9 @@ impl State {
             if placement == Placement::Floating {
                 continue;
             }
-            let (Some(area), Some(toplevel)) = (self.work_area(&window), window.toplevel()) else {
+            let (Some(area), Some(toplevel)) =
+                (self.area_for(&window, placement), window.toplevel())
+            else {
                 continue;
             };
             let rect = placement_rect(placement, area);
