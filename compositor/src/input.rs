@@ -14,6 +14,8 @@ use smithay::{
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
 };
 
+use tracing::debug;
+
 use crate::{
     grabs::{MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab},
     keybinds::{self, Action, ModKey},
@@ -135,6 +137,7 @@ impl State {
             return;
         };
         let serial = SERIAL_COUNTER.next_serial();
+        debug!(button, ?button_state, location = ?pointer.current_location(), "pointer button");
 
         if button_state == ButtonState::Pressed && !pointer.is_grabbed() {
             let location = pointer.current_location();

@@ -18,7 +18,7 @@ use smithay::{
         PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
     },
 };
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{state::State, window::Placement};
 
@@ -62,6 +62,7 @@ impl XdgShellHandler for State {
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
+        debug!("client requested interactive move");
         let Some(seat) = Seat::from_resource(&seat) else {
             return;
         };
@@ -119,6 +120,7 @@ delegate_xdg_shell!(State);
 
 impl State {
     fn placement_request(&mut self, surface: &ToplevelSurface, target: Placement) {
+        debug!(?target, "client requested placement");
         match self.window_for_surface(surface.wl_surface()) {
             Some(window) => self.set_placement(&window, target),
             // The protocol requires a configure in reply even if we change nothing.

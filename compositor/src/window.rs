@@ -35,6 +35,8 @@ pub struct WindowState {
     /// Floating geometry to return to when leaving maximize/snap/fullscreen.
     pub restore: Option<Rectangle<i32, Logical>>,
     pub open_anim: Option<Animation>,
+    /// Geometry size at the last commit, to notice client-driven resizes.
+    pub last_size: Size<i32, Logical>,
 }
 
 pub fn with_state<T>(window: &Window, f: impl FnOnce(&mut WindowState) -> T) -> T {
@@ -129,6 +131,7 @@ impl State {
         self.space.map_element(window.clone(), location, true);
         self.focus_window(Some(&window));
         self.queue_redraw();
+        self.queue_pointer_refresh();
     }
 
     /// Called when a mapped toplevel attaches a null buffer or is destroyed.
@@ -137,6 +140,7 @@ impl State {
         let topmost = self.space.elements().last().cloned();
         self.focus_window(topmost.as_ref());
         self.queue_redraw();
+        self.queue_pointer_refresh();
     }
 
     pub fn focused_window(&self) -> Option<Window> {
@@ -183,6 +187,7 @@ impl State {
             return;
         };
         let current = Self::placement_of(window);
+        debug!(from = ?current, to = ?target, "set_placement");
         if current == target {
             return;
         }
@@ -246,6 +251,7 @@ impl State {
             self.space.map_element(window.clone(), rect.loc, true);
         }
         self.queue_redraw();
+        self.queue_pointer_refresh();
     }
 
     /// Super+Left/Right, GNOME style: snapping toward the opposite side of an

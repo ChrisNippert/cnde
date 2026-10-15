@@ -21,6 +21,7 @@ use super::xdg_shell;
 use crate::{
     grabs::resize_grab,
     state::{ClientState, State},
+    window::with_state,
 };
 
 impl CompositorHandler for State {
@@ -45,6 +46,12 @@ impl CompositorHandler for State {
             }
             if let Some(window) = self.window_for_surface(&root) {
                 window.on_commit();
+                // A client resizing itself (e.g. finishing a maximize) can change
+                // what's under the pointer.
+                let size = window.geometry().size;
+                if with_state(&window, |s| std::mem::replace(&mut s.last_size, size)) != size {
+                    self.queue_pointer_refresh();
+                }
             }
         }
 

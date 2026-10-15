@@ -124,6 +124,7 @@ pub fn insert_event_source(
                 );
                 state.relayout_after_output_change();
                 state.queue_redraw();
+                state.queue_pointer_refresh();
             }
             WinitEvent::Input(event) => state.process_input_event(event),
             WinitEvent::Redraw => state.render_winit(),

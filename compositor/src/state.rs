@@ -4,7 +4,7 @@ use std::{ffi::OsString, sync::Arc, time::Instant};
 
 use smithay::{
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
-    input::{Seat, SeatState, keyboard::Keycode},
+    input::{Seat, SeatState, keyboard::Keycode, pointer::MotionEvent},
     reexports::{
         calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic},
         wayland_server::{
@@ -13,7 +13,7 @@ use smithay::{
             protocol::wl_surface::WlSurface,
         },
     },
-    utils::{Logical, Point},
+    utils::{Logical, Point, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
@@ -36,6 +36,8 @@ pub struct State {
     pub backend: WinitBackend,
     /// Set whenever something on screen changed; the backend renders once per request.
     pub redraw_queued: bool,
+    /// Set when windows moved or resized under the pointer; see `refresh_pointer_focus`.
+    pub pointer_focus_dirty: bool,
 
     pub space: Space<Window>,
     /// Toplevels that exist but haven't attached a buffer yet. They are mapped
@@ -96,6 +98,7 @@ impl State {
 
             backend,
             redraw_queued: true,
+            pointer_focus_dirty: false,
 
             space,
             unmapped: Vec::new(),
@@ -151,6 +154,10 @@ impl State {
     pub fn on_loop_iteration(&mut self) {
         self.space.refresh();
         self.popups.cleanup();
+        if self.pointer_focus_dirty {
+            self.pointer_focus_dirty = false;
+            self.refresh_pointer_focus();
+        }
         if let Err(err) = self.display_handle.flush_clients() {
             warn!(?err, "failed to flush clients");
         }
@@ -162,6 +169,42 @@ impl State {
 
     pub fn queue_redraw(&mut self) {
         self.redraw_queued = true;
+    }
+
+    /// Window layout changed: re-check what's under the pointer at the next
+    /// loop iteration (batched, so many changes cost one update).
+    pub fn queue_pointer_refresh(&mut self) {
+        self.pointer_focus_dirty = true;
+    }
+
+    /// Re-send the pointer position after windows moved under a stationary
+    /// cursor. Otherwise clients keep stale surface-local coordinates until
+    /// the mouse moves, which breaks hover and double-click detection (e.g. a
+    /// titlebar double-click right after a maximize).
+    fn refresh_pointer_focus(&mut self) {
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        // While a grab is active (a held button, a move/resize) it owns pointer
+        // focus. Retry after it ends: e.g. a titlebar double-click maximizes
+        // while the button is still down, and the *next* click must already
+        // see the window's new position.
+        if pointer.is_grabbed() {
+            self.pointer_focus_dirty = true;
+            return;
+        }
+        let location = pointer.current_location();
+        let under = self.surface_under(location);
+        pointer.motion(
+            self,
+            under,
+            &MotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: self.start_time.elapsed().as_millis() as u32,
+            },
+        );
+        pointer.frame(self);
     }
 
     pub fn surface_under(

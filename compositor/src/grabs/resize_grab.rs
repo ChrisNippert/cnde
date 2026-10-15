@@ -281,7 +281,10 @@ impl PointerGrab<State> for ResizeSurfaceGrab {
         &self.start_data
     }
 
-    fn unset(&mut self, _data: &mut State) {}
+    fn unset(&mut self, data: &mut State) {
+        // Hand the pointer back to whatever is now under it.
+        data.queue_pointer_refresh();
+    }
 }
 
 /// State of the resize operation.
