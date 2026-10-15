@@ -3,9 +3,13 @@
 use smithay::{
     delegate_xdg_shell,
     desktop::{
-        PopupKind, PopupManager, Space, Window, find_popup_root_surface, get_popup_toplevel_coords,
+        PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab, PopupUngrabStrategy, Space,
+        Window, find_popup_root_surface, get_popup_toplevel_coords,
     },
-    input::{Seat, pointer::GrabStartData as PointerGrabStartData},
+    input::{
+        Seat,
+        pointer::{Focus, GrabStartData as PointerGrabStartData},
+    },
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
@@ -113,8 +117,51 @@ impl XdgShellHandler for State {
         self.placement_request(&surface, Placement::Floating);
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
-        // TODO: popup grabs, so menus close on outside clicks.
+    /// Menus and dropdowns ask for a grab: keyboard and pointer go to the
+    /// popup chain, and a click anywhere else dismisses it.
+    // Adapted from smithay: anvil/src/shell/xdg.rs
+    fn grab(&mut self, surface: PopupSurface, seat: wl_seat::WlSeat, serial: Serial) {
+        let Some(seat) = Seat::<Self>::from_resource(&seat) else {
+            return;
+        };
+        let kind = PopupKind::Xdg(surface);
+        let Ok(root) = find_popup_root_surface(&kind) else {
+            return;
+        };
+        if self.window_for_surface(&root).is_none() {
+            return;
+        }
+        let mut grab = match self.popups.grab_popup(root, kind, &seat, serial) {
+            Ok(grab) => grab,
+            Err(err) => {
+                debug!(?err, "popup grab refused");
+                return;
+            }
+        };
+
+        // Only grant the grab if it stems from the input that's currently
+        // grabbing (the click that opened the menu), not a stale serial.
+        if let Some(keyboard) = seat.get_keyboard() {
+            if keyboard.is_grabbed()
+                && !(keyboard.has_grab(serial)
+                    || keyboard.has_grab(grab.previous_serial().unwrap_or(serial)))
+            {
+                grab.ungrab(PopupUngrabStrategy::All);
+                return;
+            }
+            keyboard.set_focus(self, grab.current_grab(), serial);
+            keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
+        }
+        if let Some(pointer) = seat.get_pointer() {
+            if pointer.is_grabbed()
+                && !(pointer.has_grab(serial)
+                    || pointer.has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial())))
+            {
+                grab.ungrab(PopupUngrabStrategy::All);
+                return;
+            }
+            pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
+        }
     }
 }
 delegate_xdg_shell!(State);
