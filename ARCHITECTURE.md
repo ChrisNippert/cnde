@@ -297,7 +297,20 @@ Every default listed here can be rebound or reconfigured.
 - Keyboard layouts via xkb, with Super+Space to switch when more than one is configured.
   Low priority, but present.
 
-### 5.3 Explicitly not in v1
+### 5.3 Panel design: GNOME by default, KDE on request
+
+- **Default (GNOME-like):** one thin top bar.
+  - Left: workspace indicator (one dot or pill per workspace, the active one highlighted).
+  - Centre: clock. Clicking it opens the calendar and notifications.
+  - Right: status icons (network, volume, battery). Clicking them opens quick settings.
+- **Opt-in (KDE-like), via settings:**
+  - App buttons / taskbar for open windows, and pinned apps.
+  - An app-menu button.
+  - Bar at the bottom instead of the top, or a bar on every monitor (§5.2).
+  - Extra applets (later, via extensions §9).
+- These are **options on one panel**, not separate modes or layouts to switch between.
+
+### 5.4 Explicitly not in v1
 
 - Accessibility *features* (zoom, high contrast, screen reader workflows).
   Note: the `ui` toolkit still wires in AccessKit from the start (§5.1).
@@ -309,7 +322,10 @@ Every default listed here can be rebound or reconfigured.
 
 ## 6. Compositor ↔ shell IPC
 
-- **Standard protocols first.** The shell uses layer-shell and foreign-toplevel like any other bar would, which keeps it replaceable.
+- **Standard protocols first.** The shell uses layer-shell, foreign-toplevel and
+  **ext-workspace** like any other bar would. Anything cnde-shell can show,
+  third-party bars (waybar's `ext/workspaces`, etc.) can show too. cnde-shell is
+  the default that ships with the desktop, not a requirement.
 - **Private IPC for the rest.** This covers workspace state, overview open/close, "open launcher" keybind events and config reload. It runs over a Unix socket at `$XDG_RUNTIME_DIR/cnde/ipc.sock`, using length-prefixed, versioned messages defined in the `ipc` crate.
 - The same socket backs a `cnde msg ...` CLI for scripting, which doubles as the first extension surface.
 
