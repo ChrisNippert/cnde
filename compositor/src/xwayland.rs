@@ -111,6 +111,7 @@ fn open_display(rearm: Sender<()>) -> Result<Xwayland, String> {
         // makes the claim atomic. Taken (by the host desktop's Xwayland,
         // say): try the next one.
         let lock_path = PathBuf::from(format!("/tmp/.X{display}-lock"));
+        reclaim_if_stale(&lock_path, display);
         let Ok(mut lock) = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -153,6 +154,32 @@ fn open_display(rearm: Sender<()>) -> Result<Xwayland, String> {
         "no free X11 display among :0..:{}",
         MAX_DISPLAYS - 1
     ))
+}
+
+/// A lock left behind by a server that died without cleaning up (crash,
+/// SIGKILL) would otherwise burn a display number forever. Only our own
+/// stale locks are reclaimed: the file must be ours and its PID gone.
+fn reclaim_if_stale(lock_path: &PathBuf, number: u32) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(metadata) = fs::metadata(lock_path) else {
+        return; // no lock at all
+    };
+    let our_uid = fs::metadata("/proc/self").map(|m| m.uid());
+    if our_uid.ok() != Some(metadata.uid()) {
+        return;
+    }
+    let Some(pid) = fs::read_to_string(lock_path)
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok())
+    else {
+        return;
+    };
+    if PathBuf::from(format!("/proc/{pid}")).exists() {
+        return; // still running
+    }
+    debug!(display = number, pid, "reclaiming stale X11 lock");
+    let _ = fs::remove_file(lock_path);
+    let _ = fs::remove_file(format!("{X11_UNIX_DIR}/X{number}"));
 }
 
 /// /tmp/.X11-unix must be world-writable and sticky, like /tmp.
