@@ -1,16 +1,19 @@
-//! cnde-shell: the panel (and later quick settings, notifications, the
-//! launcher). One process drawing layer-shell surfaces with cnde-ui
-//! (ARCHITECTURE.md §5). It only redraws when something changes: the
-//! minute ticks, workspaces change, or a monitor comes or goes.
+//! cnde-shell: the panel, quick settings and the overview's app search (and
+//! later notifications). One process drawing layer-shell surfaces with
+//! cnde-ui (ARCHITECTURE.md §5). It only redraws when something changes:
+//! the minute ticks, workspaces change, or a monitor comes or goes.
 
 mod actions;
+mod apps;
 mod config;
+mod ipc;
+mod launcher;
 mod panel;
 mod quick_settings;
 mod status;
 mod workspaces;
 
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration, time::SystemTime};
 
 use chrono::{Local, Timelike};
 use cnde_config::Config;
@@ -21,7 +24,7 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
-            EventLoop,
+            EventLoop, LoopHandle,
             channel::{self, Event},
             timer::{TimeoutAction, Timer},
         },
@@ -54,7 +57,11 @@ use tracing::{info, warn};
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::ExtWorkspaceManagerV1;
 
 use crate::{
-    actions::Actions, panel::Panel, quick_settings::QuickSettings, status::Update,
+    actions::Actions,
+    launcher::{KeyOutcome, Launcher},
+    panel::Panel,
+    quick_settings::QuickSettings,
+    status::Update,
     workspaces::Workspaces,
 };
 
@@ -105,6 +112,19 @@ pub struct App {
     seat_handle: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    modifiers: Modifiers,
+    loop_handle: LoopHandle<'static, App>,
+
+    ipc: ipc::Ipc,
+    /// The overview's search box, while the overview is open.
+    launcher: Option<Launcher>,
+    apps: Vec<apps::App>,
+    app_dirs: Vec<PathBuf>,
+    /// When `app_dirs` last changed, as of the last scan.
+    apps_stamp: Vec<Option<SystemTime>>,
+    apps_loading: bool,
+    apps_tx: channel::Sender<(Vec<apps::App>, Vec<Option<SystemTime>>)>,
+    launches: apps::LaunchCounts,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -123,6 +143,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(font = fonts.family(), "cnde-shell starting");
 
     let shm = Shm::bind(&globals, &qh)?;
+
+    // Overview open/close from the compositor.
+    let (ipc_tx, ipc_rx) = channel::channel();
+    event_loop.handle().insert_source(ipc_rx, |event, _, app| {
+        if let Event::Msg(event) = event {
+            app.ipc_event(event);
+        }
+    })?;
+    // The installed apps, scanned off the main thread.
+    let (apps_tx, apps_rx) = channel::channel();
+    event_loop
+        .handle()
+        .insert_source(apps_rx, |event, _, app: &mut App| {
+            if let Event::Msg((list, stamp)) = event {
+                app.apps = list;
+                app.apps_stamp = stamp;
+                app.apps_loading = false;
+                if let Some(launcher) = &mut app.launcher {
+                    launcher.refresh(&app.apps, &app.launches, &app.theme);
+                }
+                app.draw_launcher();
+            }
+        })?;
+
     let mut app = App {
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
@@ -146,7 +190,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         seat_handle: None,
         pointer: None,
         keyboard: None,
+        modifiers: Modifiers::default(),
+        loop_handle: event_loop.handle(),
+        ipc: ipc::Ipc::connect(ipc_tx),
+        launcher: None,
+        apps: Vec::new(),
+        app_dirs: apps::application_dirs(),
+        apps_stamp: Vec::new(),
+        apps_loading: false,
+        apps_tx,
+        launches: apps::LaunchCounts::load(),
     };
+    app.rescan_apps_if_changed();
     app.workspaces.manager = globals
         .bind::<ExtWorkspaceManagerV1, _, _>(&qh, 1..=1, workspaces::ManagerData)
         .map_err(|err| warn!(?err, "no ext-workspace; the indicator stays empty"))
@@ -193,6 +248,99 @@ fn until_next_minute() -> Duration {
 }
 
 impl App {
+    fn ipc_event(&mut self, event: cnde_ipc::Event) {
+        match event {
+            cnde_ipc::Event::OverviewOpened { output } => {
+                self.rescan_apps_if_changed();
+                let found = self.outputs.outputs().find_map(|o| {
+                    let info = self.outputs.info(&o)?;
+                    (info.name.as_deref() == Some(output.as_str()))
+                        .then_some((o, info.scale_factor))
+                });
+                let Some((output, scale)) = found else {
+                    warn!(%output, "overview opened on an unknown monitor");
+                    return;
+                };
+                if self.launcher.as_ref().is_some_and(|l| l.output == output) {
+                    return;
+                }
+                self.launcher = Some(Launcher::new(
+                    &self.compositor,
+                    &self.layer_shell,
+                    &self.qh,
+                    output,
+                    &self.theme,
+                    scale,
+                ));
+            }
+            cnde_ipc::Event::OverviewClosed => self.launcher = None,
+        }
+    }
+
+    /// Rescan the installed apps in the background if anything changed.
+    fn rescan_apps_if_changed(&mut self) {
+        let stamp = apps::dirs_stamp(&self.app_dirs);
+        if self.apps_loading || (stamp == self.apps_stamp && !self.apps.is_empty()) {
+            return;
+        }
+        self.apps_loading = true;
+        let dirs = self.app_dirs.clone();
+        let tx = self.apps_tx.clone();
+        let _ = std::thread::Builder::new()
+            .name("apps".into())
+            .spawn(move || {
+                let list = apps::load(&dirs);
+                let _ = tx.send((list, stamp));
+            });
+    }
+
+    fn draw_launcher(&mut self) {
+        if let Some(launcher) = &mut self.launcher {
+            launcher.draw(
+                &self.qh,
+                &self.compositor,
+                &mut self.pool,
+                self.shm_format,
+                &mut self.fonts,
+                &mut self.icons,
+                &self.theme,
+                &self.apps,
+            );
+        }
+    }
+
+    fn launcher_key(&mut self, event: KeyEvent) {
+        let Some(launcher) = &mut self.launcher else {
+            return;
+        };
+        match launcher.key(
+            &event,
+            &self.modifiers,
+            &self.apps,
+            &self.launches,
+            &self.theme,
+        ) {
+            KeyOutcome::Nothing => {}
+            KeyOutcome::Redraw => self.draw_launcher(),
+            KeyOutcome::Close => self.close_overview(),
+            KeyOutcome::Launch(id) => self.launch(&id),
+        }
+    }
+
+    fn launch(&mut self, id: &str) {
+        if let Some(app) = self.apps.iter().find(|a| a.id == id) {
+            let terminal = std::env::var("TERMINAL").unwrap_or_else(|_| "alacritty".into());
+            apps::launch(app, &terminal);
+            self.launches.record(id);
+        }
+        self.close_overview();
+    }
+
+    fn close_overview(&mut self) {
+        self.ipc
+            .send(&cnde_ipc::Request::SetOverview { open: false });
+    }
+
     /// Which monitors get a panel: the main one (configured, else the
     /// leftmost), or every one with `panel.all_monitors`.
     pub fn sync_panels(&mut self) {
@@ -355,6 +503,12 @@ impl CompositorHandler for App {
             qs.set_scale(factor);
             self.draw_quick_settings();
         }
+        if let Some(launcher) = &mut self.launcher
+            && launcher.layer.wl_surface() == surface
+        {
+            launcher.set_scale(factor);
+            self.draw_launcher();
+        }
     }
     fn transform_changed(
         &mut self,
@@ -376,6 +530,12 @@ impl CompositorHandler for App {
             && qs.frame_done()
         {
             self.draw_quick_settings();
+        }
+        if let Some(launcher) = &mut self.launcher
+            && launcher.layer.wl_surface() == surface
+            && launcher.frame_done()
+        {
+            self.draw_launcher();
         }
     }
     fn surface_enter(
@@ -415,6 +575,9 @@ impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         // The compositor took it away (e.g. its monitor was unplugged).
         self.panels.retain(|p| &p.layer != layer);
+        if self.launcher.as_ref().is_some_and(|l| &l.layer == layer) {
+            self.launcher = None;
+        }
     }
 
     fn configure(
@@ -428,6 +591,12 @@ impl LayerShellHandler for App {
         if let Some(i) = self.panels.iter().position(|p| &p.layer == layer) {
             self.panels[i].configure(configure.new_size);
             self.draw_panel(i);
+        }
+        if let Some(launcher) = &mut self.launcher
+            && &launcher.layer == layer
+        {
+            launcher.configured();
+            self.draw_launcher();
         }
     }
 }
@@ -448,7 +617,17 @@ impl SeatHandler for App {
             self.pointer = self.seat.get_pointer(qh, &seat).ok();
         }
         if capability == Capability::Keyboard && self.keyboard.is_none() {
-            self.keyboard = self.seat.get_keyboard(qh, &seat, None).ok();
+            // With repeat, so holding Backspace in the search keeps deleting.
+            self.keyboard = self
+                .seat
+                .get_keyboard_with_repeat(
+                    qh,
+                    &seat,
+                    None,
+                    self.loop_handle.clone(),
+                    Box::new(|app, _, event| app.launcher_key(event)),
+                )
+                .ok();
         }
         self.seat_handle = Some(seat);
     }
@@ -477,6 +656,26 @@ impl PointerHandler for App {
         events: &[PointerEvent],
     ) {
         for event in events {
+            if let Some(launcher) = &mut self.launcher
+                && launcher.layer.wl_surface() == &event.surface
+            {
+                match event.kind {
+                    PointerEventKind::Motion { .. } | PointerEventKind::Enter { .. } => {
+                        if launcher.hover(event.position, &self.theme) {
+                            self.draw_launcher();
+                        }
+                    }
+                    PointerEventKind::Press {
+                        button: BTN_LEFT, ..
+                    } => {
+                        if let Some(id) = launcher.click(event.position, &self.theme) {
+                            self.launch(&id);
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             let on_quick_settings = self
                 .quick_settings
                 .as_ref()
@@ -581,7 +780,9 @@ impl KeyboardHandler for App {
         _: u32,
         event: KeyEvent,
     ) {
-        if event.keysym == Keysym::Escape {
+        if self.launcher.is_some() {
+            self.launcher_key(event);
+        } else if event.keysym == Keysym::Escape {
             self.quick_settings = None;
         }
     }
@@ -609,10 +810,11 @@ impl KeyboardHandler for App {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: Modifiers,
+        modifiers: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.modifiers = modifiers;
     }
 }
 

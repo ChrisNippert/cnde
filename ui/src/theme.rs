@@ -69,6 +69,19 @@ pub struct Theme {
     pub qs_label_size: f32,
     pub qs_dim: Color,
 
+    // Overview search (a pill on top, results card below)
+    pub search_width: f32,
+    pub search_height: f32,
+    pub search_background: Color,
+    pub search_text_size: f32,
+    pub search_gap: f32,
+    pub search_results_radius: f32,
+    pub search_row_height: f32,
+    pub search_row_radius: f32,
+    pub search_icon_size: f32,
+    pub search_selected: Color,
+    pub search_max_results: usize,
+
     // Text
     pub font_size: f32,
     pub font_families: &'static [&'static str],
@@ -107,6 +120,18 @@ impl Theme {
             qs_on_fill: Color::rgb(0x1c, 0x1c, 0x1e),
             qs_label_size: 12.0,
             qs_dim: Color::rgba(0xff, 0xff, 0xff, 0.6),
+
+            search_width: 560.0,
+            search_height: 48.0,
+            search_background: Color::rgba(0x1c, 0x1c, 0x1e, 0.94),
+            search_text_size: 17.0,
+            search_gap: 10.0,
+            search_results_radius: 24.0,
+            search_row_height: 56.0,
+            search_row_radius: 14.0,
+            search_icon_size: 36.0,
+            search_selected: Color::rgba(0xff, 0xff, 0xff, 0.12),
+            search_max_results: 7,
 
             status_icon_size: 16.0,
             status_spacing: 12.0,

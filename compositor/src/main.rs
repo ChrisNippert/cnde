@@ -10,6 +10,7 @@ mod ext_workspace;
 mod grabs;
 mod handlers;
 mod input;
+mod ipc;
 mod keybinds;
 mod layers;
 mod overview;
@@ -57,6 +58,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut event_loop: EventLoop<State> = EventLoop::try_new()?;
+    // Before anything is launched: exports CNDE_SOCKET.
+    let ipc_socket = ipc::listen(&event_loop.handle());
     let display: Display<State> = Display::new()?;
     let (config, config_path) = config::load_initial();
 
@@ -129,7 +132,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Draw the first frames before blocking for events.
     state.on_loop_iteration();
-    event_loop.run(None, &mut state, State::on_loop_iteration)?;
+    let result = event_loop.run(None, &mut state, State::on_loop_iteration);
+    if let Some(path) = ipc_socket {
+        let _ = std::fs::remove_file(path);
+    }
+    result?;
     Ok(())
 }
 

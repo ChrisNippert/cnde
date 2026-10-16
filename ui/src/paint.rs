@@ -165,6 +165,27 @@ impl Canvas<'_> {
     }
 }
 
+impl Canvas<'_> {
+    /// A full-colour app icon (see [`Icons::app`]), `size` logical px square,
+    /// top-left at (`x`, `y`). Returns false if no icon was found.
+    pub fn app_icon(&mut self, icons: &mut Icons, name: &str, x: f32, y: f32, size: f32) -> bool {
+        let s = self.scale;
+        let px = (size * s).round().max(1.0) as u32;
+        let Some(icon) = icons.app(name, px) else {
+            return false;
+        };
+        self.pixmap.draw_pixmap(
+            (x * s).round() as i32,
+            (y * s).round() as i32,
+            icon.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+        true
+    }
+}
+
 /// Source-over blend of a straight-alpha colour onto a premultiplied pixel.
 fn blend_premultiplied(dst: &mut [u8], rgb: [u8; 3], alpha: u8) {
     let a = alpha as u32;

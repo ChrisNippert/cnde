@@ -75,6 +75,7 @@ pub struct State {
     pub closing: Vec<ClosingWindow>,
     pub wallpapers: crate::wallpaper::Wallpapers,
     pub overview: crate::overview::Overview,
+    pub ipc: crate::ipc::IpcClients,
     /// Drag-to-edge preview while a window is being moved.
     pub snap_preview: Option<SnapPreview>,
     pub popups: PopupManager,
@@ -159,6 +160,7 @@ impl State {
             closing: Vec::new(),
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
             overview: crate::overview::Overview::new(),
+            ipc: Default::default(),
             snap_preview: None,
             popups: PopupManager::default(),
 

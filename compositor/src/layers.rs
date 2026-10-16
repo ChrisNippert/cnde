@@ -92,8 +92,13 @@ impl WlrLayerShellHandler for State {
             .and_then(|k| k.current_focus())
             .is_some_and(|focus| &focus == layer.wl_surface());
         if focused {
-            let topmost = self.space.elements().last().cloned();
-            self.focus_window(topmost.as_ref());
+            // The overview's search box closing hands focus to whatever the
+            // overview picked; otherwise the top window.
+            let next = self
+                .overview
+                .take_focus_after()
+                .or_else(|| self.space.elements().last().cloned());
+            self.focus_window(next.as_ref());
         }
         self.relayout_after_output_change();
         self.queue_redraw();

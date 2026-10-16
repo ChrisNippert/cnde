@@ -332,7 +332,7 @@ Every default listed here can be rebound or reconfigured.
   **ext-workspace** like any other bar would. Anything cnde-shell can show,
   third-party bars (waybar's `ext/workspaces`, etc.) can show too. cnde-shell is
   the default that ships with the desktop, not a requirement.
-- **Private IPC for the rest.** This covers workspace state, overview open/close, "open launcher" keybind events and config reload. It runs over a Unix socket at `$XDG_RUNTIME_DIR/cnde/ipc.sock`, using length-prefixed, versioned messages defined in the `ipc` crate.
+- **Private IPC for the rest.** This covers overview open/close (in use now), and later "open launcher" keybind events and config reload. It runs over a Unix socket at `$XDG_RUNTIME_DIR/cnde-<pid>.sock`, exported to every client as `$CNDE_SOCKET`. Messages are one JSON object per line, defined in the `ipc` crate (`cnde-ipc`). Both sides ignore messages they don't know, so either end can be newer.
 - The same socket backs a `cnde msg ...` CLI for scripting, which doubles as the first extension surface.
 
 ## 7. Other system integration

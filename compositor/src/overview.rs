@@ -64,6 +64,9 @@ pub struct Overview {
     /// Had the keyboard before opening; gets it back unless a click picks
     /// another window.
     prev_focus: Option<Window>,
+    /// Chosen on close, for when the shell's search box lets go of the
+    /// keyboard (see `layer_destroyed`).
+    focus_after: Option<Window>,
 }
 
 /// What one monitor shows while the overview is (partly) open.
@@ -97,7 +100,12 @@ impl Overview {
             hot_corner_armed: true,
             scroll: 0.0,
             prev_focus: None,
+            focus_after: None,
         }
+    }
+
+    pub fn take_focus_after(&mut self) -> Option<Window> {
+        self.focus_after.take()
     }
 
     pub fn is_open(&self) -> bool {
@@ -145,6 +153,15 @@ impl State {
         }
         debug!(open, "overview");
         self.overview.set_open(open);
+        let event = match open {
+            true => {
+                let (outputs, main) = self.strip_outputs();
+                let output = outputs.get(main).map(|o| o.name()).unwrap_or_default();
+                cnde_ipc::Event::OverviewOpened { output }
+            }
+            false => cnde_ipc::Event::OverviewClosed,
+        };
+        self.ipc.broadcast(&event);
         if open {
             // Typing must not reach the window behind the overview.
             self.overview.prev_focus = self.focused_window();
@@ -153,19 +170,26 @@ impl State {
             {
                 keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
             }
-        } else if self.focused_window().is_none() && self.exclusive_layer().is_none() {
+        } else {
             let previous = self
                 .overview
                 .prev_focus
                 .take()
                 .filter(|w| self.workspaces.list.iter().any(|ws| ws.windows.contains(w)));
-            let top = previous.or_else(|| {
+            // A window picked by a click is already focused (or, while the
+            // search box holds the keyboard, raised and waiting).
+            let picked = self.overview.focus_after.take();
+            let next = picked.or(previous).or_else(|| {
                 self.workspaces.list[self.workspaces.active]
                     .windows
                     .last()
                     .cloned()
             });
-            self.focus_window(top.as_ref());
+            if self.exclusive_layer().is_some() {
+                self.overview.focus_after = next;
+            } else if self.focused_window().is_none() {
+                self.focus_window(next.as_ref());
+            }
         }
         // Windows stop (or start) taking pointer input.
         self.queue_pointer_refresh();
@@ -311,13 +335,11 @@ impl State {
         if target != current {
             self.step_workspace(target - current, false);
         }
-        match window {
-            Some(window) => self.focus_window(Some(&window)),
-            None => {
-                let top = self.workspaces.list[index].windows.last().cloned();
-                self.focus_window(top.as_ref());
-            }
+        let target = window.or_else(|| self.workspaces.list[index].windows.last().cloned());
+        if let Some(target) = &target {
+            self.focus_window(Some(target));
         }
+        self.overview.focus_after = target;
         self.set_overview(false);
     }
 

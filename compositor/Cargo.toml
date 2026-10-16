@@ -10,6 +10,7 @@ tracing-subscriber.workspace = true
 bitflags = "2"
 xcursor = "0.3"
 cnde-config = { path = "../config" }
+cnde-ipc = { path = "../ipc" }
 # inotify for config hot-reload (same major version smithay uses).
 rustix = { version = "1", features = ["fs"] }
 # Connector scanning for monitor hotplug. Its EDID (`display-info`) feature
