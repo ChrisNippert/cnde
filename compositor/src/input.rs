@@ -1,5 +1,6 @@
 // Adapted from smithay: smallvil/src/input.rs
 
+use smithay::wayland::shell::wlr_layer::Layer as WlrLayer;
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, GestureBeginEvent,
@@ -295,6 +296,24 @@ impl State {
             }
             let window = self.space.element_under(location).map(|(w, _)| w.clone());
             self.focus_window(window.as_ref());
+
+            // Right-click on the bare wallpaper: the shell's desktop menu.
+            if window.is_none()
+                && button == BTN_RIGHT
+                && !self.mod_held()
+                && self
+                    .layer_surface_under(&[WlrLayer::Bottom, WlrLayer::Background], location)
+                    .is_none()
+                && let Some(output) = self.space.output_under(location).next().cloned()
+                && let Some(geometry) = self.space.output_geometry(&output)
+            {
+                let local = location - geometry.loc.to_f64();
+                self.ipc.broadcast(&cnde_ipc::Event::DesktopMenu {
+                    output: output.name(),
+                    x: local.x.round() as i32,
+                    y: local.y.round() as i32,
+                });
+            }
 
             // Mod+left-drag moves, mod+right-drag resizes; the click never reaches the client.
             if let Some(window) = window.filter(|_| self.mod_held()) {

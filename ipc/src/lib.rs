@@ -37,6 +37,13 @@ pub enum Event {
     ScreenshotDone {
         path: Option<String>,
     },
+    /// The wallpaper was right-clicked: show the desktop menu at (`x`,
+    /// `y`), logical pixels within `output`.
+    DesktopMenu {
+        output: String,
+        x: i32,
+        y: i32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -99,6 +106,10 @@ pub enum Request {
     CancelScreenshot,
     /// Open the screenshot tool, as Super+Shift+S does.
     OpenScreenshot,
+    /// Ask this window to close (as its close button would).
+    CloseWindow {
+        id: u64,
+    },
 }
 
 /// Where a compositor with process id `pid` listens.

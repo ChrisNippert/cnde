@@ -444,7 +444,7 @@ impl QuickSettings {
             }
             Some(Hit::Power) => self.toggle_power_menu(xdg_shell, theme, anchor),
             Some(Hit::Settings) => {
-                crate::apps::open_settings();
+                crate::apps::open_settings(None);
                 return true;
             }
             Some(hit @ (Hit::Suspend | Hit::Reboot | Hit::PowerOff)) => {

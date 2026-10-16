@@ -315,6 +315,25 @@ impl Dock {
         std::mem::replace(&mut self.hover, hover) != hover
     }
 
+    /// The cell under `point`: its index and rect. The last index is the
+    /// apps button (past the end of [`Dock::items`]).
+    pub fn cell_at(&self, point: (f64, f64), icon: f32) -> Option<(usize, Rect)> {
+        let layout = layout(&self.items, icon, self.vertical());
+        layout
+            .cells
+            .iter()
+            .position(|c| c.contains(point))
+            .map(|i| (i, layout.cells[i]))
+    }
+
+    pub fn scale(&self) -> i32 {
+        self.scale
+    }
+
+    pub fn items(&self) -> &[Item] {
+        &self.items
+    }
+
     /// `new_window`: middle click, always launch.
     pub fn click(&self, point: (f64, f64), icon: f32, new_window: bool) -> Click {
         let layout = layout(&self.items, icon, self.vertical());

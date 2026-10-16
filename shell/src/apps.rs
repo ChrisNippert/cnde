@@ -357,14 +357,16 @@ pub fn launch(app: &App, terminal: &str) {
     }
 }
 
-/// Start cnde-settings: the one next to our binary, else from PATH.
-pub fn open_settings() {
+/// Start cnde-settings (on `page`, e.g. "dock"): the one next to our
+/// binary, else from PATH.
+pub fn open_settings(page: Option<&str>) {
     let program = std::env::current_exe()
         .ok()
         .and_then(|exe| Some(exe.parent()?.join("cnde-settings")))
         .filter(|exe| exe.is_file())
         .map_or_else(|| "cnde-settings".into(), |exe| exe.into_os_string());
     let result = Command::new(&program)
+        .args(page)
         .current_dir(std::env::var_os("HOME").unwrap_or_else(|| "/".into()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())

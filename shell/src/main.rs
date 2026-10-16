@@ -6,9 +6,11 @@
 mod actions;
 mod apps;
 mod config;
+mod context_menus;
 mod dock;
 mod ipc;
 mod launcher;
+mod menu;
 mod panel;
 mod quick_settings;
 mod screenshot;
@@ -42,7 +44,9 @@ use smithay_client_toolkit::{
     seat::{
         Capability, SeatHandler, SeatState,
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
-        pointer::{BTN_LEFT, BTN_MIDDLE, PointerEvent, PointerEventKind, PointerHandler},
+        pointer::{
+            BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, PointerEvent, PointerEventKind, PointerHandler,
+        },
     },
     shell::{
         WaylandSurface,
@@ -126,6 +130,13 @@ pub struct App {
     /// The overview's search box, while the overview is open.
     launcher: Option<Launcher>,
     dock: Option<Dock>,
+    /// The open right-click menu.
+    menu: Option<menu::Menu>,
+    /// The desktop menu's 1x1 anchor, waiting to be configured, and the
+    /// scale of its monitor.
+    desktop_holder: Option<(smithay_client_toolkit::shell::wlr_layer::LayerSurface, i32)>,
+    /// The latest input serial, for grabs the compositor started for us.
+    last_serial: u32,
     /// The screenshot tool, while the screen is frozen for one.
     screenshot: Option<screenshot::ScreenshotUi>,
     /// Every open window, from the compositor.
@@ -218,6 +229,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         launcher: None,
         dock: None,
         screenshot: None,
+        menu: None,
+        desktop_holder: None,
+        last_serial: 0,
         windows: Vec::new(),
         dock_output: None,
         overview_open: false,
@@ -279,6 +293,7 @@ fn until_next_minute() -> Duration {
 impl App {
     fn ipc_event(&mut self, event: cnde_ipc::Event) {
         match event {
+            cnde_ipc::Event::DesktopMenu { output, x, y } => self.desktop_menu(&output, x, y),
             cnde_ipc::Event::OverviewOpened { output } => {
                 self.overview_open = true;
                 self.redraw_panels();
@@ -753,6 +768,12 @@ impl CompositorHandler for App {
             launcher.set_scale(factor);
             self.draw_launcher();
         }
+        if let Some(menu) = &mut self.menu
+            && menu.popup.wl_surface() == surface
+        {
+            menu.set_scale(factor);
+            self.draw_menu();
+        }
         if let Some(dock) = &mut self.dock
             && dock.layer.wl_surface() == surface
         {
@@ -794,6 +815,12 @@ impl CompositorHandler for App {
             && self.panels[i].frame_done()
         {
             self.draw_panel(i);
+        }
+        if let Some(menu) = &mut self.menu
+            && menu.popup.wl_surface() == surface
+            && menu.frame_done()
+        {
+            self.draw_menu();
         }
         if let Some((qs, _)) = &mut self.quick_settings
             && qs.popup.wl_surface() == surface
@@ -891,6 +918,13 @@ impl LayerShellHandler for App {
             self.panels[i].configure(configure.new_size);
             self.draw_panel(i);
         }
+        if self
+            .desktop_holder
+            .as_ref()
+            .is_some_and(|(holder, _)| holder == layer)
+        {
+            self.desktop_holder_configured();
+        }
         if let Some(launcher) = &mut self.launcher
             && &launcher.layer == layer
         {
@@ -973,6 +1007,45 @@ impl PointerHandler for App {
         events: &[PointerEvent],
     ) {
         for event in events {
+            if let PointerEventKind::Enter { serial }
+            | PointerEventKind::Press { serial, .. }
+            | PointerEventKind::Release { serial, .. } = event.kind
+            {
+                self.last_serial = serial;
+            }
+            if let Some(menu) = &mut self.menu
+                && menu.popup.wl_surface() == &event.surface
+            {
+                match event.kind {
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        if menu.motion(Some(event.position)) {
+                            self.draw_menu();
+                        }
+                    }
+                    PointerEventKind::Leave { .. } => {
+                        if menu.motion(None) {
+                            self.draw_menu();
+                        }
+                    }
+                    PointerEventKind::Press {
+                        button: BTN_LEFT, ..
+                    } => {
+                        if let Some(action) = menu.click(event.position) {
+                            self.menu_action(action);
+                        }
+                    }
+                    PointerEventKind::Release {
+                        button: BTN_LEFT | BTN_RIGHT,
+                        ..
+                    } if menu.release_counts() => {
+                        if let Some(action) = menu.click(event.position) {
+                            self.menu_action(action);
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             if let Some(ui) = &mut self.screenshot
                 && ui.owns(&event.surface)
             {
@@ -1013,6 +1086,14 @@ impl PointerHandler for App {
                     }
                     PointerEventKind::Press { button, .. } if button == BTN_MIDDLE => {
                         dock.click(event.position, icon, true)
+                    }
+                    PointerEventKind::Press {
+                        button: BTN_RIGHT,
+                        serial,
+                        ..
+                    } => {
+                        self.dock_menu(event.position, serial);
+                        continue;
                     }
                     _ => continue,
                 };
@@ -1086,6 +1167,11 @@ impl PointerHandler for App {
                     }
                 }
                 PointerEventKind::Press {
+                    button: BTN_RIGHT,
+                    serial,
+                    ..
+                } => self.panel_menu(index, event.position, serial),
+                PointerEventKind::Press {
                     button: BTN_LEFT,
                     serial,
                     ..
@@ -1116,10 +1202,19 @@ impl PopupHandler for App {
             qs.configured();
             self.draw_quick_settings();
         }
+        if let Some(menu) = &mut self.menu
+            && &menu.popup == popup
+        {
+            menu.configured();
+            self.draw_menu();
+        }
     }
 
     /// The compositor dismissed it (a click outside).
     fn done(&mut self, _: &Connection, _: &QueueHandle<Self>, popup: &Popup) {
+        if self.menu.as_ref().is_some_and(|m| &m.popup == popup) {
+            self.close_menu();
+        }
         if self
             .quick_settings
             .as_ref()
@@ -1175,7 +1270,25 @@ impl KeyboardHandler for App {
         _: u32,
         event: KeyEvent,
     ) {
-        if let Some(ui) = &mut self.screenshot {
+        if let Some(menu) = &mut self.menu {
+            match event.keysym {
+                Keysym::Escape => self.close_menu(),
+                Keysym::Up => {
+                    menu.key(-1);
+                    self.draw_menu();
+                }
+                Keysym::Down | Keysym::Tab => {
+                    menu.key(1);
+                    self.draw_menu();
+                }
+                Keysym::Return | Keysym::KP_Enter | Keysym::space => {
+                    if let Some(action) = menu.chosen() {
+                        self.menu_action(action);
+                    }
+                }
+                _ => {}
+            }
+        } else if let Some(ui) = &mut self.screenshot {
             let outcome = ui.key(&event);
             self.screenshot_outcome(outcome);
         } else if self.launcher.is_some() {

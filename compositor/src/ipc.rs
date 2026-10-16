@@ -157,6 +157,17 @@ impl State {
                 }
             }
             Request::OpenScreenshot => self.start_screenshot(),
+            Request::CloseWindow { id } => {
+                let window = self
+                    .workspaces
+                    .list
+                    .iter()
+                    .flat_map(|ws| &ws.windows)
+                    .find(|w| crate::window::with_state(w, |s| s.id) == id);
+                if let Some(toplevel) = window.and_then(|w| w.toplevel()) {
+                    toplevel.send_close();
+                }
+            }
             Request::CancelScreenshot => {
                 if self.screenshot.active {
                     self.cancel_screenshot();
