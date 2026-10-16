@@ -119,13 +119,13 @@ impl Panel {
         self.scale
     }
 
+    /// The button at `x`. The outer buttons reach all the way to the screen
+    /// corners, so throwing the pointer into a corner and clicking works.
     pub fn button_at(&self, (x, _y): (f64, f64)) -> Option<Button> {
-        let inside = |region: Option<(f32, f32)>| {
-            region.is_some_and(|(start, end)| (start as f64..end as f64).contains(&x))
-        };
-        if inside(self.activities_region) {
+        let x = x as f32;
+        if self.activities_region.is_some_and(|(_, end)| x < end) {
             Some(Button::Activities)
-        } else if inside(self.status_region) {
+        } else if self.status_region.is_some_and(|(start, _)| x >= start) {
             Some(Button::Status)
         } else {
             None

@@ -20,6 +20,7 @@ use std::{
         Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use smithay::{
@@ -35,6 +36,7 @@ use smithay::{
     desktop::{Space, Window},
     output::{Output, WeakOutput},
     reexports::{
+        calloop::timer::{TimeoutAction, Timer},
         wayland_protocols::ext::{
             foreign_toplevel_list::v1::server::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
             image_capture_source::v1::server::{
@@ -103,7 +105,14 @@ pub struct FrameData {
     session: ExtImageCopyCaptureSessionV1,
     buffer: Mutex<Option<WlBuffer>>,
     captured: AtomicBool,
+    /// When the client asked for the capture.
+    requested: Mutex<Option<Instant>>,
 }
+
+/// A capture waiting for new content gets the current frame anyway after
+/// this long. Some clients (Discord) drop the first frame while setting up
+/// their stream; on a still screen they'd otherwise never get another.
+const REPEAT_AFTER: Duration = Duration::from_millis(250);
 
 pub struct CursorSessionData {
     session_created: AtomicBool,
@@ -340,8 +349,12 @@ pub fn capture_output<E: RenderElement<GlesRenderer>>(
                 return false;
             };
             let first = !session.captured_once.load(Ordering::Relaxed);
+            let stale = frame
+                .data::<FrameData>()
+                .and_then(|f| *f.requested.lock().ok()?)
+                .is_some_and(|at| at.elapsed() >= REPEAT_AFTER);
             matches!(&session.source, Source::Output(weak) if weak.upgrade().is_some_and(|o| &o == output))
-                && (changed || first)
+                && (changed || first || stale)
         })
         .cloned()
         .collect();
@@ -378,7 +391,11 @@ pub fn capture_toplevels(
             let window = capture.window_for(weak)?;
             let root = window.toplevel()?.wl_surface().id();
             let first = !session.captured_once.load(Ordering::Relaxed);
-            (first || capture.dirty.contains(&root)).then(|| (frame.clone(), window))
+            let stale = frame
+                .data::<FrameData>()
+                .and_then(|f| *f.requested.lock().ok()?)
+                .is_some_and(|at| at.elapsed() >= REPEAT_AFTER);
+            (first || stale || capture.dirty.contains(&root)).then(|| (frame.clone(), window))
         })
         .collect();
     for (frame, window) in frames {
@@ -758,6 +775,7 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, SessionData> for State {
                     session: session.clone(),
                     buffer: Mutex::new(None),
                     captured: AtomicBool::new(false),
+                    requested: Mutex::new(None),
                 },
             );
         }
@@ -815,9 +833,20 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for State {
                     frame.failed(FailureReason::Stopped);
                     return;
                 }
+                if let Ok(mut requested) = data.requested.lock() {
+                    *requested = Some(Instant::now());
+                }
                 state.capture.pending.push(frame.clone());
-                // Make sure something renders soon, for the first frame.
+                // Something renders now (for a first frame), and again once
+                // it's been waiting long enough to get a repeat.
                 state.queue_redraw();
+                let timer = Timer::from_duration(REPEAT_AFTER + Duration::from_millis(5));
+                let _ = state.loop_handle.insert_source(timer, |_, _, state| {
+                    if state.capture.has_pending() {
+                        state.queue_redraw();
+                    }
+                    TimeoutAction::Drop
+                });
             }
             Request::Destroy => {}
             _ => {}

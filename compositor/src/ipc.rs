@@ -134,7 +134,7 @@ impl State {
         debug!(?request, "IPC request");
         match request {
             Request::SetOverview { open } => self.set_overview(open),
-            Request::ToggleOverview => self.toggle_overview(),
+            Request::ToggleOverview => self.activities_clicked(),
         }
     }
 }

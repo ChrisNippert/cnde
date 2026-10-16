@@ -54,6 +54,9 @@ const SPREAD_GAP: f64 = 28.0;
 const HOT_CORNER: f64 = 1.0;
 /// ...and must leave this far before the corner works again.
 const HOT_CORNER_REARM: f64 = 24.0;
+/// Clicks on the Activities button this soon after the hot corner fired
+/// are ignored (GNOME does the same).
+const HOT_CORNER_CLICK_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 pub struct Overview {
     /// Where it's heading (open or closed).
@@ -67,6 +70,9 @@ pub struct Overview {
     tile_shader: Option<GlesPixelProgram>,
     tiles: HashMap<WorkspaceId, Tile>,
     hot_corner_armed: bool,
+    /// When the hot corner last opened the overview: a click on the panel's
+    /// Activities button right after is the same gesture, not a toggle.
+    hot_corner_at: Option<Instant>,
     /// Scroll wheel travel not yet turned into workspace steps (v120 units).
     scroll: f64,
     /// Had the keyboard before opening; gets it back unless a click picks
@@ -114,6 +120,7 @@ impl Overview {
             tile_shader: None,
             tiles: HashMap::new(),
             hot_corner_armed: true,
+            hot_corner_at: None,
             scroll: 0.0,
             prev_focus: None,
             focus_after: None,
@@ -158,6 +165,18 @@ impl Overview {
 }
 
 impl State {
+    /// The Activities button (the shell asks over IPC). Ignored just after
+    /// the hot corner fired: you hit the corner, then clicked it.
+    pub fn activities_clicked(&mut self) {
+        let just_opened = self
+            .overview
+            .hot_corner_at
+            .is_some_and(|at| at.elapsed() < HOT_CORNER_CLICK_GRACE);
+        if !just_opened {
+            self.toggle_overview();
+        }
+    }
+
     pub fn toggle_overview(&mut self) {
         let open = !self.overview.is_open();
         self.set_overview(open);
@@ -428,6 +447,7 @@ impl State {
             let dragging = self.seat.get_pointer().is_some_and(|p| p.is_grabbed());
             if self.overview.hot_corner_armed && !dragging {
                 self.overview.hot_corner_armed = false;
+                self.overview.hot_corner_at = Some(Instant::now());
                 self.toggle_overview();
             }
         } else if dx > HOT_CORNER_REARM || dy > HOT_CORNER_REARM {
