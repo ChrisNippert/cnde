@@ -56,6 +56,51 @@ pub fn spawn_browser(env: &ClientEnv) {
     });
 }
 
+/// Run cnde-shell for the whole session, restarting it if it crashes
+/// (ARCHITECTURE.md §2). Restarts back off so a crash loop can't spin, and
+/// the backoff resets once it has stayed up a while.
+pub fn supervise_shell(env: &ClientEnv) {
+    let env = env.clone();
+    // Next to our own binary first (a dev build), then $PATH.
+    let program = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("cnde-shell")))
+        .filter(|path| path.is_file())
+        .map_or_else(|| "cnde-shell".into(), |path| path.into_os_string());
+    thread::spawn(move || {
+        let mut backoff = std::time::Duration::from_secs(1);
+        loop {
+            let started = std::time::Instant::now();
+            let mut command = Command::new(&program);
+            command
+                .env("WAYLAND_DISPLAY", &env.wayland_display)
+                .env_remove("WAYLAND_SOCKET")
+                .stdin(Stdio::null());
+            match &env.x11_display {
+                Some(display) => command.env("DISPLAY", display),
+                None => command.env_remove("DISPLAY"),
+            };
+            let status = match command.spawn() {
+                Ok(mut child) => child.wait(),
+                Err(err) => {
+                    warn!(
+                        ?program,
+                        ?err,
+                        "can't start cnde-shell; no panel this session"
+                    );
+                    return;
+                }
+            };
+            if started.elapsed() > std::time::Duration::from_secs(30) {
+                backoff = std::time::Duration::from_secs(1);
+            }
+            warn!(?status, ?backoff, "cnde-shell exited; restarting");
+            thread::sleep(backoff);
+            backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
+        }
+    });
+}
+
 pub fn spawn_command_line(command: &str, env: &ClientEnv) {
     let env = env.clone();
     let argv = split_command_line(command);

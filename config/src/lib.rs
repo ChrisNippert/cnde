@@ -20,6 +20,7 @@ pub struct Config {
     #[serde(rename = "output")]
     pub outputs: Vec<OutputConfig>,
     pub animations: Animations,
+    pub panel: Panel,
     pub launcher: Launcher,
     pub autostart: Autostart,
 }
@@ -135,6 +136,24 @@ pub struct Animations {
 impl Default for Animations {
     fn default() -> Self {
         Self { speed: 1.0 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Panel {
+    /// Run cnde-shell. Off: bring your own bar (waybar etc.) via autostart.
+    pub enabled: bool,
+    /// Show the panel on every monitor instead of only the main one.
+    pub all_monitors: bool,
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            all_monitors: false,
+        }
     }
 }
 

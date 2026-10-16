@@ -1,0 +1,11 @@
+[package]
+name = "cnde-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tiny-skia = "0.12"
+# No fontconfig: fonts are found by scanning the standard font directories,
+# which keeps libfontconfig (and its cache) out of the process.
+cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }

@@ -94,6 +94,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // Before autostart, so launched apps get DISPLAY.
     xwayland::setup(&mut state, &event_loop.handle());
+    if state.config.panel.enabled {
+        spawn::supervise_shell(&state.client_env());
+    }
     for command in &state.config.autostart.commands {
         spawn::spawn_command_line(command, &state.client_env());
     }

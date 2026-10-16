@@ -36,6 +36,10 @@
 [animations]
 # speed = 1.0              # 0.5 = twice as fast, 0.0 = no animations
 
+[panel]
+# enabled = true           # false: no cnde-shell; use your own bar via autostart
+# all_monitors = false     # true: a panel on every monitor, not just the main one
+
 [launcher]
 # Runs when Super is tapped on its own (temporary, until the cnde shell).
 # command = "fuzzel"
