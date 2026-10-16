@@ -63,6 +63,8 @@ pub struct Swipe {
     /// Recent (time, dx) samples, for release velocity.
     samples: Vec<(Instant, f64)>,
     position: f64,
+    /// Finger travel for one workspace (config).
+    distance: f64,
 }
 
 impl<W: PartialEq + Clone> Workspaces<W> {
@@ -187,15 +189,18 @@ impl<W: PartialEq + Clone> Workspaces<W> {
 }
 
 impl Swipe {
-    fn update(&mut self, dx: f64, now: Instant, min: f64, max: f64) {
+    fn update(&mut self, dx: f64, now: Instant, last_valid: f64) {
         self.dx += dx;
         self.samples.push((now, self.dx));
         let cutoff = now - Duration::from_millis(100);
         self.samples.retain(|(t, _)| *t >= cutoff);
         // Natural: content follows the fingers, so fingers moving left
         // (negative dx) reveal the next workspace.
-        let raw = self.start - self.dx / presets::SWIPE_DISTANCE;
-        self.position = raw.clamp(min, max);
+        let raw = self.start - self.dx / self.distance;
+        // One swipe moves at most one workspace: the strip stops at the
+        // neighbour rather than overshooting and snapping back on release.
+        let anchor = self.start.round();
+        self.position = raw.clamp(anchor - 1.0, anchor + 1.0).clamp(0.0, last_valid);
     }
 
     /// Workspaces per second at release.
@@ -207,7 +212,7 @@ impl Swipe {
         if dt < 0.005 {
             return 0.0;
         }
-        -(last.1 - first.1) / presets::SWIPE_DISTANCE / dt
+        -(last.1 - first.1) / self.distance / dt
     }
 }
 
@@ -412,6 +417,7 @@ impl State {
                 dx: 0.0,
                 samples: vec![(now, 0.0)],
                 position: start,
+                distance: self.config.input.touchpad.workspace_swipe_distance,
             }),
             carried: None,
         });
@@ -425,7 +431,7 @@ impl State {
             .as_mut()
             .and_then(|m| m.swipe.as_mut())
         {
-            swipe.update(dx, Instant::now(), 0.0, max);
+            swipe.update(dx, Instant::now(), max);
             self.queue_redraw();
         }
     }
@@ -660,6 +666,39 @@ mod tests {
             ws.list.iter().map(|w| !w.windows.is_empty()).collect(),
             ws.active,
         )
+    }
+
+    fn swipe(start: f64) -> Swipe {
+        Swipe {
+            start,
+            dx: 0.0,
+            samples: vec![(Instant::now(), 0.0)],
+            position: start,
+            distance: 900.0,
+        }
+    }
+
+    #[test]
+    fn swipe_follows_fingers_naturally() {
+        let mut s = swipe(2.0);
+        s.update(-450.0, Instant::now(), 10.0); // fingers left, half a workspace
+        assert!((s.position - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn swipe_stops_at_the_neighbour() {
+        let mut s = swipe(2.0);
+        s.update(-5000.0, Instant::now(), 10.0);
+        assert_eq!(s.position, 3.0);
+        s.update(10000.0, Instant::now(), 10.0);
+        assert_eq!(s.position, 1.0);
+    }
+
+    #[test]
+    fn swipe_respects_strip_ends() {
+        let mut s = swipe(0.0);
+        s.update(5000.0, Instant::now(), 10.0);
+        assert_eq!(s.position, 0.0);
     }
 
     #[test]

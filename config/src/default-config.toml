@@ -23,6 +23,7 @@
 # tap_to_click = true
 # tap_and_drag = true
 # disable_while_typing = true
+# workspace_swipe_distance = 900   # 3-finger swipe travel per workspace; larger = slower
 
 # Per-monitor settings. Names are logged when a monitor connects ("DP-2",
 # "eDP-1", ...). Monitors without an entry are placed left to right.

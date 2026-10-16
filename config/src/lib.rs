@@ -88,6 +88,9 @@ pub struct Touchpad {
     /// Tap, then touch again and move, to drag.
     pub tap_and_drag: bool,
     pub disable_while_typing: bool,
+    /// Finger travel for a three-finger swipe to move one workspace, in
+    /// touchpad units. Larger feels slower.
+    pub workspace_swipe_distance: f64,
 }
 
 impl Default for Touchpad {
@@ -99,6 +102,7 @@ impl Default for Touchpad {
             tap_to_click: true,
             tap_and_drag: true,
             disable_while_typing: true,
+            workspace_swipe_distance: 900.0,
         }
     }
 }
@@ -243,6 +247,12 @@ impl Config {
         in_range("input.mouse.speed", self.input.mouse.speed, -1.0, 1.0)?;
         in_range("input.touchpad.speed", self.input.touchpad.speed, -1.0, 1.0)?;
         in_range("animations.speed", self.animations.speed, 0.0, 10.0)?;
+        in_range(
+            "input.touchpad.workspace_swipe_distance",
+            self.input.touchpad.workspace_swipe_distance,
+            100.0,
+            5000.0,
+        )?;
         if self.input.keyboard.repeat_rate < 0 || self.input.keyboard.repeat_delay < 0 {
             return Err(Error::Invalid(
                 "keyboard repeat values can't be negative".into(),
