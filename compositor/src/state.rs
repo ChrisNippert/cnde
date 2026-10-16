@@ -46,6 +46,9 @@ use cnde_config::Config;
 
 use crate::{backend::Backend, effects::ClosingWindow, keybinds::ModKey, snap::SnapPreview};
 
+/// How long the pointer stays busy after a launch with no window opening.
+pub const LAUNCH_FEEDBACK: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub struct State {
     pub start_time: Instant,
     pub socket_name: OsString,
@@ -68,6 +71,9 @@ pub struct State {
     pub ext_workspace_state: crate::ext_workspace::ExtWorkspaceState,
     /// A three-finger swipe is driving the workspace strip.
     pub swipe_active: bool,
+    /// An app was started (the shell says): the pointer shows it's busy
+    /// until a window maps or `LAUNCH_FEEDBACK` passes.
+    pub launching: Option<std::time::Instant>,
     /// Which way the current three-finger swipe goes, once it's clear:
     /// true = sideways (workspaces), false = up/down (the overview).
     pub swipe_sideways: Option<bool>,
@@ -174,6 +180,7 @@ impl State {
             workspaces: crate::workspaces::Workspaces::new(),
             ext_workspace_state: Default::default(),
             swipe_active: false,
+            launching: None,
             swipe_sideways: None,
             swipe_pending: (0.0, 0.0),
             unmapped: Vec::new(),

@@ -274,7 +274,17 @@ pub struct Dock {
     items: Vec<Item>,
     hover: Option<usize>,
     pub edit: Option<DockEdit>,
+    /// Apps just launched from here (desktop IDs), bouncing until their
+    /// window shows up.
+    pub launching: Vec<(String, std::time::Instant)>,
 }
+
+/// How long an icon bounces at most when its app is slow to open.
+const LAUNCH_BOUNCE: std::time::Duration = std::time::Duration::from_secs(5);
+/// One hop, there and back.
+const HOP: f32 = 0.55;
+/// How high it hops, logical pixels.
+const HOP_HEIGHT: f32 = 10.0;
 
 impl Dock {
     #[allow(clippy::too_many_arguments)]
@@ -350,6 +360,7 @@ impl Dock {
             items: Vec::new(),
             hover: None,
             edit: None,
+            launching: Vec::new(),
         }
     }
 
@@ -560,6 +571,33 @@ impl Dock {
         self.dirty = false;
         let layout = self.layout(icon);
         let scale = self.scale;
+        // Bouncing icons: done once the app has a window, or after a while.
+        let items = &self.items;
+        self.launching.retain(|(id, at)| {
+            at.elapsed() < LAUNCH_BOUNCE
+                && items
+                    .iter()
+                    .any(|i| i.app.as_deref() == Some(id) && i.windows.is_empty())
+        });
+        let hops: Vec<f32> = self
+            .items
+            .iter()
+            .map(|item| {
+                self.launching
+                    .iter()
+                    .find(|(id, _)| item.app.as_deref() == Some(id))
+                    .map_or(0.0, |(_, at)| {
+                        let t = at.elapsed().as_secs_f32() / HOP;
+                        (t * std::f32::consts::PI).sin().abs() * HOP_HEIGHT
+                    })
+            })
+            .collect();
+        // Away from the screen edge it's on.
+        let away = match self.position {
+            DockPosition::Left => (1.0, 0.0),
+            DockPosition::Right => (-1.0, 0.0),
+            _ => (0.0, -1.0),
+        };
         let (w, h) = (
             (layout.width.ceil() * scale as f32) as i32,
             (layout.height.ceil() * scale as f32) as i32,
@@ -586,6 +624,7 @@ impl Dock {
                     radius: self.radius(),
                     frosted: self.frosted,
                 },
+                (&hops, away),
                 icons,
                 theme,
                 icon,
@@ -603,6 +642,10 @@ impl Dock {
             self.frame_pending = true;
             surface.commit();
         }
+        // Keep hopping: draw again on the next frame.
+        if !self.launching.is_empty() {
+            self.dirty = true;
+        }
     }
 }
 
@@ -615,6 +658,8 @@ fn paint(
     vertical: bool,
     edit: Option<&DockEdit>,
     look: Look,
+    // Per item: how far it's hopping, and which way is away from the edge.
+    (hops, away): (&[f32], (f32, f32)),
     icons: &mut Icons,
     theme: &Theme,
     icon: f32,
@@ -732,6 +777,8 @@ fn paint(
             );
             continue;
         };
+        let hop = hops.get(i).copied().unwrap_or(0.0);
+        let (x, y) = (x + away.0 * hop, y + away.1 * hop);
         if !canvas.app_icon(icons, &item.icon, x, y, icon) {
             canvas.icon(
                 icons,
@@ -979,6 +1026,7 @@ mod tests {
                 false,
                 None,
                 Look::plain(),
+                (&[], (0.0, -1.0)),
                 &mut icons,
                 &theme,
                 48.0,

@@ -200,6 +200,7 @@ impl State {
             s.open_anim = Some(Animation::new(0.0, 1.0, presets::WINDOW_OPEN));
         });
         self.space.map_element(window.clone(), location, true);
+        self.launching = None;
         self.capture.window_mapped(&window);
         self.add_window_to_workspace(&window);
         self.focus_window(Some(&window));

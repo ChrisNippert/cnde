@@ -171,6 +171,10 @@ impl State {
                     toplevel.send_close();
                 }
             }
+            Request::Launching => {
+                self.launching = Some(std::time::Instant::now());
+                self.queue_redraw();
+            }
             Request::CancelScreenshot => {
                 if self.screenshot.active {
                     self.cancel_screenshot();

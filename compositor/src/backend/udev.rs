@@ -699,12 +699,33 @@ impl State {
         surface.redraw = RedrawState::Idle;
         let output = surface.output.clone();
 
+        // An app starting: the plain arrow shows it's busy meanwhile.
+        if self
+            .launching
+            .is_some_and(|at| at.elapsed() > crate::state::LAUNCH_FEEDBACK)
+        {
+            self.launching = None;
+        }
+        let busy = self.launching.is_some()
+            && matches!(
+                self.cursor_status,
+                smithay::input::pointer::CursorImageStatus::Named(
+                    smithay::input::pointer::CursorIcon::Default
+                )
+            );
+        let mut busy_status = smithay::input::pointer::CursorImageStatus::Named(
+            smithay::input::pointer::CursorIcon::Progress,
+        );
         let mut elements = Vec::new();
         if let (Some(pointer), Some(output_geo)) = (pointer, self.space.output_geometry(&output)) {
             elements.extend(render::cursor_elements(
                 &mut gpu.renderer,
                 &mut udev.cursors,
-                &mut self.cursor_status,
+                if busy {
+                    &mut busy_status
+                } else {
+                    &mut self.cursor_status
+                },
                 pointer,
                 output_geo,
                 Scale::from(output.current_scale().fractional_scale()),
@@ -821,7 +842,8 @@ impl State {
             self.workspaces.is_moving()
                 || self.overview.is_animating(now)
                 || self.popup_anims.is_animating(now)
-                || self.crossfade.is_animating(),
+                || self.crossfade.is_animating()
+                || self.launching.is_some(),
             now,
         ) {
             self.queue_redraw();

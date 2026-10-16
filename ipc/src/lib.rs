@@ -113,6 +113,9 @@ pub enum Request {
     CloseWindow {
         id: u64,
     },
+    /// An app was just started: show a busy pointer until a window opens
+    /// (or a few seconds pass).
+    Launching,
 }
 
 /// The overview while the app grid shows: workspace thumbnails in a row

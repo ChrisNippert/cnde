@@ -560,8 +560,22 @@ impl App {
             let terminal = std::env::var("TERMINAL").unwrap_or_else(|_| "alacritty".into());
             apps::launch(app, &terminal);
             self.launches.record(id);
+            // Something to show it worked: a busy pointer, and the dock
+            // icon bouncing until the window opens.
+            self.ipc.send(&cnde_ipc::Request::Launching);
+            self.dock_launching(id);
         }
         self.close_overview();
+    }
+
+    /// `id` was just launched: its dock icon hops until a window opens.
+    fn dock_launching(&mut self, id: &str) {
+        if let Some(dock) = &mut self.dock {
+            dock.launching.retain(|(other, _)| other != id);
+            dock.launching
+                .push((id.to_string(), std::time::Instant::now()));
+        }
+        self.draw_dock();
     }
 
     fn close_overview(&mut self) {
