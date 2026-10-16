@@ -30,6 +30,13 @@ entries when they're done.
   minimize button (nothing to minimize to). Apps that ask to draw their own
   (GNOME apps' header bars) keep theirs.
 - **Frosted dock** frosts the wallpaper only, not windows behind it.
+- **Wi-Fi settings** were tried against NetworkManager (reading only); iwd
+  and actually joining networks haven't been tried yet. Only WPA-Personal
+  passwords (no enterprise logins). Changing Wi-Fi may need polkit rules
+  when there's no logind session.
+- **Three-finger swipes up and down** and the **launch feedback** haven't
+  been tried on real hardware yet (the busy pointer only shows on a real
+  session, not nested).
 - **Right-click menus and edit mode** haven't been tried with a real mouse
   yet (only rendered nested). Moving the dock by its grip outlines where it'll
   land, but the dock itself jumps there on release rather than sliding. A clock

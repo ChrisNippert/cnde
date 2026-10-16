@@ -14,3 +14,6 @@ smithay-client-toolkit = { version = "0.21", default-features = false, features 
 rustix = { version = "1", features = ["fs"] }
 # Wallpaper thumbnails; the same formats the compositor can show.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+# Wi-Fi through NetworkManager or iwd.
+zbus = "5"
+serde = "1"

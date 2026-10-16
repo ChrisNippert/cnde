@@ -136,6 +136,10 @@ for level in range(0, 101, 10):
     icon("status", f"battery-level-{level}-charging", battery(level, charging=True))
 icon("status", "battery-level-100-charged", battery(100, charging=True))
 
+# A padlock: secured networks.
+icon("status", "changes-prevent",
+     '<rect x="3.5" y="7" width="9" height="7" rx="2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>')
+
 # Quick settings
 icon("status", "display-brightness",
      '<circle cx="8" cy="8" r="2.75"/><path d="M8 1.75v1M8 13.25v1M1.75 8h1M13.25 8h1M3.6 3.6l.7.7M11.7 11.7l.7.7M3.6 12.4l.7-.7M11.7 4.3l.7-.7"/>')

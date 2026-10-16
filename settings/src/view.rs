@@ -94,6 +94,10 @@ pub struct Ui {
     pub rounded: bool,
     /// The slider being dragged (it follows the pointer, unanimated).
     pub dragging: Option<Key>,
+    /// The Wi-Fi worker's last report (once the page has been opened).
+    pub wifi: Option<crate::wifi::State>,
+    /// The network whose password is being asked for.
+    pub wifi_asking: Option<String>,
 }
 
 /// The result of a paint, for hit-testing.
@@ -331,7 +335,15 @@ fn page(
     offset: f32,
 ) {
     let t = p.theme;
-    let groups = pages::build(ui.page, &ui.config, &ui.displays);
+    let groups = pages::build(
+        ui.page,
+        &ui.config,
+        &ui.displays,
+        pages::WifiView {
+            state: ui.wifi.as_ref(),
+            asking: ui.wifi_asking.as_deref(),
+        },
+    );
     let show_advanced = ui.advanced.contains(&ui.page);
     let has_advanced = groups.iter().flat_map(|g| &g.rows).any(|r| r.advanced);
     let col_w = (area.w - 48.0).min(MAX_COLUMN);
@@ -478,7 +490,10 @@ fn paint_row(
         wallpapers(ui, a, p, out, row, rect);
         return;
     }
-    let activatable = matches!(row.control, Control::Switch { .. } | Control::Dropdown(_));
+    let activatable = matches!(
+        row.control,
+        Control::Switch { .. } | Control::Dropdown(_) | Control::Network { .. }
+    );
     let row_hover = if activatable {
         hover(a, ui, Target::Row(index))
     } else {
@@ -599,6 +614,49 @@ fn paint_row(
                     p.entry(r, &text, placeholder, None, false);
                 }
             }
+            out.hits.push((r, Target::Entry(index)));
+            r.x
+        }
+        Control::Network {
+            signal,
+            secured,
+            connected,
+        } => {
+            // Right to left: a check if connected, the lock, the signal.
+            let mut x = right;
+            if *connected {
+                x -= 18.0;
+                p.icon("object-select-symbolic", x + 9.0, cy, 16.0, t.accent);
+                x -= 10.0;
+            }
+            if *secured {
+                x -= 16.0;
+                p.icon("changes-prevent-symbolic", x + 8.0, cy, 14.0, t.window_dim);
+                x -= 8.0;
+            }
+            let bars = match signal {
+                0..=24 => "network-wireless-signal-weak-symbolic",
+                25..=49 => "network-wireless-signal-ok-symbolic",
+                50..=74 => "network-wireless-signal-good-symbolic",
+                _ => "network-wireless-signal-excellent-symbolic",
+            };
+            x -= 18.0;
+            p.icon(bars, x + 9.0, cy, 16.0, t.window_text);
+            x
+        }
+        Control::Password => {
+            let r = Rect::new(
+                right - ENTRY_WIDTH,
+                cy - t.button_height / 2.0,
+                ENTRY_WIDTH,
+                t.button_height,
+            );
+            let (text, cursor) = match &ui.edit {
+                Some(edit) if edit.key == row.key => (edit.text.as_str(), Some(edit.cursor)),
+                _ => ("", None),
+            };
+            let dots: String = "•".repeat(text.chars().count());
+            p.entry(r, &dots, "Password", cursor, false);
             out.hits.push((r, Target::Entry(index)));
             r.x
         }
@@ -846,6 +904,8 @@ mod tests {
             error: None,
             rounded: true,
             dragging: None,
+            wifi: None,
+            wifi_asking: None,
         }
     }
 
@@ -917,6 +977,36 @@ mod tests {
         ui.scroll = 0.0;
         ui.popover = Some(painted.rows[clock].key.clone());
         render(&ui, "panel-light");
+    }
+
+    #[test]
+    fn wifi_page_lists_networks_and_asks_for_passwords() {
+        use crate::wifi::{Backend, Network, State};
+        let mut ui = ui(Page::Wifi);
+        let network = |ssid: &str, signal, secured, known, connected| Network {
+            ssid: ssid.into(),
+            signal,
+            secured,
+            known,
+            connected,
+        };
+        ui.wifi = Some(State {
+            backend: Backend::NetworkManager,
+            has_device: true,
+            enabled: true,
+            networks: vec![
+                network("Home", 82, true, true, true),
+                network("Cafe Guest", 55, false, false, false),
+                network("Neighbour 5G", 30, true, false, false),
+            ],
+            connecting: None,
+            error: None,
+        });
+        ui.wifi_asking = Some("Neighbour 5G".into());
+        let painted = render(&ui, "wifi");
+        let keys: Vec<&Key> = painted.rows.iter().map(|r| &r.key).collect();
+        assert!(keys.contains(&&Key::Wifi(pages::WifiKey::Password("Neighbour 5G".into()))));
+        assert!(keys.contains(&&Key::Wifi(pages::WifiKey::Actions("Home".into()))));
     }
 
     #[test]

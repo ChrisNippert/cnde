@@ -7,6 +7,7 @@
 mod pages;
 mod view;
 mod wallpapers;
+mod wifi;
 
 use std::{
     collections::HashSet,
@@ -59,7 +60,7 @@ use smithay_client_toolkit::{
 use tracing::{info, warn};
 
 use crate::{
-    pages::{Control, Display, Key, Page, Value},
+    pages::{Control, Display, Key, Page, Value, WifiKey},
     view::{Edit, Painted, Res, Target, Ui},
 };
 
@@ -104,6 +105,8 @@ struct App {
     dragging: Option<(Key, cnde_ui::Rect)>,
     last_header_click: Option<Instant>,
     error_timer: Option<RegistrationToken>,
+    /// Commands for the Wi-Fi worker, started when its page first opens.
+    wifi: Option<std::sync::mpsc::Sender<wifi::Command>>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -190,6 +193,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             error: None,
             rounded: true,
             dragging: None,
+            wifi: None,
+            wifi_asking: None,
         },
         res: Res {
             fonts,
@@ -213,15 +218,110 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dragging: None,
         last_header_click: None,
         error_timer: None,
+        wifi: None,
     };
     WaylandSource::new(conn, queue).insert(event_loop.handle())?;
     watch_config(&mut app);
+    if app.ui.page == Page::Wifi {
+        app.open_wifi();
+    }
 
     event_loop.run(None, &mut app, |_| {})?;
     Ok(())
 }
 
 impl App {
+    /// The Wi-Fi page is showing: start the worker (once), or rescan.
+    fn open_wifi(&mut self) {
+        if self.wifi.is_some() {
+            self.wifi_command(wifi::Command::Scan);
+            return;
+        }
+        let (tx, rx) = channel::channel::<wifi::State>();
+        let inserted = self
+            .loop_handle
+            .insert_source(rx, |event, _, app: &mut App| {
+                if let channel::Event::Msg(state) = event {
+                    // Joined: no more password to ask for.
+                    if let Some(ssid) = &app.ui.wifi_asking
+                        && state
+                            .networks
+                            .iter()
+                            .any(|n| &n.ssid == ssid && n.connected)
+                    {
+                        app.ui.wifi_asking = None;
+                    }
+                    app.ui.wifi = Some(state);
+                    app.redraw();
+                }
+            });
+        if inserted.is_ok() {
+            self.wifi = Some(wifi::start(tx));
+        }
+    }
+
+    fn wifi_command(&mut self, command: wifi::Command) {
+        if let Some(tx) = &self.wifi {
+            let _ = tx.send(command);
+        }
+    }
+
+    /// A Wi-Fi row was clicked: join that network, asking for its password
+    /// first if it needs one we don't have.
+    fn wifi_clicked(&mut self, ssid: &str) {
+        let Some(network) = self
+            .ui
+            .wifi
+            .as_ref()
+            .and_then(|w| w.networks.iter().find(|n| n.ssid == ssid))
+            .cloned()
+        else {
+            return;
+        };
+        if network.connected {
+            return;
+        }
+        if network.known || !network.secured {
+            self.ui.wifi_asking = None;
+            self.wifi_command(wifi::Command::Connect {
+                ssid: ssid.to_string(),
+                password: None,
+            });
+            return;
+        }
+        self.ui.wifi_asking = Some(ssid.to_string());
+        self.ui.edit = Some(Edit {
+            key: Key::Wifi(WifiKey::Password(ssid.to_string())),
+            text: String::new(),
+            cursor: 0,
+            int: false,
+        });
+        self.redraw();
+    }
+
+    /// Changes to Wi-Fi rows go to the worker; the rest are config.
+    fn write_wifi(&mut self, key: &WifiKey, value: &Value) {
+        match (key, value) {
+            (WifiKey::Enabled, Value::Bool(on)) => {
+                self.wifi_command(wifi::Command::SetEnabled(*on))
+            }
+            (WifiKey::Password(ssid), Value::Str(password)) if !password.is_empty() => {
+                self.ui.wifi_asking = None;
+                self.wifi_command(wifi::Command::Connect {
+                    ssid: ssid.clone(),
+                    password: Some(password.clone()),
+                });
+            }
+            (WifiKey::Actions(_), Value::Str(action)) if action == "disconnect" => {
+                self.wifi_command(wifi::Command::Disconnect)
+            }
+            (WifiKey::Actions(ssid), Value::Str(action)) if action == "forget" => {
+                self.wifi_command(wifi::Command::Forget(ssid.clone()))
+            }
+            _ => {}
+        }
+    }
+
     fn redraw(&mut self) {
         if !self.configured || self.frame_pending {
             self.dirty = true;
@@ -270,6 +370,18 @@ impl App {
     /// Write `changes` to config.toml together. Nothing is written if the
     /// result isn't a valid config; the error shows instead.
     fn write(&mut self, changes: &[(Key, Value)]) {
+        let mut config_changes = Vec::new();
+        for (key, value) in changes {
+            match key {
+                Key::Wifi(wifi) => self.write_wifi(wifi, value),
+                _ => config_changes.push((key.clone(), value.clone())),
+            }
+        }
+        if config_changes.is_empty() {
+            self.redraw();
+            return;
+        }
+        let changes = &config_changes[..];
         let Some(path) = self.config_path.clone() else {
             self.show_error("No config file: HOME isn't set".into());
             return;
@@ -422,6 +534,9 @@ impl App {
                         .anim
                         .restart(view::AnimKey::Page, 0.0, 1.0, cnde_ui::anim::MEDIUM);
                     self.ui.scroll = 0.0;
+                    if page == Page::Wifi {
+                        self.open_wifi();
+                    }
                 }
             }
             Target::Close => self.exit.stop(),
@@ -457,6 +572,11 @@ impl App {
                     return;
                 };
                 match &row.control {
+                    Control::Network { .. } => {
+                        if let Key::Wifi(WifiKey::Network(ssid)) = &row.key {
+                            self.wifi_clicked(&ssid.clone());
+                        }
+                    }
                     Control::Switch { on, off } => {
                         let value = if row.is_on() { off } else { on };
                         self.write(&[(row.key.clone(), value.clone())]);
@@ -582,6 +702,12 @@ impl App {
         let Some(edit) = self.ui.edit.take() else {
             return;
         };
+        // A password is taken exactly as typed.
+        if let Key::Wifi(key @ WifiKey::Password(_)) = &edit.key {
+            self.write_wifi(&key.clone(), &Value::Str(edit.text.clone()));
+            self.redraw();
+            return;
+        }
         let text = edit.text.trim();
         let value = if edit.int {
             if text.is_empty() {

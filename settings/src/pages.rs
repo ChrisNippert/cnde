@@ -8,6 +8,7 @@ use cnde_config::{Config, ConfigFile};
 pub enum Page {
     Appearance,
     Displays,
+    Wifi,
     Mouse,
     Keyboard,
     Panel,
@@ -16,9 +17,10 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 7] = [
+    pub const ALL: [Page; 8] = [
         Page::Appearance,
         Page::Displays,
+        Page::Wifi,
         Page::Mouse,
         Page::Keyboard,
         Page::Panel,
@@ -30,6 +32,7 @@ impl Page {
         match self {
             Page::Appearance => "Appearance",
             Page::Displays => "Displays",
+            Page::Wifi => "Wi-Fi",
             Page::Mouse => "Mouse & Touchpad",
             Page::Keyboard => "Keyboard",
             Page::Panel => "Top Bar",
@@ -42,6 +45,7 @@ impl Page {
         match self {
             Page::Appearance => "preferences-desktop-appearance-symbolic",
             Page::Displays => "video-display-symbolic",
+            Page::Wifi => "network-wireless-symbolic",
             Page::Mouse => "input-mouse-symbolic",
             Page::Keyboard => "input-keyboard-symbolic",
             Page::Panel => "focus-top-bar-symbolic",
@@ -53,6 +57,9 @@ impl Page {
     /// By name, for `cnde-settings <page>`.
     pub fn from_name(name: &str) -> Option<Page> {
         let name = name.to_ascii_lowercase();
+        if matches!(name.as_str(), "wifi" | "network" | "networks") {
+            return Some(Page::Wifi);
+        }
         Page::ALL.into_iter().find(|p| {
             let title = p.title().to_ascii_lowercase();
             title == name || title.split_whitespace().next() == Some(name.as_str())
@@ -103,6 +110,20 @@ pub enum Key {
     OutputPosition { name: String, axis: char },
     /// Which monitor has `main = true`: a name, or `Unset` for automatic.
     MainDisplay,
+    /// Not in the config: Wi-Fi, done through NetworkManager or iwd.
+    Wifi(WifiKey),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum WifiKey {
+    /// The radio on or off.
+    Enabled,
+    /// A network in the list (clicking it connects).
+    Network(String),
+    /// The password for a network being joined.
+    Password(String),
+    /// Disconnect from or forget a network.
+    Actions(String),
 }
 
 impl Key {
@@ -137,6 +158,9 @@ impl Key {
                 Some(v) => file.set_output(name, field, v),
                 None => file.remove_output(name, field),
             },
+            // Not the config's business: the window sends these to the
+            // Wi-Fi worker instead.
+            Key::Wifi(_) => {}
             Key::OutputPosition { name, axis } => {
                 let old = config.output(name).and_then(|o| o.position);
                 let Some(v) = value.as_f64() else {
@@ -198,6 +222,15 @@ pub enum Control {
     },
     /// The wallpaper picker's grid of pictures.
     Wallpapers,
+    /// A Wi-Fi network: its signal, a lock if it needs a password, a check
+    /// if connected. Clicking the row joins it.
+    Network {
+        signal: u8,
+        secured: bool,
+        connected: bool,
+    },
+    /// A text entry that shows dots.
+    Password,
 }
 
 impl Control {
@@ -287,17 +320,147 @@ pub struct Display {
     pub description: String,
 }
 
-pub fn build(page: Page, c: &Config, displays: &[Display]) -> Vec<Group> {
+/// What the Wi-Fi page shows: the worker's last report, and which network
+/// is asking for its password.
+#[derive(Clone, Copy, Default)]
+pub struct WifiView<'a> {
+    pub state: Option<&'a crate::wifi::State>,
+    pub asking: Option<&'a str>,
+}
+
+pub fn build(page: Page, c: &Config, displays: &[Display], wifi: WifiView<'_>) -> Vec<Group> {
     let d = Config::default();
     match page {
         Page::Appearance => appearance(c, &d),
         Page::Displays => displays_page(c, displays),
+        Page::Wifi => wifi_page(wifi),
         Page::Mouse => mouse(c, &d),
         Page::Keyboard => keyboard(c, &d),
         Page::Panel => panel(c, &d),
         Page::Dock => dock(c, &d),
         Page::Accessibility => accessibility(c, &d),
     }
+}
+
+/// A row that isn't a config key (its value is also its default, so no
+/// reset button).
+fn wifi_row(key: WifiKey, title: &str, control: Control, value: Value) -> Row {
+    Row {
+        key: Key::Wifi(key),
+        title: title.into(),
+        subtitle: String::new(),
+        control,
+        default: value.clone(),
+        value,
+        advanced: false,
+    }
+}
+
+fn wifi_page(view: WifiView<'_>) -> Vec<Group> {
+    use crate::wifi::Backend;
+    let Some(state) = view.state else {
+        return vec![Group {
+            title: "Wi-Fi".into(),
+            description: "Looking for Wi-Fi…".into(),
+            rows: Vec::new(),
+        }];
+    };
+    match state.backend {
+        Backend::Unknown => {
+            return vec![Group {
+                title: "Wi-Fi".into(),
+                description: "Looking for Wi-Fi…".into(),
+                rows: Vec::new(),
+            }];
+        }
+        Backend::None => {
+            return vec![Group {
+                title: "Wi-Fi".into(),
+                description: "Wi-Fi is managed by NetworkManager or iwd, and neither is running."
+                    .into(),
+                rows: Vec::new(),
+            }];
+        }
+        _ => {}
+    }
+    if !state.has_device {
+        return vec![Group {
+            title: "Wi-Fi".into(),
+            description: "No Wi-Fi hardware found.".into(),
+            rows: Vec::new(),
+        }];
+    }
+    let top = Group {
+        title: "Wi-Fi".into(),
+        description: state.error.clone().unwrap_or_default(),
+        rows: vec![wifi_row(
+            WifiKey::Enabled,
+            "Wi-Fi",
+            Control::switch(),
+            Value::Bool(state.enabled),
+        )],
+    };
+    if !state.enabled {
+        return vec![top];
+    }
+    let mut rows = Vec::new();
+    for network in &state.networks {
+        let connecting = state.connecting.as_deref() == Some(network.ssid.as_str());
+        let status = if network.connected {
+            "Connected"
+        } else if connecting {
+            "Connecting…"
+        } else if network.known {
+            "Saved"
+        } else if network.secured {
+            "Needs a password"
+        } else {
+            "Open"
+        };
+        let mut row = wifi_row(
+            WifiKey::Network(network.ssid.clone()),
+            &network.ssid,
+            Control::Network {
+                signal: network.signal,
+                secured: network.secured,
+                connected: network.connected,
+            },
+            Value::Unset,
+        );
+        row.subtitle = status.into();
+        rows.push(row);
+        if view.asking == Some(network.ssid.as_str()) && !network.connected {
+            let mut ask = wifi_row(
+                WifiKey::Password(network.ssid.clone()),
+                "Password",
+                Control::Password,
+                Value::Str(String::new()),
+            );
+            ask.subtitle = "Enter to connect".into();
+            rows.push(ask);
+        }
+        if network.connected {
+            rows.push(wifi_row(
+                WifiKey::Actions(network.ssid.clone()),
+                "",
+                Control::Segmented(choices(&[
+                    ("Disconnect", s("disconnect")),
+                    ("Forget", s("forget")),
+                ])),
+                Value::Unset,
+            ));
+        }
+    }
+    let networks = Group {
+        title: "Networks".into(),
+        description: if rows.is_empty() {
+            "No networks found yet.".into()
+        } else {
+            String::new()
+        },
+        rows,
+    };
+    vec![top, networks]
 }
 
 fn speed(v: f64) -> String {
@@ -1148,7 +1311,7 @@ mod tests {
             description: String::new(),
         }];
         for page in Page::ALL {
-            for group in build(page, &config, &displays) {
+            for group in build(page, &config, &displays, WifiView::default()) {
                 for row in group.rows {
                     let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();
                     let value = match &row.control {

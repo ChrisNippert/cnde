@@ -465,9 +465,11 @@ dependencies = [
  "cnde-ui",
  "image",
  "rustix 1.1.5",
+ "serde",
  "smithay-client-toolkit 0.21.1",
  "tracing",
  "tracing-subscriber",
+ "zbus",
 ]
 
 [[package]]
