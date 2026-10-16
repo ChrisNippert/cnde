@@ -67,6 +67,12 @@ impl CompositorHandler for State {
                     if let Some(resize) = &mut s.resize_anim {
                         resize.on_commit(acked);
                     }
+                    if s.pending_size
+                        .as_ref()
+                        .is_some_and(|p| p.is_resolved(acked))
+                    {
+                        s.pending_size = None;
+                    }
                 });
             }
         }

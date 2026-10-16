@@ -64,6 +64,31 @@ impl ResizeAnim {
     }
 }
 
+/// A size change applied without animation (dragging a fullscreen or
+/// maximized window off): until the client draws at `size`, show its old
+/// contents squeezed into `size` at the window's live position, so a stale
+/// full-screen buffer never spills onto other monitors.
+pub struct PendingSize {
+    size: Size<i32, Logical>,
+    serial: Serial,
+    since: Instant,
+}
+
+impl PendingSize {
+    pub fn new(size: Size<i32, Logical>, serial: Serial) -> Self {
+        Self {
+            size,
+            serial,
+            since: Instant::now(),
+        }
+    }
+
+    /// Whether the client has caught up (acked the configure and drawn).
+    pub fn is_resolved(&self, acked: Option<Serial>) -> bool {
+        acked.is_some_and(|acked| acked.is_no_older_than(&self.serial))
+    }
+}
+
 pub struct ClosingWindow {
     snapshot: Snapshot,
     /// Where the window geometry was drawn when it closed.
@@ -140,6 +165,14 @@ pub fn window_frame(
         }
     }
 
+    if let Some(pending) = &state.pending_size {
+        if now.saturating_duration_since(pending.since) > presets::RESIZE_COMMIT_TIMEOUT {
+            state.pending_size = None;
+        } else if state.resize_anim.is_none() {
+            frame.rect = Rectangle::new(frame.rect.loc, pending.size.to_f64());
+        }
+    }
+
     if let Some(open) = &state.open_anim {
         let progress = open.value_at(now);
         let start = presets::WINDOW_OPEN_START_SCALE;
@@ -154,7 +187,7 @@ pub fn window_frame(
 }
 
 pub fn is_animating(state: &WindowState) -> bool {
-    state.open_anim.is_some() || state.resize_anim.is_some()
+    state.open_anim.is_some() || state.resize_anim.is_some() || state.pending_size.is_some()
 }
 
 fn lerp(a: f64, b: f64, t: f64) -> f64 {

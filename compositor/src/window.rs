@@ -17,7 +17,7 @@ use tracing::debug;
 
 use crate::{
     animation::{Animation, presets},
-    effects::{self, ClosingWindow, ResizeAnim},
+    effects::{self, ClosingWindow, PendingSize, ResizeAnim},
     snapshot::{LastFrame, Snapshot},
     state::State,
 };
@@ -39,6 +39,7 @@ pub struct WindowState {
     pub restore: Option<Rectangle<i32, Logical>>,
     pub open_anim: Option<Animation>,
     pub resize_anim: Option<ResizeAnim>,
+    pub pending_size: Option<PendingSize>,
     /// What we last drew, for close animations of killed clients.
     pub last_frame: Option<LastFrame>,
     /// Geometry size at the last commit, to notice client-driven resizes.
@@ -342,6 +343,10 @@ impl State {
         if let Some((from, snapshot)) = animation_start {
             with_state(window, |s| {
                 s.resize_anim = Some(ResizeAnim::new(from, snapshot, serial));
+            });
+        } else if let (Some(rect), Some(serial), Some(_)) = (rect, serial, mapped_location) {
+            with_state(window, |s| {
+                s.pending_size = Some(PendingSize::new(rect.size, serial))
             });
         }
         self.queue_redraw();
