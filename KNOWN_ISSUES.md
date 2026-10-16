@@ -15,6 +15,11 @@ entries when they're done.
 
 ## Rough edges
 
+- **Maximized windows crossing monitors of different resolution** visibly
+  change as the app redraws at the new size when a workspace slide settles.
+  The squeeze (`PendingSize`) keeps it from overflowing, but a crossfade from
+  a snapshot (like the maximize animation's) would hide the redraw entirely.
+
 - **Monitor names:** make and model are "Unknown"; `smithay-drm-extras`'s EDID
   feature needs an older libdisplay-info than Arch ships.
 - **Multi-GPU laptops** (render on one GPU, display on another) aren't supported;
