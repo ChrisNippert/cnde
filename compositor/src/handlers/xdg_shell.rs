@@ -52,6 +52,10 @@ impl XdgShellHandler for State {
         }
     }
 
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        self.popup_closed(surface.wl_surface());
+    }
+
     fn reposition_request(
         &mut self,
         surface: PopupSurface,

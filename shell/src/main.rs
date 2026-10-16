@@ -59,7 +59,7 @@ use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::Ext
 use crate::{
     actions::Actions,
     launcher::{KeyOutcome, Launcher},
-    panel::Panel,
+    panel::{Button, Panel},
     quick_settings::QuickSettings,
     status::Update,
     workspaces::Workspaces,
@@ -118,6 +118,11 @@ pub struct App {
     ipc: ipc::Ipc,
     /// The overview's search box, while the overview is open.
     launcher: Option<Launcher>,
+    overview_open: bool,
+    /// When quick settings was last dismissed by the compositor (a click
+    /// outside it). A click on the status icons right after is that same
+    /// click, meant to close it, not to reopen it.
+    quick_settings_dismissed: Option<std::time::Instant>,
     apps: Vec<apps::App>,
     app_dirs: Vec<PathBuf>,
     /// When `app_dirs` last changed, as of the last scan.
@@ -194,6 +199,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop_handle: event_loop.handle(),
         ipc: ipc::Ipc::connect(ipc_tx),
         launcher: None,
+        overview_open: false,
+        quick_settings_dismissed: None,
         apps: Vec::new(),
         app_dirs: apps::application_dirs(),
         apps_stamp: Vec::new(),
@@ -251,6 +258,8 @@ impl App {
     fn ipc_event(&mut self, event: cnde_ipc::Event) {
         match event {
             cnde_ipc::Event::OverviewOpened { output } => {
+                self.overview_open = true;
+                self.redraw_panels();
                 self.rescan_apps_if_changed();
                 let found = self.outputs.outputs().find_map(|o| {
                     let info = self.outputs.info(&o)?;
@@ -273,7 +282,11 @@ impl App {
                     scale,
                 ));
             }
-            cnde_ipc::Event::OverviewClosed => self.launcher = None,
+            cnde_ipc::Event::OverviewClosed => {
+                self.overview_open = false;
+                self.launcher = None;
+                self.redraw_panels();
+            }
         }
     }
 
@@ -383,10 +396,14 @@ impl App {
     }
 
     pub fn redraw_all(&mut self) {
+        self.redraw_panels();
+        self.draw_quick_settings();
+    }
+
+    fn redraw_panels(&mut self) {
         for i in 0..self.panels.len() {
             self.draw_panel(i);
         }
-        self.draw_quick_settings();
     }
 
     fn draw_quick_settings(&mut self) {
@@ -405,7 +422,12 @@ impl App {
 
     /// Clicking the status area opens quick settings, or closes it.
     fn toggle_quick_settings(&mut self, panel_index: usize, serial: u32) {
-        if self.quick_settings.take().is_some() {
+        let just_dismissed = self
+            .quick_settings_dismissed
+            .take()
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(300));
+        if self.quick_settings.take().is_some() || just_dismissed {
+            self.redraw_panels();
             return;
         }
         let (Some(panel), Some(seat)) = (self.panels.get(panel_index), &self.seat_handle) else {
@@ -426,6 +448,7 @@ impl App {
             panel.scale(),
         )
         .map(|qs| (qs, anchor));
+        self.redraw_panels();
     }
 
     fn quick_settings_pointer(&mut self, event: &PointerEvent) {
@@ -457,6 +480,7 @@ impl App {
         };
         if close {
             self.quick_settings = None;
+            self.redraw_panels();
         } else {
             self.draw_quick_settings();
         }
@@ -476,6 +500,8 @@ impl App {
                 clock_format: &self.config.panel.clock_format,
                 workspaces: &self.workspaces.list,
                 status: &self.status,
+                overview_open: self.overview_open,
+                quick_settings_open: self.quick_settings.is_some(),
             },
         );
     }
@@ -684,14 +710,6 @@ impl PointerHandler for App {
                 self.quick_settings_pointer(event);
                 continue;
             }
-            let PointerEventKind::Press {
-                button: BTN_LEFT,
-                serial,
-                ..
-            } = event.kind
-            else {
-                continue;
-            };
             let Some(index) = self
                 .panels
                 .iter()
@@ -699,11 +717,30 @@ impl PointerHandler for App {
             else {
                 continue;
             };
-            let panel = &self.panels[index];
-            if panel.status_at(event.position) {
-                self.toggle_quick_settings(index, serial);
-            } else if let Some(handle) = panel.workspace_at(event.position) {
-                self.workspaces.activate(&handle);
+            match event.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    let hover = self.panels[index].button_at(event.position);
+                    if self.panels[index].set_hover(hover) {
+                        self.draw_panel(index);
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    if self.panels[index].set_hover(None) {
+                        self.draw_panel(index);
+                    }
+                }
+                PointerEventKind::Press {
+                    button: BTN_LEFT,
+                    serial,
+                    ..
+                } => match self.panels[index].button_at(event.position) {
+                    Some(Button::Status) => self.toggle_quick_settings(index, serial),
+                    Some(Button::Activities) => {
+                        self.ipc.send(&cnde_ipc::Request::ToggleOverview);
+                    }
+                    None => {}
+                },
+                _ => {}
             }
         }
     }
@@ -733,6 +770,8 @@ impl PopupHandler for App {
             .is_some_and(|(qs, _)| &qs.popup == popup)
         {
             self.quick_settings = None;
+            self.quick_settings_dismissed = Some(std::time::Instant::now());
+            self.redraw_panels();
         }
     }
 }
@@ -782,8 +821,8 @@ impl KeyboardHandler for App {
     ) {
         if self.launcher.is_some() {
             self.launcher_key(event);
-        } else if event.keysym == Keysym::Escape {
-            self.quick_settings = None;
+        } else if event.keysym == Keysym::Escape && self.quick_settings.take().is_some() {
+            self.redraw_panels();
         }
     }
     fn repeat_key(

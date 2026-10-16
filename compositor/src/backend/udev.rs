@@ -706,7 +706,7 @@ impl State {
         let backdrop = match self.space.output_geometry(&output) {
             Some(geo) => crate::overview::backdrop(
                 &mut self.overview,
-                &mut self.wallpapers,
+                &self.wallpapers,
                 &mut gpu.renderer,
                 &output,
                 geo,
@@ -721,6 +721,7 @@ impl State {
             self.snap_preview.as_mut(),
             scene.map(|s| s.windows),
             backdrop,
+            &mut self.popup_anims,
             &output,
             now,
         ));
@@ -763,7 +764,9 @@ impl State {
             &self.space,
             &self.closing,
             self.snap_preview.as_ref(),
-            self.workspaces.is_moving() || self.overview.is_animating(now),
+            self.workspaces.is_moving()
+                || self.overview.is_animating(now)
+                || self.popup_anims.is_animating(now),
             now,
         ) {
             self.queue_redraw();

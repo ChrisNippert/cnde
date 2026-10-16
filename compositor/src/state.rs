@@ -76,6 +76,7 @@ pub struct State {
     pub wallpapers: crate::wallpaper::Wallpapers,
     pub overview: crate::overview::Overview,
     pub ipc: crate::ipc::IpcClients,
+    pub popup_anims: crate::popup_anim::PopupAnims,
     /// Drag-to-edge preview while a window is being moved.
     pub snap_preview: Option<SnapPreview>,
     pub popups: PopupManager,
@@ -161,6 +162,7 @@ impl State {
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
             overview: crate::overview::Overview::new(),
             ipc: Default::default(),
+            popup_anims: Default::default(),
             snap_preview: None,
             popups: PopupManager::default(),
 
@@ -220,6 +222,7 @@ impl State {
         self.popups.cleanup();
         self.finish_workspace_motion(Instant::now());
         self.finish_overview_animation(Instant::now());
+        self.popup_anims.finish(Instant::now());
         if self.pointer_focus_dirty {
             self.pointer_focus_dirty = false;
             // Windows dragged to another monitor join its workspace.

@@ -13,13 +13,13 @@ use smithay::{
             texture::TextureRenderElement,
             utils::RescaleRenderElement,
         },
-        gles::{GlesRenderer, GlesTexture},
+        gles::{GlesRenderer, GlesTexture, element::PixelShaderElement},
     },
     desktop::{Space, Window, layer_map_for_output},
     input::pointer::{CursorImageStatus, CursorImageSurfaceData},
     output::Output,
     reexports::wayland_server::Resource,
-    utils::{Logical, Point, Rectangle, Scale},
+    utils::{Logical, Point, Rectangle, Scale, Size},
     wayland::{compositor::with_states, shell::wlr_layer::Layer},
 };
 use tracing::warn;
@@ -27,31 +27,49 @@ use tracing::warn;
 use crate::{
     cursor::Cursors,
     effects::{self, ClosingWindow},
+    popup_anim::PopupAnims,
     snap::SnapPreview,
     snapshot::{LastFrame, Snapshot},
     window::{Placement, with_state},
 };
 
-/// Scales a rect about the origin, then shifts it: the overview's zoom-out.
+/// Scales a rect about the origin, then shifts it: how the overview moves
+/// windows from where they really are to where it shows them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Zoom {
-    pub scale: f64,
+    pub scale_x: f64,
+    pub scale_y: f64,
     pub offset: Point<f64, Logical>,
 }
 
 impl Zoom {
     pub const IDENTITY: Zoom = Zoom {
-        scale: 1.0,
+        scale_x: 1.0,
+        scale_y: 1.0,
         offset: Point::new(0.0, 0.0),
     };
+
+    /// The zoom that takes `from` exactly onto `to`.
+    pub fn mapping(from: Rectangle<f64, Logical>, to: Rectangle<f64, Logical>) -> Zoom {
+        let scale_x = to.size.w / from.size.w.max(1.0);
+        let scale_y = to.size.h / from.size.h.max(1.0);
+        Zoom {
+            scale_x,
+            scale_y,
+            offset: Point::from((
+                to.loc.x - from.loc.x * scale_x,
+                to.loc.y - from.loc.y * scale_y,
+            )),
+        }
+    }
 
     pub fn apply(self, rect: Rectangle<f64, Logical>) -> Rectangle<f64, Logical> {
         Rectangle::new(
             Point::from((
-                rect.loc.x * self.scale + self.offset.x,
-                rect.loc.y * self.scale + self.offset.y,
+                rect.loc.x * self.scale_x + self.offset.x,
+                rect.loc.y * self.scale_y + self.offset.y,
             )),
-            rect.size.upscale(self.scale),
+            Size::from((rect.size.w * self.scale_x, rect.size.h * self.scale_y)),
         )
     }
 }
@@ -75,6 +93,7 @@ render_elements! {
     Cursor = MemoryRenderBufferRenderElement<GlesRenderer>,
     Surface = WaylandSurfaceRenderElement<GlesRenderer>,
     Wallpaper = TextureRenderElement<GlesTexture>,
+    Shader = PixelShaderElement,
 }
 
 /// The pointer, if it's on this output: a themed image, or the surface a
@@ -153,6 +172,7 @@ pub fn output_elements(
     // Drawn below the windows (the overview's workspace cards and dimming);
     // replaces the bottom and background layers when not empty.
     backdrop: Vec<OutputElement>,
+    popups: &mut PopupAnims,
     output: &Output,
     now: Instant,
 ) -> Vec<OutputElement> {
@@ -216,29 +236,45 @@ pub fn output_elements(
         && windows
             .last()
             .is_some_and(|p| with_state(&p.window, |s| s.placement == Placement::Fullscreen));
-    let mut elements = layer_elements(renderer, output, Layer::Overlay, scale);
+    let mut layer = |renderer: &mut GlesRenderer, which| {
+        layer_elements(renderer, popups, output, output_loc, which, scale, now)
+    };
+    let mut elements = layer(renderer, Layer::Overlay);
     if !fullscreen {
-        elements.extend(layer_elements(renderer, output, Layer::Top, scale));
+        elements.extend(layer(renderer, Layer::Top));
     }
     elements.extend(window_elements);
     if fullscreen {
-        elements.extend(layer_elements(renderer, output, Layer::Top, scale));
+        elements.extend(layer(renderer, Layer::Top));
     }
     if overview {
         elements.extend(backdrop);
     } else {
-        elements.extend(layer_elements(renderer, output, Layer::Bottom, scale));
-        elements.extend(layer_elements(renderer, output, Layer::Background, scale));
+        elements.extend(layer(renderer, Layer::Bottom));
+        elements.extend(layer(renderer, Layer::Background));
     }
-    elements
+    // Popups that just closed, fading out on top of everything.
+    let output_geo = Rectangle::new(
+        output_loc,
+        output.current_mode().map_or_else(Default::default, |mode| {
+            mode.size.to_f64().to_logical(scale.x)
+        }),
+    );
+    let mut closing = popups.closing_elements(output_geo, scale, now);
+    closing.extend(elements);
+    closing
 }
 
-/// Every layer surface of one kind on `output`, top first.
+/// Every layer surface of one kind on `output`, top first, each with its
+/// popups (animated, see `popup_anim`) above it.
 fn layer_elements(
     renderer: &mut GlesRenderer,
+    popups: &mut PopupAnims,
     output: &Output,
+    output_loc: Point<f64, Logical>,
     layer: Layer,
     scale: Scale<f64>,
+    now: Instant,
 ) -> Vec<OutputElement> {
     let map = layer_map_for_output(output);
     let mut elements = Vec::new();
@@ -247,8 +283,23 @@ fn layer_elements(
             continue;
         };
         let location = geometry.loc.to_physical_precise_round(scale);
+        elements.extend(popups.layer_popup_elements(
+            renderer,
+            surface.wl_surface(),
+            location,
+            output_loc,
+            scale,
+            now,
+        ));
         let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-            surface.render_elements(renderer, location, scale, 1.0);
+            render_elements_from_surface_tree(
+                renderer,
+                surface.wl_surface(),
+                location,
+                scale,
+                1.0,
+                Kind::Unspecified,
+            );
         elements.extend(surfaces.into_iter().map(OutputElement::Surface));
     }
     elements

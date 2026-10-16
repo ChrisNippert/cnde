@@ -1,5 +1,6 @@
-//! The top bar: workspace indicator on the left, clock in the centre
-//! (ARCHITECTURE.md §5.3). Status icons and quick settings come next.
+//! The top bar (ARCHITECTURE.md §5.3): the workspace indicator on the left
+//! doubles as the Activities button (opens the overview), the clock is in
+//! the centre, and the status icons on the right open quick settings.
 
 use chrono::Local;
 use cnde_ui::{Canvas, Fonts, Icons, Theme, Weight};
@@ -16,7 +17,6 @@ use smithay_client_toolkit::{
     shm::slot::SlotPool,
 };
 use tracing::warn;
-use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtWorkspaceHandleV1;
 
 use crate::{
     App, Status,
@@ -32,6 +32,15 @@ pub struct Draw<'a> {
     pub clock_format: &'a str,
     pub workspaces: &'a [Workspace],
     pub status: &'a Status,
+    /// What the buttons open is open (they're drawn highlighted).
+    pub overview_open: bool,
+    pub quick_settings_open: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Button {
+    Activities,
+    Status,
 }
 
 pub struct Panel {
@@ -41,10 +50,12 @@ pub struct Panel {
     width: u32,
     height: u32,
     scale: i32,
-    /// Clickable workspace dots from the last draw (logical x range).
-    hit_regions: Vec<(f64, f64, ExtWorkspaceHandleV1)>,
+    /// The Activities button's logical x range, from the last draw.
+    activities_region: Option<(f32, f32)>,
     /// The status icons' logical x range, from the last draw.
     status_region: Option<(f32, f32)>,
+    /// The button under the pointer.
+    hover: Option<Button>,
 }
 
 impl Panel {
@@ -76,8 +87,9 @@ impl Panel {
             width: 0,
             height: theme.panel_height,
             scale: 1,
-            hit_regions: Vec::new(),
+            activities_region: None,
             status_region: None,
+            hover: None,
         }
     }
 
@@ -107,9 +119,22 @@ impl Panel {
         self.scale
     }
 
-    pub fn status_at(&self, (x, _y): (f64, f64)) -> bool {
-        self.status_region
-            .is_some_and(|(start, end)| (start as f64..end as f64).contains(&x))
+    pub fn button_at(&self, (x, _y): (f64, f64)) -> Option<Button> {
+        let inside = |region: Option<(f32, f32)>| {
+            region.is_some_and(|(start, end)| (start as f64..end as f64).contains(&x))
+        };
+        if inside(self.activities_region) {
+            Some(Button::Activities)
+        } else if inside(self.status_region) {
+            Some(Button::Status)
+        } else {
+            None
+        }
+    }
+
+    /// Returns true if the hover changed (and the panel needs a redraw).
+    pub fn set_hover(&mut self, hover: Option<Button>) -> bool {
+        std::mem::replace(&mut self.hover, hover) != hover
     }
 
     /// Where quick settings hangs from: the status area, panel coordinates.
@@ -118,11 +143,26 @@ impl Panel {
         Some((start as i32, 0, (end - start) as i32, self.height as i32))
     }
 
-    pub fn workspace_at(&self, (x, _y): (f64, f64)) -> Option<ExtWorkspaceHandleV1> {
-        self.hit_regions
-            .iter()
-            .find(|(start, end, _)| x >= *start && x < *end)
-            .map(|(_, _, handle)| handle.clone())
+    /// The pill behind a button: brighter while what it opens is open.
+    fn button_background(
+        &self,
+        canvas: &mut Canvas<'_>,
+        theme: &Theme,
+        (start, end): (f32, f32),
+        height: f32,
+        button: Button,
+        open: bool,
+    ) {
+        let color = if open {
+            theme.panel_button_active
+        } else if self.hover == Some(button) {
+            theme.panel_button_hover
+        } else {
+            return;
+        };
+        let inset = theme.panel_button_inset;
+        let h = height - 2.0 * inset;
+        canvas.rounded_rect(start, inset, end - start, h, h / 2.0, color);
     }
 
     pub fn draw(&mut self, pool: &mut SlotPool, format: wl_shm::Format, ctx: Draw<'_>) {
@@ -133,6 +173,8 @@ impl Panel {
             clock_format,
             workspaces,
             status,
+            overview_open,
+            quick_settings_open,
         } = ctx;
         if self.width == 0 {
             return; // not configured yet
@@ -152,10 +194,33 @@ impl Panel {
         let (width, height) = canvas.size();
         canvas.clear(theme.panel_background);
 
-        // Workspaces: GNOME-style dots, the active ones stretched into pills.
-        self.hit_regions.clear();
+        // Activities: GNOME-style workspace dots, the active ones stretched
+        // into pills. The whole cluster is one button.
         let dot = theme.workspace_dot_size;
-        let mut x = theme.padding;
+        let dots_width: f32 = workspaces
+            .iter()
+            .map(|ws| {
+                if ws.active {
+                    theme.workspace_active_width
+                } else {
+                    dot
+                }
+            })
+            .sum::<f32>()
+            + theme.workspace_spacing * workspaces.len().saturating_sub(1) as f32;
+        let pad = theme.panel_button_padding;
+        let start = theme.padding - pad / 2.0;
+        let activities = (start, start + pad + dots_width.max(dot) + pad);
+        self.activities_region = Some(activities);
+        self.button_background(
+            &mut canvas,
+            theme,
+            activities,
+            height,
+            Button::Activities,
+            overview_open,
+        );
+        let mut x = start + pad;
         for ws in workspaces {
             let (dot_w, color) = if ws.active {
                 (theme.workspace_active_width, theme.workspace_active)
@@ -163,13 +228,6 @@ impl Panel {
                 (dot, theme.workspace_dot)
             };
             canvas.rounded_rect(x, (height - dot) / 2.0, dot_w, dot, dot / 2.0, color);
-            // Generous click targets: the dot plus half the gap either side.
-            let half_gap = theme.workspace_spacing as f64 / 2.0;
-            self.hit_regions.push((
-                x as f64 - half_gap,
-                (x + dot_w) as f64 + half_gap,
-                ws.handle.clone(),
-            ));
             x += dot_w + theme.workspace_spacing;
         }
 
@@ -180,55 +238,56 @@ impl Panel {
         let clock_y = ((height - clock.height) / 2.0).round();
         canvas.text(fonts, &mut clock, clock_x, clock_y, theme.panel_foreground);
 
-        // Status, right-aligned: network, volume, battery (+ percentage).
+        // Status, right-aligned: network, volume, battery (+ percentage),
+        // one button. Measured first so its hover pill goes underneath.
         let icon = theme.status_icon_size;
         let icon_y = ((height - icon) / 2.0).round();
-        let mut right = width - theme.padding;
+        let fg = theme.panel_foreground;
+        let mut items: Vec<String> = Vec::new();
+        if let Some(name) = network_icon(&status.network) {
+            items.push(name.into());
+        }
+        if let Some(volume) = status.volume {
+            items.push(volume_icon(volume).into());
+        }
         if let Some(battery) = status.battery {
-            let mut text = fonts.layout(
+            items.push(battery_icon(battery));
+        }
+        let mut percent = status.battery.map(|battery| {
+            fonts.layout(
                 &format!("{:.0}%", battery.percent),
                 theme.font_size,
                 Weight::Normal,
                 scale as f32,
-            );
-            right -= text.width;
+            )
+        });
+        let icons_width =
+            items.len() as f32 * icon + theme.status_spacing * items.len().saturating_sub(1) as f32;
+        let text_width = percent
+            .as_ref()
+            .map_or(0.0, |t| theme.status_icon_text_gap + t.width);
+        let content = (icons_width + text_width).max(icon);
+        let end = width - theme.padding + pad / 2.0;
+        let region = (end - pad - content - pad, end);
+        self.status_region = Some(region);
+        self.button_background(
+            &mut canvas,
+            theme,
+            region,
+            height,
+            Button::Status,
+            quick_settings_open,
+        );
+        let mut x = region.0 + pad;
+        for name in &items {
+            canvas.icon(icons, name, x, icon_y, icon, fg);
+            x += icon + theme.status_spacing;
+        }
+        if let Some(text) = &mut percent {
+            let x = x - theme.status_spacing + theme.status_icon_text_gap;
             let text_y = ((height - text.height) / 2.0).round();
-            canvas.text(
-                fonts,
-                &mut text,
-                right.round(),
-                text_y,
-                theme.panel_foreground,
-            );
-            right -= icon + theme.status_icon_text_gap;
-            canvas.icon(
-                icons,
-                &battery_icon(battery),
-                right,
-                icon_y,
-                icon,
-                theme.panel_foreground,
-            );
-            right -= theme.status_spacing;
+            canvas.text(fonts, text, x.round(), text_y, fg);
         }
-        if let Some(volume) = status.volume {
-            right -= icon;
-            canvas.icon(
-                icons,
-                volume_icon(volume),
-                right,
-                icon_y,
-                icon,
-                theme.panel_foreground,
-            );
-            right -= theme.status_spacing;
-        }
-        if let Some(name) = network_icon(&status.network) {
-            right -= icon;
-            canvas.icon(icons, name, right, icon_y, icon, theme.panel_foreground);
-        }
-        // The whole status cluster (plus a little slack) opens quick settings.
-        self.status_region = Some((right - theme.status_spacing, width));
 
         // Debug aid: CNDE_SHELL_DUMP=path writes each frame's raw RGBA
         // pixels (with a "WxH\n" header) for inspecting the look offline.

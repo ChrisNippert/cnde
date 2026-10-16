@@ -47,6 +47,16 @@ pub const OVERVIEW: Params = Params {
     curve: Curve::EaseOutCubic,
 };
 
+/// Popups of the panel (quick settings, bar menus) appearing and leaving.
+pub const POPUP_OPEN: Params = Params {
+    duration: Duration::from_millis(200),
+    curve: Curve::EaseOutCubic,
+};
+pub const POPUP_CLOSE: Params = Params {
+    duration: Duration::from_millis(150),
+    curve: Curve::EaseOutCubic,
+};
+
 /// Drag-to-edge snap preview growing out of the dragged window.
 pub const SNAP_PREVIEW: Params = Params {
     duration: Duration::from_millis(150),

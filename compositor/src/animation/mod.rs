@@ -55,6 +55,13 @@ pub struct Params {
     pub curve: Curve,
 }
 
+impl Params {
+    /// The duration after the global speed setting.
+    pub fn scaled_duration(&self) -> Duration {
+        self.duration.mul_f64(speed())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Animation {
     start: Instant,
@@ -82,6 +89,17 @@ impl Animation {
         let t =
             now.saturating_duration_since(self.start).as_secs_f64() / self.duration.as_secs_f64();
         self.from + (self.to - self.from) * self.curve.apply(t)
+    }
+
+    /// Eased 0..1 progress of an animation with `params` that started at
+    /// `start`, for animations whose start is stored elsewhere.
+    pub fn progress_since(start: Instant, params: Params, now: Instant) -> f64 {
+        let duration = params.scaled_duration().as_secs_f64();
+        if duration <= 0.0 {
+            return 1.0;
+        }
+        let t = now.saturating_duration_since(start).as_secs_f64() / duration;
+        params.curve.apply(t)
     }
 
     pub fn is_done(&self, now: Instant) -> bool {

@@ -25,7 +25,7 @@ use smithay::{
     },
     output::Output,
     reexports::calloop::{LoopHandle, channel},
-    utils::{Physical, Rectangle, Size, Transform},
+    utils::{Buffer, Logical, Physical, Rectangle, Size, Transform},
 };
 use tracing::{info, warn};
 
@@ -62,16 +62,25 @@ struct Done {
     size: Size<i32, Physical>,
     generation: u64,
     pixels: Vec<u8>,
+    /// The frosted copy, at 1/`BLUR_DOWNSCALE` size.
+    blurred: Vec<u8>,
+    blurred_size: Size<i32, Buffer>,
 }
+
+/// The blurred copy is made this many times smaller; the GPU's filtering
+/// smooths it back up, and it costs 1/16 of the memory.
+const BLUR_DOWNSCALE: u32 = 4;
+/// Gaussian sigma at the reduced size (x4 on screen).
+const BLUR_SIGMA: f32 = 16.0;
 
 struct Entry {
     size: Size<i32, Physical>,
     generation: u64,
     texture: Option<TextureBuffer<GlesTexture>>,
-    /// The same texture, for drawing it at other sizes (overview cards).
-    raw: Option<GlesTexture>,
-    /// Scaled pixels waiting to be uploaded (needs the renderer).
-    upload: Option<Vec<u8>>,
+    blurred: Option<TextureBuffer<GlesTexture>>,
+    blurred_size: Size<i32, Buffer>,
+    /// Pixels waiting to be uploaded (needs the renderer): sharp, blurred.
+    upload: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 pub struct Wallpapers {
@@ -123,7 +132,8 @@ impl Wallpapers {
             size: done.size,
             generation: done.generation,
             texture: None,
-            raw: None,
+            blurred: None,
+            blurred_size: done.blurred_size,
             upload: None,
         });
         // A newer result may already be here (jobs can finish out of order
@@ -131,7 +141,8 @@ impl Wallpapers {
         if done.generation >= entry.generation || entry.texture.is_none() {
             entry.size = done.size;
             entry.generation = done.generation;
-            entry.upload = Some(done.pixels);
+            entry.blurred_size = done.blurred_size;
+            entry.upload = Some((done.pixels, done.blurred));
         }
     }
 
@@ -162,36 +173,42 @@ impl Wallpapers {
         }
 
         let entry = self.entries.get_mut(&name)?;
-        if let Some(pixels) = entry.upload.take() {
-            let buffer_size = (entry.size.w, entry.size.h);
-            match renderer.import_memory(&pixels, Fourcc::Abgr8888, buffer_size.into(), false) {
-                Ok(texture) => {
-                    entry.texture = Some(TextureBuffer::from_texture(
-                        renderer,
-                        texture.clone(),
-                        1,
-                        Transform::Normal,
-                        Some(vec![Rectangle::from_size(buffer_size.into())]),
-                    ));
-                    entry.raw = Some(texture);
-                }
-                Err(err) => warn!(?err, output = %name, "can't upload wallpaper"),
-            }
+        if let Some((pixels, blurred)) = entry.upload.take() {
+            let size = Size::<i32, Buffer>::from((entry.size.w, entry.size.h));
+            entry.texture = upload(renderer, &pixels, size, &name);
+            entry.blurred = upload(renderer, &blurred, entry.blurred_size, &name);
         }
         let texture = entry.texture.as_ref()?;
-        Some(TextureRenderElement::from_texture_buffer(
-            (0.0, 0.0),
+        Some(full_screen(
             texture,
+            entry.size.w,
+            entry.size.h,
+            logical,
             None,
-            None,
-            Some(logical),
-            Kind::Unspecified,
         ))
     }
 
-    /// The wallpaper texture for `output`, if it's loaded.
-    pub fn texture(&self, output: &Output) -> Option<GlesTexture> {
-        self.entries.get(&output.name())?.raw.clone()
+    /// The frosted (blurred) wallpaper for `output`, faded to `alpha`.
+    /// Call after [`element`](Self::element), which does the loading.
+    pub fn blurred_element(
+        &self,
+        output: &Output,
+        alpha: f32,
+    ) -> Option<TextureRenderElement<GlesTexture>> {
+        let entry = self.entries.get(&output.name())?;
+        let texture = entry.blurred.as_ref()?;
+        let mode = output.current_mode()?;
+        let size = output.current_transform().transform_size(mode.size);
+        let scale = output.current_scale().fractional_scale();
+        let logical = size.to_f64().to_logical(scale).to_i32_round();
+        let blurred = entry.blurred_size;
+        Some(full_screen(
+            texture,
+            blurred.w,
+            blurred.h,
+            logical,
+            Some(alpha),
+        ))
     }
 
     /// A monitor is gone: free its texture.
@@ -199,6 +216,48 @@ impl Wallpapers {
         self.entries.remove(output);
         self.requested.remove(output);
     }
+}
+
+fn upload(
+    renderer: &mut GlesRenderer,
+    pixels: &[u8],
+    size: Size<i32, Buffer>,
+    output: &str,
+) -> Option<TextureBuffer<GlesTexture>> {
+    match renderer.import_memory(pixels, Fourcc::Abgr8888, size, false) {
+        Ok(texture) => Some(TextureBuffer::from_texture(
+            renderer,
+            texture,
+            1,
+            Transform::Normal,
+            Some(vec![Rectangle::from_size(size)]),
+        )),
+        Err(err) => {
+            warn!(?err, output, "can't upload wallpaper");
+            None
+        }
+    }
+}
+
+/// `texture` (`w` x `h` pixels) stretched over the whole output.
+fn full_screen(
+    texture: &TextureBuffer<GlesTexture>,
+    w: i32,
+    h: i32,
+    logical: Size<i32, Logical>,
+    alpha: Option<f32>,
+) -> TextureRenderElement<GlesTexture> {
+    // Without an explicit source, a size override *crops* the texture to
+    // that many logical pixels instead of scaling it.
+    let src = Rectangle::from_size(Size::<f64, Logical>::from((w as f64, h as f64)));
+    TextureRenderElement::from_texture_buffer(
+        (0.0, 0.0),
+        texture,
+        alpha,
+        Some(src),
+        Some(logical),
+        Kind::Unspecified,
+    )
 }
 
 fn worker(jobs: mpsc::Receiver<Job>, done: channel::Sender<Done>) {
@@ -222,17 +281,36 @@ fn worker(jobs: mpsc::Receiver<Job>, done: channel::Sender<Done>) {
                 Some(image) => scale_to(image, w, h, job.source.fit),
                 None => gradient(w, h, job.source.scheme),
             };
+            let blurred = frost(&pixels);
+            let blurred_size = Size::from((blurred.width() as i32, blurred.height() as i32));
             let sent = done.send(Done {
                 output: job.output,
                 size: job.size,
                 generation: job.generation,
                 pixels: pixels.into_raw(),
+                blurred: blurred.into_raw(),
+                blurred_size,
             });
             if sent.is_err() {
                 return;
             }
         }
     }
+}
+
+/// The frosted-glass copy: shrunk, then blurred hard.
+fn frost(image: &RgbaImage) -> RgbaImage {
+    let (w, h) = image.dimensions();
+    let small = image::imageops::resize(
+        image,
+        (w / BLUR_DOWNSCALE).max(1),
+        (h / BLUR_DOWNSCALE).max(1),
+        FilterType::Triangle,
+    );
+    // fast_blur is a stack of box blurs; a second, gentler pass removes the
+    // faint blockiness one pass leaves.
+    let once = image::imageops::fast_blur(&small, BLUR_SIGMA);
+    image::imageops::fast_blur(&once, BLUR_SIGMA / 2.0)
 }
 
 fn load(path: &PathBuf) -> Option<RgbaImage> {
@@ -367,5 +445,6 @@ fn wallpaper_preview() {
         let filled = scale_to(&image, 2560, 1440, WallpaperFit::Fill);
         eprintln!("scaled in {:?}", started.elapsed());
         filled.save(dir.join("image.png")).unwrap();
+        frost(&filled).save(dir.join("frosted.png")).unwrap();
     }
 }

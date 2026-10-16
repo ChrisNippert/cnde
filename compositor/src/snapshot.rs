@@ -104,6 +104,21 @@ impl Snapshot {
         Self::render(renderer, &elements, frame.scale, frame.geometry, frame.bbox)
     }
 
+    /// From surface elements already drawn with the bounding box's top-left
+    /// at the origin (`geometry` and `bbox` relative to the surface).
+    pub fn from_elements(
+        renderer: &mut GlesRenderer,
+        elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
+        scale: Scale<f64>,
+        geometry: Rectangle<i32, Logical>,
+        bbox: Rectangle<i32, Logical>,
+    ) -> Option<Self> {
+        if bbox.is_empty() || geometry.is_empty() {
+            return None;
+        }
+        Self::render(renderer, &elements, scale, geometry, bbox)
+    }
+
     fn render<E: RenderElement<GlesRenderer>>(
         renderer: &mut GlesRenderer,
         elements: &[E],

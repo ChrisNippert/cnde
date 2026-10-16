@@ -1,0 +1,203 @@
+//! Open and close animations for popups of layer surfaces: the shell's
+//! quick settings, bar menus (ARCHITECTURE.md §4.3: clients never animate
+//! themselves). A popup fades in while growing slightly from its top edge,
+//! and fades out the reverse way from a snapshot of its last frame, since
+//! its buffers are gone by the time we learn it closed.
+
+use std::{collections::HashMap, time::Instant};
+
+use smithay::{
+    backend::renderer::{
+        element::{
+            Kind,
+            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
+            utils::RescaleRenderElement,
+        },
+        gles::GlesRenderer,
+    },
+    desktop::{PopupKind, PopupManager, utils::bbox_from_surface_tree},
+    reexports::wayland_server::{Resource, backend::ObjectId, protocol::wl_surface::WlSurface},
+    utils::{Logical, Point, Rectangle, Scale},
+    wayland::compositor::with_states,
+};
+
+use crate::{
+    animation::{Animation, presets},
+    render::OutputElement,
+    snapshot::Snapshot,
+    state::State,
+};
+
+/// Popups start this much smaller and grow to full size.
+const START_SCALE: f64 = 0.94;
+
+/// When a popup was first drawn; kept on the surface itself.
+struct Opened(Instant);
+
+/// A popup's last drawn frame, for its close animation.
+struct LastPopup {
+    /// Drawn with the bounding box's top-left at the origin.
+    elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
+    scale: Scale<f64>,
+    geometry: Rectangle<i32, Logical>,
+    bbox: Rectangle<i32, Logical>,
+    /// Where its geometry was on screen (global).
+    rect: Rectangle<f64, Logical>,
+}
+
+struct ClosingPopup {
+    snapshot: Snapshot,
+    rect: Rectangle<f64, Logical>,
+    anim: Animation,
+}
+
+#[derive(Default)]
+pub struct PopupAnims {
+    last: HashMap<ObjectId, LastPopup>,
+    closing: Vec<ClosingPopup>,
+    /// The latest time any popup drawn so far is still opening.
+    opening_until: Option<Instant>,
+}
+
+impl PopupAnims {
+    pub fn is_animating(&self, now: Instant) -> bool {
+        self.opening_until.is_some_and(|until| until > now) || !self.closing.is_empty()
+    }
+
+    pub fn finish(&mut self, now: Instant) {
+        self.closing.retain(|c| !c.anim.is_done(now));
+    }
+
+    /// Elements for a layer surface's popups, top first, animating any that
+    /// just opened. `location` is the layer surface's origin (output-local,
+    /// physical); `output_loc` its output's position.
+    pub fn layer_popup_elements(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        parent: &WlSurface,
+        location: Point<i32, smithay::utils::Physical>,
+        output_loc: Point<f64, Logical>,
+        scale: Scale<f64>,
+        now: Instant,
+    ) -> Vec<OutputElement> {
+        let mut elements = Vec::new();
+        for (popup, offset) in PopupManager::popups_for_surface(parent) {
+            let PopupKind::Xdg(xdg) = &popup else {
+                continue;
+            };
+            let surface = xdg.wl_surface();
+            let geometry = popup.geometry();
+            let opened = with_states(surface, |states| {
+                states.data_map.insert_if_missing(|| Opened(now));
+                states.data_map.get::<Opened>().map_or(now, |o| o.0)
+            });
+            let progress = Animation::progress_since(opened, presets::POPUP_OPEN, now);
+            if progress < 1.0 {
+                let until = opened + presets::POPUP_OPEN.scaled_duration();
+                self.opening_until = Some(self.opening_until.map_or(until, |u| u.max(until)));
+            }
+            let alpha = progress as f32;
+            let grow = START_SCALE + (1.0 - START_SCALE) * progress;
+
+            let surface_loc = location + (offset - geometry.loc).to_physical_precise_round(scale);
+            // Grow from the middle of the top edge, where it hangs from.
+            let geometry_loc = location + offset.to_physical_precise_round(scale);
+            let origin = geometry_loc
+                + Point::from(((geometry.size.w as f64 * scale.x / 2.0).round() as i32, 0));
+            let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                render_elements_from_surface_tree(
+                    renderer,
+                    surface,
+                    surface_loc,
+                    scale,
+                    alpha,
+                    Kind::Unspecified,
+                );
+            elements.extend(surfaces.into_iter().map(|element| {
+                OutputElement::Window(RescaleRenderElement::from_element(
+                    element,
+                    origin,
+                    Scale::from(grow),
+                ))
+            }));
+
+            // Remember this frame in case the popup closes before the next.
+            let bbox = bbox_from_surface_tree(surface, (0, 0));
+            let last = render_elements_from_surface_tree(
+                renderer,
+                surface,
+                (Point::default() - bbox.loc).to_physical_precise_round(scale),
+                scale,
+                1.0,
+                Kind::Unspecified,
+            );
+            let logical_loc = geometry_loc.to_f64().to_logical(scale) + output_loc;
+            self.last.insert(
+                surface.id(),
+                LastPopup {
+                    elements: last,
+                    scale,
+                    geometry,
+                    bbox,
+                    rect: Rectangle::new(logical_loc, geometry.size.to_f64()),
+                },
+            );
+        }
+        elements
+    }
+
+    /// Closing popups on an output at `output_loc`, top first.
+    pub fn closing_elements(
+        &self,
+        output_geo: Rectangle<f64, Logical>,
+        scale: Scale<f64>,
+        now: Instant,
+    ) -> Vec<OutputElement> {
+        self.closing
+            .iter()
+            .filter(|c| c.rect.overlaps(output_geo))
+            .map(|closing| {
+                let progress = closing.anim.value_at(now);
+                let rect = Rectangle::new(closing.rect.loc - output_geo.loc, closing.rect.size);
+                let (element, origin, _) =
+                    closing
+                        .snapshot
+                        .render_element(rect, scale, (1.0 - progress) as f32);
+                let top_middle =
+                    origin + Point::from(((rect.size.w * scale.x / 2.0).round() as i32, 0));
+                let shrink = 1.0 - (1.0 - START_SCALE) * progress;
+                OutputElement::Snapshot(RescaleRenderElement::from_element(
+                    element,
+                    top_middle,
+                    Scale::from(shrink),
+                ))
+            })
+            .collect()
+    }
+}
+
+impl State {
+    /// A popup closed: animate it out if we drew it.
+    pub fn popup_closed(&mut self, surface: &WlSurface) {
+        let Some(last) = self.popup_anims.last.remove(&surface.id()) else {
+            return;
+        };
+        let Some(renderer) = self.backend.renderer() else {
+            return;
+        };
+        if let Some(snapshot) = Snapshot::from_elements(
+            renderer,
+            last.elements,
+            last.scale,
+            last.geometry,
+            last.bbox,
+        ) {
+            self.popup_anims.closing.push(ClosingPopup {
+                snapshot,
+                rect: last.rect,
+                anim: Animation::new(0.0, 1.0, presets::POPUP_CLOSE),
+            });
+            self.queue_redraw();
+        }
+    }
+}

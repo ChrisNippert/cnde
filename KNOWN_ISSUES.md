@@ -20,9 +20,10 @@ entries when they're done.
   The squeeze (`PendingSize`) keeps it from overflowing, but a crossfade from
   a snapshot (like the maximize animation's) would hide the redraw entirely.
 
-- **Overview polish:** workspace cards have square corners (rounded needs a
-  custom shader); windows closing while it's open animate at their unzoomed
-  spot; the search box is only on the main monitor; no app grid button yet.
+- **Overview polish:** windows closing while it's open animate at their
+  unzoomed spot; windows on hidden workspaces don't update live; the search
+  box is only on the main monitor; no app grid button yet; no hover
+  highlight on windows.
 - **Wallpaper changes** swap instantly instead of crossfading.
 
 - **Monitor names:** make and model are "Unknown"; `smithay-drm-extras`'s EDID

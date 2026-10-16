@@ -45,6 +45,15 @@ pub struct Theme {
     pub workspace_active_width: f32,
     pub workspace_spacing: f32,
 
+    // Panel buttons (Activities, status): a pill behind them on hover, and
+    // a brighter one while what they open is open.
+    pub panel_button_hover: Color,
+    pub panel_button_active: Color,
+    /// Gap between the pill and the panel's top and bottom edges.
+    pub panel_button_inset: f32,
+    /// Extra width either side of the button's content.
+    pub panel_button_padding: f32,
+
     // Status icons (right side of the panel)
     pub status_icon_size: f32,
     pub status_spacing: f32,
@@ -132,6 +141,11 @@ impl Theme {
             search_icon_size: 36.0,
             search_selected: Color::rgba(0xff, 0xff, 0xff, 0.12),
             search_max_results: 7,
+
+            panel_button_hover: Color::rgba(0xff, 0xff, 0xff, 0.12),
+            panel_button_active: Color::rgba(0xff, 0xff, 0xff, 0.22),
+            panel_button_inset: 4.0,
+            panel_button_padding: 10.0,
 
             status_icon_size: 16.0,
             status_spacing: 12.0,
