@@ -39,6 +39,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     init_logging();
 
+    // Wayland's socket lives here. Without elogind/logind setting it (e.g.
+    // Alpine with seatd), it has to come from the login shell.
+    if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+        return Err(
+            "XDG_RUNTIME_DIR is not set. Without elogind, set it in your shell \
+                    profile, e.g. export XDG_RUNTIME_DIR=/tmp/$(id -u)-runtime-dir \
+                    and create it with mode 0700"
+                .into(),
+        );
+    }
+
     let mut event_loop: EventLoop<State> = EventLoop::try_new()?;
     let display: Display<State> = Display::new()?;
     let (config, config_path) = config::load_initial();
