@@ -41,6 +41,12 @@ pub const WORKSPACE_SWITCH: Params = Params {
 /// settles: a quick flick goes to the next workspace even if short.
 pub const SWIPE_FLICK_SECONDS: f64 = 0.15;
 
+/// Opening and closing the overview.
+pub const OVERVIEW: Params = Params {
+    duration: Duration::from_millis(300),
+    curve: Curve::EaseOutCubic,
+};
+
 /// Drag-to-edge snap preview growing out of the dragged window.
 pub const SNAP_PREVIEW: Params = Params {
     duration: Duration::from_millis(150),

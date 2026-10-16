@@ -12,6 +12,7 @@ mod handlers;
 mod input;
 mod keybinds;
 mod layers;
+mod overview;
 mod render;
 mod snap;
 mod snapshot;

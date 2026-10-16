@@ -24,8 +24,9 @@ pub enum Action {
     ToggleFullscreen,
     /// Ctrl+Alt+F1..F12 on real hardware.
     SwitchVt(i32),
-    /// Tapping the mod key alone.
+    /// Tapping the mod key alone: the overview, or a configured launcher.
     Launcher,
+    CloseOverview,
     /// Slide the workspace strip: +1 = next (content moves left).
     /// `carry` brings the focused window along.
     Workspace {

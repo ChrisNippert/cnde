@@ -15,6 +15,7 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
+            ImportMem,
             element::{
                 Kind,
                 texture::{TextureBuffer, TextureRenderElement},
@@ -67,6 +68,8 @@ struct Entry {
     size: Size<i32, Physical>,
     generation: u64,
     texture: Option<TextureBuffer<GlesTexture>>,
+    /// The same texture, for drawing it at other sizes (overview cards).
+    raw: Option<GlesTexture>,
     /// Scaled pixels waiting to be uploaded (needs the renderer).
     upload: Option<Vec<u8>>,
 }
@@ -120,6 +123,7 @@ impl Wallpapers {
             size: done.size,
             generation: done.generation,
             texture: None,
+            raw: None,
             upload: None,
         });
         // A newer result may already be here (jobs can finish out of order
@@ -160,17 +164,17 @@ impl Wallpapers {
         let entry = self.entries.get_mut(&name)?;
         if let Some(pixels) = entry.upload.take() {
             let buffer_size = (entry.size.w, entry.size.h);
-            match TextureBuffer::from_memory(
-                renderer,
-                &pixels,
-                Fourcc::Abgr8888,
-                buffer_size,
-                false,
-                1,
-                Transform::Normal,
-                Some(vec![Rectangle::from_size(buffer_size.into())]),
-            ) {
-                Ok(texture) => entry.texture = Some(texture),
+            match renderer.import_memory(&pixels, Fourcc::Abgr8888, buffer_size.into(), false) {
+                Ok(texture) => {
+                    entry.texture = Some(TextureBuffer::from_texture(
+                        renderer,
+                        texture.clone(),
+                        1,
+                        Transform::Normal,
+                        Some(vec![Rectangle::from_size(buffer_size.into())]),
+                    ));
+                    entry.raw = Some(texture);
+                }
                 Err(err) => warn!(?err, output = %name, "can't upload wallpaper"),
             }
         }
@@ -183,6 +187,11 @@ impl Wallpapers {
             Some(logical),
             Kind::Unspecified,
         ))
+    }
+
+    /// The wallpaper texture for `output`, if it's loaded.
+    pub fn texture(&self, output: &Output) -> Option<GlesTexture> {
+        self.entries.get(&output.name())?.raw.clone()
     }
 
     /// A monitor is gone: free its texture.

@@ -58,8 +58,8 @@
 # workspace_active_width = 28
 
 [launcher]
-# Runs when Super is tapped on its own (temporary, until the cnde shell).
-# command = "fuzzel"
+# Tapping Super opens the overview. Set a command to run that instead.
+# command = ""             # e.g. "fuzzel"
 
 [autostart]
 # Run once at startup, e.g. a bar while the cnde shell doesn't exist yet.

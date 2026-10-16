@@ -74,6 +74,7 @@ pub struct State {
     /// Snapshots of destroyed windows, still animating out.
     pub closing: Vec<ClosingWindow>,
     pub wallpapers: crate::wallpaper::Wallpapers,
+    pub overview: crate::overview::Overview,
     /// Drag-to-edge preview while a window is being moved.
     pub snap_preview: Option<SnapPreview>,
     pub popups: PopupManager,
@@ -157,6 +158,7 @@ impl State {
             unmapped: Vec::new(),
             closing: Vec::new(),
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
+            overview: crate::overview::Overview::new(),
             snap_preview: None,
             popups: PopupManager::default(),
 
@@ -215,6 +217,7 @@ impl State {
         self.space.refresh();
         self.popups.cleanup();
         self.finish_workspace_motion(Instant::now());
+        self.finish_overview_animation(Instant::now());
         if self.pointer_focus_dirty {
             self.pointer_focus_dirty = false;
             // Windows dragged to another monitor join its workspace.
@@ -315,6 +318,10 @@ impl State {
         {
             return Some((surface, loc));
         }
+        // In the overview, windows are pictures: the compositor handles clicks.
+        if self.overview.is_open() {
+            return None;
+        }
         let window = self
             .space
             .element_under(pos)
@@ -332,11 +339,12 @@ impl State {
     /// Layers drawn above windows at `pos`: the panel (top layer) hides
     /// behind a fullscreen window.
     pub fn layers_above_windows(&self, pos: Point<f64, Logical>) -> &'static [Layer] {
-        let fullscreen = self
-            .space
-            .output_under(pos)
-            .next()
-            .is_some_and(|output| self.fullscreen_on(output));
+        let fullscreen = !self.overview.is_open()
+            && self
+                .space
+                .output_under(pos)
+                .next()
+                .is_some_and(|output| self.fullscreen_on(output));
         if fullscreen {
             &[Layer::Overlay]
         } else {

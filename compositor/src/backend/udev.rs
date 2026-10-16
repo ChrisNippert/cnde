@@ -668,12 +668,12 @@ impl State {
         let now = std::time::Instant::now();
         let elapsed = self.start_time.elapsed();
         let pointer = self.seat.get_pointer().map(|p| p.current_location());
-        let moving = match &self.backend {
+        let scene = match &self.backend {
             Backend::Udev(udev) => udev
                 .gpu
                 .as_ref()
                 .and_then(|gpu| gpu.surfaces.get(&crtc))
-                .and_then(|surface| self.moving_layout(&surface.output, now)),
+                .and_then(|surface| self.scene(&surface.output, now)),
             Backend::Winit(_) => None,
         };
         let Backend::Udev(udev) = &mut self.backend else {
@@ -703,12 +703,24 @@ impl State {
                 elapsed,
             ));
         }
+        let backdrop = match self.space.output_geometry(&output) {
+            Some(geo) => crate::overview::backdrop(
+                &mut self.overview,
+                &mut self.wallpapers,
+                &mut gpu.renderer,
+                &output,
+                geo,
+                scene.as_ref(),
+            ),
+            None => Vec::new(),
+        };
         elements.extend(render::output_elements(
             &mut gpu.renderer,
             &self.space,
             &self.closing,
             self.snap_preview.as_mut(),
-            moving,
+            scene.map(|s| s.windows),
+            backdrop,
             &output,
             now,
         ));
@@ -751,7 +763,7 @@ impl State {
             &self.space,
             &self.closing,
             self.snap_preview.as_ref(),
-            self.workspaces.is_moving(),
+            self.workspaces.is_moving() || self.overview.is_animating(now),
             now,
         ) {
             self.queue_redraw();

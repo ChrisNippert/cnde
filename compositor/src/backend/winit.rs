@@ -157,8 +157,12 @@ impl State {
     fn render_winit(&mut self) {
         let now = Instant::now();
         self.space.refresh();
-        let moving = match &self.backend {
-            Backend::Winit(winit) => self.moving_layout(&winit.output, now),
+        let scene = match &self.backend {
+            Backend::Winit(winit) => self.scene(&winit.output, now),
+            Backend::Udev(_) => None,
+        };
+        let output_geo = match &self.backend {
+            Backend::Winit(winit) => self.space.output_geometry(&winit.output),
             Backend::Udev(_) => None,
         };
 
@@ -179,12 +183,24 @@ impl State {
                     return;
                 }
             };
+            let backdrop = match output_geo {
+                Some(geo) => crate::overview::backdrop(
+                    &mut self.overview,
+                    &mut self.wallpapers,
+                    renderer,
+                    &backend.output,
+                    geo,
+                    scene.as_ref(),
+                ),
+                None => Vec::new(),
+            };
             let mut elements = render::output_elements(
                 renderer,
                 &self.space,
                 &self.closing,
                 self.snap_preview.as_mut(),
-                moving,
+                scene.map(|s| s.windows),
+                backdrop,
                 &backend.output,
                 now,
             );
@@ -223,7 +239,7 @@ impl State {
             &self.space,
             &self.closing,
             self.snap_preview.as_ref(),
-            self.workspaces.is_moving(),
+            self.workspaces.is_moving() || self.overview.is_animating(now),
             now,
         ) {
             self.queue_redraw();

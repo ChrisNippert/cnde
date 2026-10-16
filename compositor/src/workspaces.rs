@@ -19,6 +19,7 @@ use tracing::debug;
 use crate::{
     animation::{Animation, Params, presets},
     effects::{PendingSize, lerp_rect},
+    render::{Placed, Zoom},
     state::State,
     window::{Placement, placement_rect, with_state},
 };
@@ -52,7 +53,7 @@ pub struct StripMotion {
     anim: Option<Animation>,
     pub swipe: Option<Swipe>,
     /// Super+Alt+Shift: this window rides along, fixed on screen.
-    carried: Option<Window>,
+    pub carried: Option<Window>,
 }
 
 /// A three-finger swipe in progress.
@@ -508,7 +509,7 @@ impl State {
     /// into `outputs`. Slots past either end are virtual off-screen
     /// continuations, the size of the nearest real monitor, so workspaces
     /// slide in from and out to somewhere sensible.
-    fn slot_areas(
+    pub(crate) fn slot_areas(
         &self,
         outputs: &[Output],
         slot: isize,
@@ -528,7 +529,7 @@ impl State {
     /// Where `window` would rest if its workspace were shown on `slot`:
     /// floating windows at their local position (kept reachable on a smaller
     /// monitor), maximized/snapped/fullscreen ones fitted to that monitor.
-    fn rest_rect(
+    pub(crate) fn rest_rect(
         &self,
         window: &Window,
         outputs: &[Output],
@@ -599,11 +600,7 @@ impl State {
     /// neighbouring slots, so it crosses monitor borders at one speed and
     /// morphs to fit monitors of different sizes; whatever overlaps
     /// `output` is drawn there. Bottom to top.
-    pub fn moving_layout(
-        &self,
-        output: &Output,
-        now: Instant,
-    ) -> Option<Vec<(Window, Rectangle<f64, Logical>)>> {
+    pub fn moving_layout(&self, output: &Output, now: Instant) -> Option<Vec<Placed>> {
         let motion = self.workspaces.motion.as_ref()?;
         let (outputs, main) = self.strip_outputs();
         let output_geo = self.space.output_geometry(output)?.to_f64();
@@ -628,7 +625,12 @@ impl State {
                 };
                 let rect = lerp_rect(a.to_f64(), b.to_f64(), t);
                 if rect.overlaps(output_geo) {
-                    layout.push((window.clone(), rect));
+                    layout.push(Placed {
+                        window: window.clone(),
+                        rect,
+                        zoom: Zoom::IDENTITY,
+                        workspace: index as usize,
+                    });
                 }
             }
         }
@@ -637,7 +639,12 @@ impl State {
             && let Some(rect) = self.space.element_geometry(window).map(|g| g.to_f64())
             && rect.overlaps(output_geo)
         {
-            layout.push((window.clone(), rect));
+            layout.push(Placed {
+                window: window.clone(),
+                rect,
+                zoom: Zoom::IDENTITY,
+                workspace: motion.to,
+            });
         }
         Some(layout)
     }

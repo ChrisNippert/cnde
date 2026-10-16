@@ -7,6 +7,7 @@ use smithay::{
         KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     desktop::Window,
+    input::keyboard::keysyms,
     input::{
         keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent, RelativeMotionEvent},
@@ -132,6 +133,15 @@ impl State {
                 let Some(sym) = handle.raw_latin_sym_or_raw_current_sym() else {
                     return FilterResult::Forward;
                 };
+                // Escape leaves the overview, unless the shell's search box
+                // has the keyboard (it decides: clear the text, then close).
+                if sym.raw() == keysyms::KEY_Escape
+                    && state.overview.is_open()
+                    && state.exclusive_layer().is_none()
+                {
+                    state.suppressed_keys.push(keycode);
+                    return FilterResult::Intercept(Some(Action::CloseOverview));
+                }
                 match keybinds::action_for(mod_key, mods, sym) {
                     Some(action) => {
                         state.suppressed_keys.push(keycode);
@@ -165,10 +175,13 @@ impl State {
             Action::Workspace { step, carry } => self.step_workspace(step, carry),
             Action::Launcher => {
                 let command = self.config.launcher.command.clone();
-                if !command.trim().is_empty() {
+                if command.trim().is_empty() {
+                    self.toggle_overview();
+                } else {
                     spawn::spawn_command_line(&command, &self.client_env());
                 }
             }
+            Action::CloseOverview => self.set_overview(false),
         }
     }
 
@@ -227,6 +240,7 @@ impl State {
             },
         );
         pointer.frame(self);
+        self.check_hot_corner(location);
         // We draw the cursor ourselves on real hardware.
         if self.backend.draws_cursor() {
             self.queue_redraw();
@@ -265,6 +279,12 @@ impl State {
                     },
                 );
                 pointer.frame(self);
+                return;
+            }
+            if self.overview.is_open() {
+                if button == BTN_LEFT {
+                    self.overview_click(location);
+                }
                 return;
             }
             let window = self.space.element_under(location).map(|(w, _)| w.clone());
@@ -324,6 +344,18 @@ impl State {
             if source == AxisSource::Finger && event.amount(axis) == Some(0.0) {
                 frame = frame.stop(axis);
             }
+        }
+
+        // The wheel slides the strip in the overview (down = next).
+        let over_layer = self.seat.get_pointer().is_some_and(|p| {
+            let pos = p.current_location();
+            self.surface_under(pos).is_some()
+        });
+        if self.overview.is_open() && !over_layer {
+            if let Some(v120) = event.amount_v120(Axis::Vertical) {
+                self.overview_scroll(v120);
+            }
+            return;
         }
 
         let Some(pointer) = self.seat.get_pointer() else {

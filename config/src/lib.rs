@@ -256,20 +256,12 @@ pub fn parse_color(text: &str) -> Option<(u8, u8, u8, u8)> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Launcher {
-    /// Run when Super is tapped on its own. Temporary until cnde-shell's
-    /// overview exists (ARCHITECTURE.md §11, Milestone 2).
+    /// Run when Super is tapped on its own, instead of opening the
+    /// overview (e.g. "fuzzel"). Empty: the overview.
     pub command: String,
-}
-
-impl Default for Launcher {
-    fn default() -> Self {
-        Self {
-            command: "fuzzel".into(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
