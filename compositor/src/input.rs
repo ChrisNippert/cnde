@@ -323,6 +323,7 @@ impl State {
                     output: output.name(),
                     x: local.x.floor() as i32,
                     y: local.y.floor() as i32,
+                    serial: serial.into(),
                 });
             }
 

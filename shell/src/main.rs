@@ -135,7 +135,11 @@ pub struct App {
     menu: Option<menu::Menu>,
     /// The desktop menu's anchor surface, waiting to be configured, and the
     /// scale of its monitor.
-    desktop_holder: Option<(smithay_client_toolkit::shell::wlr_layer::LayerSurface, i32)>,
+    desktop_holder: Option<(
+        smithay_client_toolkit::shell::wlr_layer::LayerSurface,
+        i32,
+        u32,
+    )>,
     /// The dock is being edited in place (kept across it being recreated,
     /// e.g. when it moves to another edge).
     dock_editing: bool,
@@ -321,7 +325,12 @@ fn until_next_minute() -> Duration {
 impl App {
     fn ipc_event(&mut self, event: cnde_ipc::Event) {
         match event {
-            cnde_ipc::Event::DesktopMenu { output, x, y } => self.desktop_menu(&output, x, y),
+            cnde_ipc::Event::DesktopMenu {
+                output,
+                x,
+                y,
+                serial,
+            } => self.desktop_menu(&output, x, y, serial),
             cnde_ipc::Event::OverviewOpened { output } => {
                 self.overview_open = true;
                 self.redraw_panels();
@@ -997,7 +1006,7 @@ impl LayerShellHandler for App {
         if self
             .desktop_holder
             .as_ref()
-            .is_some_and(|(holder, _)| holder == layer)
+            .is_some_and(|(holder, _, _)| holder == layer)
         {
             self.desktop_holder_configured();
         }

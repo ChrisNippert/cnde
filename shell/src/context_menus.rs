@@ -86,7 +86,7 @@ impl App {
 
     /// The compositor says the wallpaper was right-clicked: put a 1x1
     /// surface there to hang the menu from (see `menu`).
-    pub fn desktop_menu(&mut self, output_name: &str, x: i32, y: i32) {
+    pub fn desktop_menu(&mut self, output_name: &str, x: i32, y: i32, serial: u32) {
         let Some((output, scale)) = self.outputs.outputs().find_map(|o| {
             let info = self.outputs.info(&o)?;
             (info.name.as_deref() == Some(output_name)).then_some((o, info.scale_factor))
@@ -113,12 +113,12 @@ impl App {
         holder.wl_surface().set_buffer_scale(1);
         holder.commit();
         // The menu opens once the compositor configures this.
-        self.desktop_holder = Some((holder, scale));
+        self.desktop_holder = Some((holder, scale, serial));
     }
 
     /// The desktop menu's holder was configured: show it, then the menu.
     pub fn desktop_holder_configured(&mut self) {
-        let Some((holder, scale)) = self.desktop_holder.take() else {
+        let Some((holder, scale, serial)) = self.desktop_holder.take() else {
             return;
         };
         match self
@@ -141,11 +141,15 @@ impl App {
             Entry::item("Change Background…", Action::Settings(Some("appearance"))),
             Entry::item("Display Settings", Action::Settings(Some("displays"))),
             Entry::Separator,
+            Entry::item("Edit Top Bar…", Action::EditPanel),
+            Entry::item("Dock Settings", Action::Settings(Some("dock"))),
+            Entry::item("Appearance", Action::Settings(Some("appearance"))),
+            Entry::Separator,
             Entry::item("Settings", Action::Settings(None)),
         ];
         self.open_menu(
             &holder,
-            self.last_serial,
+            serial,
             Placement {
                 rect: (HOLDER / 2, HOLDER / 2, 1, 1),
                 anchor: Anchor::BottomRight,

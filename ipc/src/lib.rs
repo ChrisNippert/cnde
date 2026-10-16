@@ -38,11 +38,14 @@ pub enum Event {
         path: Option<String>,
     },
     /// The wallpaper was right-clicked: show the desktop menu at (`x`,
-    /// `y`), logical pixels within `output`.
+    /// `y`), logical pixels within `output`. `serial` is the click's: the
+    /// shell never saw it (it went to no surface), and a menu's grab must
+    /// name the click that opened it.
     DesktopMenu {
         output: String,
         x: i32,
         y: i32,
+        serial: u32,
     },
 }
 
