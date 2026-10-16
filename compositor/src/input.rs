@@ -72,22 +72,29 @@ impl State {
                 self.on_pointer_button(event.button_code(), event.state(), event.time_msec());
             }
             InputEvent::PointerAxis { event, .. } => self.on_pointer_axis::<I>(event),
-            // Three-finger horizontal swipes drive the workspace strip.
+            // Three-finger swipes: sideways drives the workspace strip, up
+            // and down the overview. The direction is picked once the
+            // fingers have moved a little.
             // TODO: forward other gestures to clients (pointer-gestures).
             InputEvent::GestureSwipeBegin { event, .. } => {
                 if event.fingers() == 3 {
                     self.swipe_active = true;
-                    self.swipe_begin();
+                    self.swipe_sideways = None;
+                    self.swipe_pending = (0.0, 0.0);
                 }
             }
             InputEvent::GestureSwipeUpdate { event, .. } => {
                 if self.swipe_active {
-                    self.swipe_update(event.delta_x());
+                    self.swipe_moved(event.delta_x(), event.delta_y());
                 }
             }
             InputEvent::GestureSwipeEnd { event, .. } if self.swipe_active => {
                 self.swipe_active = false;
-                self.swipe_end(event.cancelled());
+                match self.swipe_sideways.take() {
+                    Some(true) => self.swipe_end(event.cancelled()),
+                    Some(false) => self.overview_swipe_end(event.cancelled()),
+                    None => {}
+                }
             }
             _ => {}
         }
@@ -158,6 +165,33 @@ impl State {
         }
         if std::mem::take(&mut self.mod_tapped) {
             self.run_action(Action::Launcher);
+        }
+    }
+
+    /// A three-finger swipe moved by (`dx`, `dy`).
+    fn swipe_moved(&mut self, dx: f64, dy: f64) {
+        /// Travel before a swipe commits to a direction.
+        const DECIDE: f64 = 12.0;
+        match self.swipe_sideways {
+            Some(true) => self.swipe_update(dx),
+            Some(false) => self.overview_swipe_update(dy),
+            None => {
+                let (px, py) = (self.swipe_pending.0 + dx, self.swipe_pending.1 + dy);
+                self.swipe_pending = (px, py);
+                if px.hypot(py) < DECIDE {
+                    return;
+                }
+                let sideways = px.abs() > py.abs();
+                self.swipe_sideways = Some(sideways);
+                if sideways {
+                    self.swipe_begin();
+                    self.swipe_update(px);
+                } else if py < 0.0 || self.overview.is_open() {
+                    self.overview_swipe_begin();
+                    self.overview_swipe_update(py);
+                }
+                // (Down with the overview closed: nothing to do.)
+            }
         }
     }
 

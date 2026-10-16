@@ -68,6 +68,11 @@ pub struct State {
     pub ext_workspace_state: crate::ext_workspace::ExtWorkspaceState,
     /// A three-finger swipe is driving the workspace strip.
     pub swipe_active: bool,
+    /// Which way the current three-finger swipe goes, once it's clear:
+    /// true = sideways (workspaces), false = up/down (the overview).
+    pub swipe_sideways: Option<bool>,
+    /// Travel before the direction was clear.
+    pub swipe_pending: (f64, f64),
     /// Toplevels that exist but haven't attached a buffer yet. They are mapped
     /// (placed + animated in) on their first buffer commit.
     pub unmapped: Vec<Window>,
@@ -169,6 +174,8 @@ impl State {
             workspaces: crate::workspaces::Workspaces::new(),
             ext_workspace_state: Default::default(),
             swipe_active: false,
+            swipe_sideways: None,
+            swipe_pending: (0.0, 0.0),
             unmapped: Vec::new(),
             closing: Vec::new(),
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),

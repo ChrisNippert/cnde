@@ -89,7 +89,25 @@ pub struct Overview {
     app_grid: bool,
     /// Workspaces shrinking into thumbnails for the grid, or growing back.
     grid_anim: Option<Animation>,
+    /// A three-finger swipe is moving it: how open it is follows the fingers.
+    drag: Option<OverviewDrag>,
 }
+
+#[derive(Debug, Clone, Copy)]
+struct OverviewDrag {
+    /// Progress when the swipe began.
+    start: f64,
+    /// Progress now.
+    progress: f64,
+    /// Fingers' vertical travel, logical pixels (up is negative).
+    dy: f64,
+    /// Recent travel per second, for flicks.
+    velocity: f64,
+    last: Instant,
+}
+
+/// How far the fingers travel to open the overview all the way.
+const SWIPE_DISTANCE: f64 = 300.0;
 
 struct Tile {
     element: PixelShaderElement,
@@ -134,6 +152,7 @@ impl Overview {
             focus_after: None,
             app_grid: false,
             grid_anim: None,
+            drag: None,
         }
     }
 
@@ -151,6 +170,9 @@ impl Overview {
 
     /// 0 = closed, 1 = fully open.
     pub fn progress(&self, now: Instant) -> f64 {
+        if let Some(drag) = &self.drag {
+            return drag.progress;
+        }
         match &self.anim {
             Some(anim) => anim.value_at(now),
             None if self.open => 1.0,
@@ -159,7 +181,8 @@ impl Overview {
     }
 
     pub fn is_animating(&self, now: Instant) -> bool {
-        self.anim.as_ref().is_some_and(|a| !a.is_done(now))
+        self.drag.is_some()
+            || self.anim.as_ref().is_some_and(|a| !a.is_done(now))
             || self.grid_anim.as_ref().is_some_and(|a| !a.is_done(now))
     }
 
@@ -206,6 +229,72 @@ impl Overview {
 }
 
 impl State {
+    /// Three fingers moving up or down. Closed, up opens it following the
+    /// fingers; open, down closes it the same way, and up goes on to the app
+    /// grid when the fingers lift.
+    pub fn overview_swipe_begin(&mut self) {
+        if !self.overview.is_open() {
+            self.set_overview(true);
+        }
+        let now = Instant::now();
+        let start = self.overview.progress(now);
+        self.overview.drag = Some(OverviewDrag {
+            start,
+            progress: start,
+            dy: 0.0,
+            velocity: 0.0,
+            last: now,
+        });
+        self.queue_redraw();
+    }
+
+    pub fn overview_swipe_update(&mut self, dy: f64) {
+        let Some(drag) = &mut self.overview.drag else {
+            return;
+        };
+        let now = Instant::now();
+        let dt = now.duration_since(drag.last).as_secs_f64().max(1e-3);
+        drag.velocity = drag.velocity * 0.5 + (dy / dt) * 0.5;
+        drag.last = now;
+        drag.dy += dy;
+        // Up (negative dy) opens.
+        drag.progress = (drag.start - drag.dy / SWIPE_DISTANCE).clamp(0.0, 1.0);
+        self.queue_redraw();
+    }
+
+    pub fn overview_swipe_end(&mut self, cancelled: bool) {
+        let Some(drag) = self.overview.drag else {
+            return;
+        };
+        // Where a flick would carry it: a fifth of a second more travel.
+        let projected = drag.progress - drag.velocity * 0.2 / SWIPE_DISTANCE;
+        let open = if cancelled {
+            drag.start >= 0.5
+        } else {
+            projected >= 0.5
+        };
+        // Already open and pushed further up: the app grid.
+        let to_grid = !cancelled
+            && drag.start >= 1.0
+            && -drag.dy > SWIPE_DISTANCE * 0.25
+            && !self.overview.app_grid();
+        if open {
+            let from = drag.progress;
+            self.overview.drag = None;
+            self.overview.anim = Some(Animation::new(from, 1.0, presets::OVERVIEW));
+            if to_grid {
+                self.overview.set_app_grid(true);
+                self.ipc.broadcast(&cnde_ipc::Event::ToggleAppGrid);
+            }
+        } else {
+            // Closing animates from where the fingers left it (set_open
+            // reads the drag's progress before it's cleared).
+            self.set_overview(false);
+            self.overview.drag = None;
+        }
+        self.queue_redraw();
+    }
+
     /// The Activities button (the shell asks over IPC). Ignored just after
     /// the hot corner fired: you hit the corner, then clicked it.
     pub fn activities_clicked(&mut self) {
