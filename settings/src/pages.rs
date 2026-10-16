@@ -829,6 +829,23 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .advanced(),
                 Row::new(
+                    "panel.frosted",
+                    "Frosted",
+                    Control::switch(),
+                    Value::Bool(p.frosted),
+                    Value::Bool(dp.frosted),
+                )
+                .sub("Translucent over the blurred wallpaper"),
+                Row::new(
+                    "panel.rounded",
+                    "Rounded corners",
+                    Control::switch(),
+                    Value::Bool(p.rounded),
+                    Value::Bool(dp.rounded),
+                )
+                .sub("Rounded bottom corners and a soft shadow")
+                .advanced(),
+                Row::new(
                     "panel.background",
                     "Background colour",
                     Control::text("From the style"),

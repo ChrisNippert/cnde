@@ -183,12 +183,9 @@ impl State {
                     return;
                 }
             };
-            let frost = self.dock_frost.elements(
-                renderer,
-                &self.wallpapers,
-                &backend.output,
-                &self.config.dock,
-            );
+            let frost =
+                self.dock_frost
+                    .elements(renderer, &self.wallpapers, &backend.output, &self.config);
             let backdrop = match output_geo {
                 Some(geo) => crate::overview::backdrop(
                     &mut self.overview,

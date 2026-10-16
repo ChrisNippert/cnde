@@ -379,6 +379,11 @@ impl App {
                     Value::Bool(!panel.all_monitors),
                 )]),
             ),
+            Entry::check(
+                "Frosted",
+                panel.frosted,
+                Action::Config(vec![("panel.frosted", Value::Bool(!panel.frosted))]),
+            ),
             Entry::Separator,
             Entry::item(
                 if self.panel_editing() {

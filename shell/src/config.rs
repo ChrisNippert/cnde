@@ -42,6 +42,11 @@ pub fn theme_from(config: &Config) -> Theme {
         theme.panel_shadow = 0;
     }
     theme.panel_background = color(&panel.background, theme.panel_background);
+    // Frosted: the compositor blurs the wallpaper behind; tint it lightly
+    // (a colour set in the config keeps its own transparency).
+    if panel.frosted && panel.background.is_empty() {
+        theme.panel_background = theme.panel_background.with_alpha(0.45);
+    }
     theme.panel_foreground = color(&panel.foreground, theme.panel_foreground);
     theme.font_size = panel.font_size;
     theme.workspace_dot_size = panel.workspace_dot_size;

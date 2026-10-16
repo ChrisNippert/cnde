@@ -1,4 +1,5 @@
-//! Frosted glass behind the dock (`dock.background = "frosted"`): the
+//! Frosted glass behind the dock (`dock.background = "frosted"`) and the
+//! top bar (`panel.frosted`): the
 //! blurred wallpaper, clipped to the dock's rounded shape, drawn just under
 //! it. The dock itself paints only a light tint on top.
 //!
@@ -42,29 +43,61 @@ pub struct Frost {
 }
 
 impl DockFrost {
-    /// The frost under the dock on `output`, if there's a dock there.
+    /// The frost under the dock and the top bar on `output`, where the
+    /// config asks for it.
     pub fn elements(
         &mut self,
         renderer: &mut GlesRenderer,
         wallpapers: &Wallpapers,
         output: &Output,
-        dock: &cnde_config::Dock,
+        config: &cnde_config::Config,
     ) -> Vec<OutputElement> {
-        let name = output.name();
-        if dock.background != cnde_config::DockBackground::Frosted {
-            self.ids.remove(&name);
-            return Vec::new();
+        let dock = &config.dock;
+        let dock_radius = if dock.extend && dock.position != cnde_config::DockPosition::Overview {
+            0.0
+        } else {
+            cnde_ipc::dock::RADIUS
+        };
+        let mut wanted = Vec::new();
+        if dock.background == cnde_config::DockBackground::Frosted {
+            wanted.push((cnde_ipc::dock::NAMESPACE, dock_radius, None));
         }
-        let area = {
-            let map = layer_map_for_output(output);
-            map.layers()
-                .find(|l| l.namespace() == cnde_ipc::dock::NAMESPACE)
-                .and_then(|l| map.layer_geometry(l))
-        };
-        let Some(area) = area.filter(|a| !a.is_empty()) else {
-            self.ids.remove(&name);
-            return Vec::new();
-        };
+        if config.panel.frosted {
+            // Just the bar, not the shadow a rounded one casts below it.
+            wanted.push(("cnde-panel", 0.0, Some(config.panel.height as i32)));
+        }
+        let mut elements = Vec::new();
+        for (namespace, radius, height) in wanted {
+            let area = {
+                let map = layer_map_for_output(output);
+                map.layers()
+                    .find(|l| l.namespace() == namespace)
+                    .and_then(|l| map.layer_geometry(l))
+            };
+            let Some(mut area) = area.filter(|a| !a.is_empty()) else {
+                continue;
+            };
+            if let Some(height) = height {
+                area.size.h = area.size.h.min(height);
+            }
+            if let Some(element) =
+                self.element(renderer, wallpapers, output, namespace, area, radius)
+            {
+                elements.push(element);
+            }
+        }
+        elements
+    }
+
+    fn element(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        wallpapers: &Wallpapers,
+        output: &Output,
+        namespace: &str,
+        area: Rectangle<i32, smithay::utils::Logical>,
+        radius: f64,
+    ) -> Option<OutputElement> {
         if self.shader.is_none() && !self.broken {
             match renderer.compile_custom_texture_shader(
                 crate::shaders::ROUNDED_TEXTURE,
@@ -72,24 +105,14 @@ impl DockFrost {
             ) {
                 Ok(shader) => self.shader = Some(shader),
                 Err(err) => {
-                    warn!(?err, "can't compile the frost shader; the dock stays plain");
+                    warn!(?err, "can't compile the frost shader; surfaces stay plain");
                     self.broken = true;
                 }
             }
         }
-        let Some(shader) = &self.shader else {
-            return Vec::new();
-        };
+        let shader = self.shader.as_ref()?;
         let scale = output.current_scale().fractional_scale();
-        let Some((texture, crop)) = wallpapers.blurred_crop(output, area) else {
-            return Vec::new();
-        };
-        // Square when stretched across the edge (the shell does the same).
-        let radius = if dock.extend && dock.position != cnde_config::DockPosition::Overview {
-            0.0
-        } else {
-            cnde_ipc::dock::RADIUS
-        };
+        let (texture, crop) = wallpapers.blurred_crop(output, area)?;
         let inner = TextureShaderElement::new(
             texture,
             shader.clone(),
@@ -105,8 +128,9 @@ impl DockFrost {
                 Uniform::new("radius", (radius * scale) as f32),
             ],
         );
-        let id = self.ids.entry(name).or_insert_with(Id::new).clone();
-        vec![OutputElement::Frost(Frost { inner, id })]
+        let key = format!("{}/{namespace}", output.name());
+        let id = self.ids.entry(key).or_insert_with(Id::new).clone();
+        Some(OutputElement::Frost(Frost { inner, id }))
     }
 }
 

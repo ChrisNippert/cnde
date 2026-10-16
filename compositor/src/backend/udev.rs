@@ -728,7 +728,7 @@ impl State {
                 &mut gpu.renderer,
                 &self.wallpapers,
                 &output,
-                &self.config.dock,
+                &self.config,
             );
             let backdrop = match self.space.output_geometry(&output) {
                 Some(geo) => crate::overview::backdrop(
