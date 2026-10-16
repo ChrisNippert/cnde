@@ -193,12 +193,19 @@ impl Decorations {
         }
         let titlebar = state.titlebar.as_ref()?;
         let location = rect.loc.to_physical(scale);
+        // The whole buffer, shrunk to the bar's logical size. (Without a
+        // source, a size override crops the buffer instead: at 125% only
+        // the left four fifths of the bar showed.)
+        let pixels = (
+            (width as f64 * scale.x).round(),
+            (HEIGHT as f64 * scale.x).round(),
+        );
         let element = MemoryRenderBufferRenderElement::from_buffer(
             renderer,
             location,
             &titlebar.buffer,
             Some(alpha),
-            None,
+            Some(Rectangle::from_size(Size::from(pixels))),
             Some(Size::from((width, HEIGHT))),
             Kind::Unspecified,
         )

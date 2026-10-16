@@ -53,7 +53,7 @@ pub fn init(
     output.change_current_state(
         Some(mode),
         Some(Transform::Flipped180),
-        Some(Scale::Fractional(graphics.scale_factor())),
+        Some(Scale::Fractional(nested_scale(graphics.scale_factor()))),
         Some((0, 0).into()),
     );
     output.set_preferred(mode);
@@ -123,7 +123,7 @@ pub fn insert_event_source(
                         refresh: REFRESH_MHZ,
                     }),
                     None,
-                    Some(Scale::Fractional(scale_factor)),
+                    Some(Scale::Fractional(nested_scale(scale_factor))),
                     None,
                 );
                 state.relayout_after_output_change();
@@ -293,4 +293,14 @@ impl State {
             self.queue_redraw();
         }
     }
+}
+
+/// The host window's scale, or `CNDE_NESTED_SCALE` (debug aid: try e.g.
+/// 1.25 without changing the host desktop).
+fn nested_scale(host: f64) -> f64 {
+    std::env::var("CNDE_NESTED_SCALE")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v > 0.0)
+        .unwrap_or(host)
 }
