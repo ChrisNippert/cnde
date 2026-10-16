@@ -186,11 +186,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             edit: None,
             error: None,
             rounded: true,
+            dragging: None,
         },
         res: Res {
             fonts,
             icons: Icons::new(),
             theme,
+            anim: view::Anim::new(),
         },
         painted: Painted::default(),
         config_path,
@@ -237,6 +239,10 @@ impl App {
                 return;
             };
             self.painted = view::paint(&self.ui, &mut self.res, &mut canvas);
+        }
+        // Something's moving: paint again on the next frame callback.
+        if self.res.anim.running() {
+            self.dirty = true;
         }
         // Scrolled past the end (the page got shorter): clamp and repaint.
         if self.ui.scroll > self.painted.max_scroll {
@@ -407,6 +413,9 @@ impl App {
             Target::Page(page) => {
                 if self.ui.page != page {
                     self.ui.page = page;
+                    self.res
+                        .anim
+                        .restart(view::AnimKey::Page, 0.0, 1.0, cnde_ui::anim::MEDIUM);
                     self.ui.scroll = 0.0;
                 }
             }
@@ -439,7 +448,15 @@ impl App {
                         let value = if row.is_on() { off } else { on };
                         self.write(&[(row.key.clone(), value.clone())]);
                     }
-                    Control::Dropdown(_) => self.ui.popover = Some(row.key.clone()),
+                    Control::Dropdown(_) => {
+                        self.ui.popover = Some(row.key.clone());
+                        self.res.anim.restart(
+                            view::AnimKey::Popover,
+                            0.0,
+                            1.0,
+                            cnde_ui::anim::SHORT,
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -456,7 +473,9 @@ impl App {
                 if let Some(row) = self.row(i)
                     && let Some((_, rect)) = self.painted.sliders.iter().find(|(r, _)| *r == i)
                 {
-                    self.dragging = Some((row.key.clone(), *rect));
+                    let key = row.key.clone();
+                    self.dragging = Some((key.clone(), *rect));
+                    self.ui.dragging = Some(key);
                     self.drag(position.0);
                 }
             }
@@ -876,7 +895,10 @@ impl PointerHandler for App {
                 } => self.press(event.position, serial),
                 PointerEventKind::Release {
                     button: BTN_LEFT, ..
-                } => self.dragging = None,
+                } => {
+                    self.dragging = None;
+                    self.ui.dragging = None;
+                }
                 PointerEventKind::Axis { vertical, .. } => {
                     if self.ui.popover.is_some() {
                         continue;

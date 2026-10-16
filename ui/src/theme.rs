@@ -28,6 +28,18 @@ impl Color {
     pub const fn with_alpha(self, a: f32) -> Self {
         Self { a, ..self }
     }
+
+    /// Between `self` (t = 0) and `other` (t = 1), alpha included.
+    pub fn mix(self, other: Color, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        let lerp = |a: f32, b: f32| a + (b - a) * t;
+        Self {
+            r: lerp(self.r, other.r),
+            g: lerp(self.g, other.g),
+            b: lerp(self.b, other.b),
+            a: lerp(self.a, other.a),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

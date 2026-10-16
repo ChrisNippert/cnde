@@ -5,7 +5,10 @@
 
 use std::time::{Duration, Instant};
 
-use cnde_ui::{Canvas, Color, Fonts, Icons, Theme, Weight};
+use cnde_ui::{
+    Animator, Canvas, Color, Fonts, Icons, Theme, Weight,
+    anim::{MEDIUM, SHORT},
+};
 use smithay_client_toolkit::{
     compositor::{CompositorState, FrameCallbackData},
     reexports::{
@@ -279,8 +282,18 @@ fn percent_along(rect: Rect, x: f64) -> u32 {
     (((x as f32 - rect.x) / rect.w).clamp(0.0, 1.0) * 100.0).round() as u32
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Slider {
+/// What's animating in the card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Moving {
+    /// A round toggle fading between off and on (index into the toggles).
+    Toggle(usize),
+    Slider(Slider),
+    /// The power mode highlight sliding to the active mode.
+    Profile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Slider {
     Volume,
     Brightness,
 }
@@ -317,6 +330,7 @@ pub struct QuickSettings {
     frame_pending: bool,
     /// Something changed since the last draw.
     dirty: bool,
+    anim: Animator<Moving>,
 }
 
 impl QuickSettings {
@@ -359,6 +373,7 @@ impl QuickSettings {
             brightness: status.backlight.as_ref().map(|b| b.percent()),
             frame_pending: false,
             dirty: false,
+            anim: Animator::new(),
         })
     }
 
@@ -553,7 +568,13 @@ impl QuickSettings {
             volume,
             self.brightness,
             scale as f32,
+            &mut self.anim,
+            self.dragging,
         );
+        // Still moving: draw again when this frame is shown.
+        if self.anim.running() {
+            self.dirty = true;
+        }
 
         let surface = self.popup.wl_surface();
         surface.damage_buffer(0, 0, w, h);
@@ -580,7 +601,20 @@ fn paint(
     volume: (u32, bool),
     brightness: Option<u32>,
     s: f32,
+    anim: &mut Animator<Moving>,
+    dragging: Option<Slider>,
 ) {
+    anim.begin();
+    // Sliders glide to a clicked spot, but follow the pointer while dragged.
+    let mut slide = |slider: Slider, value: f32| {
+        if dragging == Some(slider) {
+            anim.set(Moving::Slider(slider), value)
+        } else {
+            anim.get(Moving::Slider(slider), value, SHORT)
+        }
+    };
+    let volume_shown = slide(Slider::Volume, volume.0 as f32 / 100.0);
+    let brightness_shown = brightness.map(|b| slide(Slider::Brightness, b as f32 / 100.0));
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
     canvas.rounded_rect(
         0.0,
@@ -602,7 +636,7 @@ fn paint(
         theme.qs_tile,
     );
     let wifi_on = status.wifi_enabled;
-    for (rect, hit) in &layout.toggles {
+    for (i, (rect, hit)) in layout.toggles.iter().enumerate() {
         // (on?, available?, icon, label)
         let (on, available, icon, label) = match hit {
             Hit::Wifi => {
@@ -637,11 +671,8 @@ fn paint(
             ),
         };
         let fade = if available { 1.0 } else { 0.4 };
-        let circle = if on {
-            theme.qs_toggle_on
-        } else {
-            theme.qs_toggle_off
-        };
+        let lit = anim.get(Moving::Toggle(i), if on { 1.0 } else { 0.0 }, SHORT);
+        let circle = theme.qs_toggle_off.mix(theme.qs_toggle_on, lit);
         canvas.circle(
             rect.x + rect.w / 2.0,
             rect.y + rect.h / 2.0,
@@ -656,11 +687,7 @@ fn paint(
             rect.y + (rect.h - icon_size) / 2.0,
             icon_size,
             {
-                let fg = if on {
-                    theme.on_accent
-                } else {
-                    theme.popup_text
-                };
+                let fg = theme.popup_text.mix(theme.on_accent, lit);
                 fg.with_alpha(fg.a * fade)
             },
         );
@@ -699,14 +726,14 @@ fn paint(
         v.y,
         v.w,
         v.h,
-        percent as f32 / 100.0,
+        volume_shown,
         theme.qs_slider_track,
         fill,
     );
     let icon_size = 20.0;
     let icon_x = v.x + (v.h - icon_size) / 2.0 + 4.0;
     // Dark icon where the bright fill is under it.
-    let covered = (percent as f32 / 100.0) * v.w > icon_x - v.x + icon_size;
+    let covered = volume_shown * v.w > icon_x - v.x + icon_size;
     let icon_color = if covered && !muted {
         theme.qs_on_fill
     } else {
@@ -728,18 +755,18 @@ fn paint(
     );
 
     // Brightness: the same fat slider, a sun inside.
-    if let (Some(b), Some(percent)) = (layout.brightness, brightness) {
+    if let (Some(b), Some(shown)) = (layout.brightness, brightness_shown) {
         canvas.slider(
             b.x,
             b.y,
             b.w,
             b.h,
-            percent as f32 / 100.0,
+            shown,
             theme.qs_slider_track,
             theme.qs_slider_fill,
         );
         let icon_x = b.x + (b.h - icon_size) / 2.0 + 4.0;
-        let covered = (percent as f32 / 100.0) * b.w > icon_x - b.x + icon_size;
+        let covered = shown * b.w > icon_x - b.x + icon_size;
         canvas.icon(
             icons,
             "display-brightness-symbolic",
@@ -766,18 +793,25 @@ fn paint(
             theme.qs_tile_radius,
             theme.qs_tile,
         );
+        // The highlight slides from mode to mode.
+        if let Some(index) = profiles
+            .available
+            .iter()
+            .position(|p| *p == profiles.active)
+            && let Some(first) = segments.first()
+        {
+            let pos = anim.get(Moving::Profile, index as f32, MEDIUM);
+            canvas.rounded_rect(
+                first.x + pos * first.w,
+                first.y,
+                first.w,
+                first.h,
+                theme.qs_tile_radius - 6.0,
+                theme.qs_toggle_on,
+            );
+        }
         for (rect, profile) in segments.iter().zip(&profiles.available) {
             let active = *profile == profiles.active;
-            if active {
-                canvas.rounded_rect(
-                    rect.x,
-                    rect.y,
-                    rect.w,
-                    rect.h,
-                    theme.qs_tile_radius - 6.0,
-                    theme.qs_toggle_on,
-                );
-            }
             let (icon, label) = match profile {
                 crate::status::PowerProfile::PowerSaver => {
                     ("power-profile-power-saver-symbolic", "Power Saver")
@@ -1045,6 +1079,8 @@ mod tests {
                 (62, false),
                 Some(40),
                 scale,
+                &mut Animator::new(),
+                None,
             );
         }
         let mut data = format!("{w}x{h}\n").into_bytes();

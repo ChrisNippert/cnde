@@ -5,7 +5,10 @@
 use std::collections::HashSet;
 
 use cnde_config::Config;
-use cnde_ui::{Canvas, Color, Fonts, Icons, Painter, Rect, Theme, Weight};
+use cnde_ui::{
+    Animator, Canvas, Color, Fonts, Icons, Painter, Rect, Theme, Weight,
+    anim::{MEDIUM, SHORT},
+};
 
 use crate::{
     pages::{self, Control, Display, Key, Page, Row, Value},
@@ -14,7 +17,7 @@ use crate::{
 
 /// Something on screen the pointer can hit. Row indices are into
 /// [`Painted::rows`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Target {
     Page(Page),
     Close,
@@ -33,6 +36,32 @@ pub enum Target {
     /// A wallpaper tile; `None` is the built-in one.
     Wallpaper(Option<usize>),
     Advanced,
+}
+
+/// What's animating.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AnimKey {
+    /// A hover highlight fading in or out.
+    Hover(Target),
+    /// The sidebar's highlight on the current page.
+    Selected(Page),
+    Switch(Key),
+    Slider(Key),
+    /// Where a segmented control's highlight is.
+    Segment(Key),
+    /// The page fading in after switching to it.
+    Page,
+    /// The open dropdown appearing.
+    Popover,
+}
+
+pub type Anim = Animator<AnimKey>;
+
+/// How lit `target`'s hover highlight is (0-1), fading as the pointer
+/// comes and goes.
+fn hover(a: &mut Anim, ui: &Ui, target: Target) -> f32 {
+    let on = if ui.hover == Some(target) { 1.0 } else { 0.0 };
+    a.get(AnimKey::Hover(target), on, SHORT)
 }
 
 /// A text entry being edited.
@@ -61,6 +90,8 @@ pub struct Ui {
     pub error: Option<String>,
     /// Square corners when maximized or tiled.
     pub rounded: bool,
+    /// The slider being dragged (it follows the pointer, unanimated).
+    pub dragging: Option<Key>,
 }
 
 /// The result of a paint, for hit-testing.
@@ -89,6 +120,7 @@ pub struct Res {
     pub fonts: Fonts,
     pub icons: Icons,
     pub theme: Theme,
+    pub anim: Anim,
 }
 
 const CORNER: f32 = 12.0;
@@ -102,6 +134,8 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     let theme = res.theme.clone();
     let t = &theme;
     let mut out = Painted::default();
+    let a = &mut res.anim;
+    a.begin();
     let mut p = Painter {
         canvas,
         fonts: &mut res.fonts,
@@ -128,7 +162,14 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
 
     // The page first: it scrolls under the header bar drawn after it.
     let content = Rect::new(sw, hh, w - sw, h - hh);
-    page(ui, &mut p, &mut out, content);
+    // A new page fades in, rising a little.
+    let appear = a.get(AnimKey::Page, 1.0, MEDIUM);
+    page(ui, a, &mut p, &mut out, content, 10.0 * (1.0 - appear));
+    if appear < 1.0 {
+        let veil = t.window_background.with_alpha(1.0 - appear);
+        p.canvas
+            .rounded_rect(content.x, content.y, content.w, content.h, 0.0, veil);
+    }
 
     // Content header bar.
     p.canvas
@@ -154,11 +195,9 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         t.window_text,
     );
     let close = Rect::new(w - 12.0 - 24.0, (hh - 24.0) / 2.0, 24.0, 24.0);
-    let close_bg = if ui.hover == Some(Target::Close) {
-        t.button_hover
-    } else {
-        t.button_background
-    };
+    let close_bg = t
+        .button_background
+        .mix(t.button_hover, hover(a, ui, Target::Close));
     p.canvas
         .circle(close.x + 12.0, close.y + 12.0, 12.0, close_bg);
     p.icon(
@@ -174,10 +213,10 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
             .rounded_rect(sw, hh - 1.0, w - sw, 1.0, 0.0, t.card_separator);
     }
 
-    sidebar(ui, &mut p, &mut out, h);
+    sidebar(ui, a, &mut p, &mut out, h);
 
     if let Some(key) = &ui.popover {
-        popover(ui, &mut p, &mut out, key, w, h);
+        popover(ui, a, &mut p, &mut out, key, w, h);
     }
     if let Some(error) = &ui.error {
         let size = t.font_size;
@@ -196,10 +235,11 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
             t.error,
         );
     }
+    a.end();
     out
 }
 
-fn sidebar(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, h: f32) {
+fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h: f32) {
     let t = p.theme;
     let sw = t.sidebar_width;
     let hh = t.window_header_height;
@@ -221,16 +261,18 @@ fn sidebar(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, h: f32) {
             break;
         }
         let rect = Rect::new(8.0, y, sw - 16.0, t.sidebar_row_height);
-        let fill = if ui.page == page {
-            Some(t.sidebar_selected)
-        } else if ui.hover == Some(Target::Page(page)) {
-            Some(t.hover)
-        } else {
-            None
-        };
-        if let Some(fill) = fill {
-            p.canvas
-                .rounded_rect(rect.x, rect.y, rect.w, rect.h, 8.0, fill);
+        let selected = a.get(
+            AnimKey::Selected(page),
+            if ui.page == page { 1.0 } else { 0.0 },
+            SHORT,
+        );
+        let hovered = hover(a, ui, Target::Page(page)) * (1.0 - selected);
+        for (color, amount) in [(t.hover, hovered), (t.sidebar_selected, selected)] {
+            if amount > 0.0 {
+                let fill = color.with_alpha(color.a * amount);
+                p.canvas
+                    .rounded_rect(rect.x, rect.y, rect.w, rect.h, 8.0, fill);
+            }
         }
         let cy = rect.y + rect.h / 2.0;
         p.icon(page.icon(), rect.x + 20.0, cy, 16.0, t.window_text);
@@ -248,7 +290,14 @@ fn sidebar(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, h: f32) {
     }
 }
 
-fn page(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, area: Rect) {
+fn page(
+    ui: &Ui,
+    a: &mut Anim,
+    p: &mut Painter<'_, '_>,
+    out: &mut Painted,
+    area: Rect,
+    offset: f32,
+) {
     let t = p.theme;
     let groups = pages::build(ui.page, &ui.config, &ui.displays);
     let show_advanced = ui.advanced.contains(&ui.page);
@@ -256,7 +305,7 @@ fn page(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, area: Rect) {
     let col_w = (area.w - 48.0).min(MAX_COLUMN);
     let x = area.x + (area.w - col_w) / 2.0;
     let top = area.y + 24.0;
-    let mut y = top - ui.scroll;
+    let mut y = top - ui.scroll + offset;
 
     for group in groups {
         let rows: Vec<Row> = group
@@ -309,7 +358,7 @@ fn page(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, area: Rect) {
             let rect = Rect::new(x, ry, col_w, rh);
             // Off-screen rows are skipped, but still counted for scrolling.
             if rect.bottom() > area.y && rect.y < area.bottom() {
-                paint_row(ui, p, out, &row, index, rect, i == 0, i + 1 == count);
+                paint_row(ui, a, p, out, &row, index, rect, i == 0, i + 1 == count);
             }
             out.rows.push(row);
             ry += rh;
@@ -319,12 +368,13 @@ fn page(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, area: Rect) {
 
     if has_advanced {
         let rect = Rect::new(x, y, col_w, t.row_height);
-        let hovered = ui.hover == Some(Target::Advanced);
+        let hovered = hover(a, ui, Target::Advanced);
         p.canvas
             .rounded_rect(x, y, col_w, rect.h, t.card_radius, t.card_background);
-        if hovered {
+        if hovered > 0.0 {
+            let fill = t.hover.with_alpha(t.hover.a * hovered);
             p.canvas
-                .rounded_rect(x, y, col_w, rect.h, t.card_radius, t.hover);
+                .rounded_rect(x, y, col_w, rect.h, t.card_radius, fill);
         }
         p.label_v(
             "Advanced settings",
@@ -336,12 +386,17 @@ fn page(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, area: Rect) {
             t.window_text,
         );
         let sx = rect.right() - t.row_padding - t.switch_width;
-        p.switch(sx, y + (rect.h - t.switch_height) / 2.0, show_advanced);
+        let on = a.get(
+            AnimKey::Switch(Key::Path("advanced")),
+            if show_advanced { 1.0 } else { 0.0 },
+            SHORT,
+        );
+        p.switch(sx, y + (rect.h - t.switch_height) / 2.0, on);
         out.hits.push((rect, Target::Advanced));
         y += rect.h + GROUP_GAP;
     }
 
-    let content_h = y + ui.scroll - top + 24.0 - GROUP_GAP;
+    let content_h = y + ui.scroll - offset - top + 24.0 - GROUP_GAP;
     out.max_scroll = (content_h - area.h + 24.0).max(0.0);
 }
 
@@ -371,6 +426,7 @@ fn wallpaper_grid(col_w: f32, t: &Theme) -> (usize, f32, f32) {
 #[allow(clippy::too_many_arguments)]
 fn paint_row(
     ui: &Ui,
+    a: &mut Anim,
     p: &mut Painter<'_, '_>,
     out: &mut Painted,
     row: &Row,
@@ -381,13 +437,21 @@ fn paint_row(
 ) {
     let t = p.theme;
     if let Control::Wallpapers = row.control {
-        wallpapers(ui, p, out, row, rect);
+        wallpapers(ui, a, p, out, row, rect);
         return;
     }
     let activatable = matches!(row.control, Control::Switch { .. } | Control::Dropdown(_));
-    if activatable && ui.hover == Some(Target::Row(index)) {
+    let row_hover = if activatable {
+        hover(a, ui, Target::Row(index))
+    } else {
+        0.0
+    };
+    if row_hover > 0.0 {
         // Opaque, so squaring off the corners inside the card can overdraw.
-        let color = over(over(t.window_background, t.card_background), t.hover);
+        let color = over(
+            over(t.window_background, t.card_background),
+            t.hover.with_alpha(t.hover.a * row_hover),
+        );
         let Rect { x, y, w, h } = rect;
         p.canvas.rounded_rect(x, y, w, h, t.card_radius, color);
         if !first {
@@ -408,19 +472,28 @@ fn paint_row(
     let control_x = match &row.control {
         Control::Switch { .. } => {
             let x = right - t.switch_width;
-            let r = p.switch(x, cy - t.switch_height / 2.0, row.is_on());
+            let on = a.get(
+                AnimKey::Switch(row.key.clone()),
+                if row.is_on() { 1.0 } else { 0.0 },
+                SHORT,
+            );
+            let r = p.switch(x, cy - t.switch_height / 2.0, on);
             out.hits.push((r, Target::Switch(index)));
             x
         }
         Control::Segmented(choices) => {
             let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
             let x = right - p.segmented_width(&labels);
-            let selected = choices.iter().position(|c| c.value == row.value);
-            let hover = match ui.hover {
-                Some(Target::Segment(i, j)) if i == index => Some(j),
-                _ => None,
-            };
-            let rects = p.segmented(x, cy - t.button_height / 2.0, &labels, selected, hover);
+            let selected = choices
+                .iter()
+                .position(|c| c.value == row.value)
+                .map(|i| a.get(AnimKey::Segment(row.key.clone()), i as f32, SHORT));
+            let hovers: Vec<f32> = (0..labels.len())
+                .map(|j| hover(a, ui, Target::Segment(index, j)))
+                .collect();
+            let rects = p.segmented(x, cy - t.button_height / 2.0, &labels, selected, |j| {
+                hovers[j]
+            });
             for (j, r) in rects.into_iter().enumerate() {
                 out.hits.push((r, Target::Segment(index, j)));
             }
@@ -434,9 +507,8 @@ fn paint_row(
                 .iter()
                 .find(|c| c.value == row.value)
                 .map_or("", |c| c.label.as_str());
-            let hover =
-                matches!(ui.hover, Some(Target::Dropdown(i) | Target::Row(i)) if i == index);
-            p.dropdown(r, label, hover);
+            let lit = hover(a, ui, Target::Dropdown(index)).max(row_hover);
+            p.dropdown(r, label, lit);
             out.hits.push((r, Target::Dropdown(index)));
             r.x
         }
@@ -445,7 +517,15 @@ fn paint_row(
         } => {
             let r = Rect::new(right - SLIDER_WIDTH, cy - 14.0, SLIDER_WIDTH, 28.0);
             let v = row.value.as_f64().unwrap_or(*min);
-            p.scale(r, ((v - min) / (max - min)) as f32);
+            let fraction = ((v - min) / (max - min)) as f32;
+            let key = AnimKey::Slider(row.key.clone());
+            // Glides to a clicked spot; follows the pointer while dragged.
+            let shown = if ui.dragging.as_ref() == Some(&row.key) {
+                a.set(key, fraction)
+            } else {
+                a.get(key, fraction, SHORT)
+            };
+            p.scale(r, shown);
             out.hits.push((r, Target::Slider(index)));
             out.sliders.push((index, r));
             let text = format(v);
@@ -490,8 +570,10 @@ fn paint_row(
     let mut text_right = control_x - 12.0;
     if row.changed() {
         let r = Rect::new(control_x - 8.0 - 28.0, cy - 14.0, 28.0, 28.0);
-        if ui.hover == Some(Target::Reset(index)) {
-            p.canvas.circle(r.x + 14.0, cy, 14.0, t.button_hover);
+        let lit = hover(a, ui, Target::Reset(index));
+        if lit > 0.0 {
+            let fill = t.button_hover.with_alpha(t.button_hover.a * lit);
+            p.canvas.circle(r.x + 14.0, cy, 14.0, fill);
         }
         p.icon("edit-undo-symbolic", r.x + 14.0, cy, 16.0, t.window_dim);
         out.hits.push((r, Target::Reset(index)));
@@ -532,7 +614,14 @@ fn paint_row(
     }
 }
 
-fn wallpapers(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, row: &Row, rect: Rect) {
+fn wallpapers(
+    ui: &Ui,
+    a: &mut Anim,
+    p: &mut Painter<'_, '_>,
+    out: &mut Painted,
+    row: &Row,
+    rect: Rect,
+) {
     let t = p.theme;
     let (cols, tile_w, tile_h) = wallpaper_grid(rect.w, t);
     let current = expand(row.value.as_str());
@@ -582,10 +671,11 @@ fn wallpapers(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, row: &Row, re
         Weight::Normal,
         t.window_text,
     );
+    let lit = hover(a, ui, Target::Wallpaper(None));
     if current.is_none() {
         ring(p, r, t.accent);
-    } else if ui.hover == Some(Target::Wallpaper(None)) {
-        ring(p, r, t.button_hover);
+    } else if lit > 0.0 {
+        ring(p, r, t.button_hover.with_alpha(t.button_hover.a * lit));
     }
     out.hits.push((r, Target::Wallpaper(None)));
 
@@ -593,10 +683,11 @@ fn wallpapers(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, row: &Row, re
         let r = place(i + 1);
         p.canvas
             .image(thumb.image.as_ref(), r.x, r.y, r.w, r.h, 8.0);
+        let lit = hover(a, ui, Target::Wallpaper(Some(i)));
         if current.as_deref() == Some(thumb.path.as_path()) {
             ring(p, r, t.accent);
-        } else if ui.hover == Some(Target::Wallpaper(Some(i))) {
-            ring(p, r, t.button_hover);
+        } else if lit > 0.0 {
+            ring(p, r, t.button_hover.with_alpha(t.button_hover.a * lit));
         }
         out.hits.push((r, Target::Wallpaper(Some(i))));
     }
@@ -624,7 +715,15 @@ pub fn expand(path: &str) -> Option<std::path::PathBuf> {
     }
 }
 
-fn popover(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, key: &Key, w: f32, h: f32) {
+fn popover(
+    ui: &Ui,
+    a: &mut Anim,
+    p: &mut Painter<'_, '_>,
+    out: &mut Painted,
+    key: &Key,
+    w: f32,
+    h: f32,
+) {
     let Some((index, row)) = out
         .rows
         .iter()
@@ -646,7 +745,7 @@ fn popover(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, key: &Key, w: f3
     };
     let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
     let width = (p.dropdown_width(&labels) + 16.0).max(anchor.w);
-    let height = 36.0 * labels.len() as f32 + 12.0;
+    let height = Painter::popover_height(labels.len());
     let x = (anchor.right() - width).clamp(8.0, (w - width - 8.0).max(8.0));
     let below = anchor.bottom() + 4.0;
     let y = if below + height <= h - 8.0 {
@@ -655,11 +754,11 @@ fn popover(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, key: &Key, w: f3
         (anchor.y - 4.0 - height).max(8.0)
     };
     let selected = choices.iter().position(|c| c.value == row.value);
-    let hover = match ui.hover {
-        Some(Target::Choice(i)) => Some(i),
-        _ => None,
-    };
-    let rects = p.popover(x, y, width, &labels, selected, hover);
+    let hovers: Vec<f32> = (0..labels.len())
+        .map(|i| hover(a, ui, Target::Choice(i)))
+        .collect();
+    let appear = a.get(AnimKey::Popover, 1.0, SHORT);
+    let rects = p.popover(x, y, width, &labels, selected, |i| hovers[i], appear);
     for (i, r) in rects.into_iter().enumerate() {
         out.hits.push((r, Target::Choice(i)));
     }
@@ -691,6 +790,7 @@ mod tests {
             edit: None,
             error: None,
             rounded: true,
+            dragging: None,
         }
     }
 
@@ -703,6 +803,7 @@ mod tests {
             fonts: Fonts::new(theme.font_families),
             icons: Icons::new(),
             theme,
+            anim: Anim::new(),
         };
         let painted = {
             let mut canvas = Canvas::new(&mut pixels, w, h, 1.0).unwrap();

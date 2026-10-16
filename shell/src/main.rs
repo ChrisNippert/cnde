@@ -711,6 +711,7 @@ impl App {
             &mut self.pool,
             self.shm_format,
             panel::Draw {
+                qh: &self.qh,
                 fonts: &mut self.fonts,
                 icons: &mut self.icons,
                 theme: &self.theme,
@@ -786,6 +787,14 @@ impl CompositorHandler for App {
         surface: &wl_surface::WlSurface,
         _: u32,
     ) {
+        if let Some(i) = self
+            .panels
+            .iter()
+            .position(|p| p.layer.wl_surface() == surface)
+            && self.panels[i].frame_done()
+        {
+            self.draw_panel(i);
+        }
         if let Some((qs, _)) = &mut self.quick_settings
             && qs.popup.wl_surface() == surface
             && qs.frame_done()

@@ -3,9 +3,9 @@
 //! the centre, and the status icons on the right open quick settings.
 
 use chrono::Local;
-use cnde_ui::{Canvas, Fonts, Icons, Theme, Weight};
+use cnde_ui::{Animator, Canvas, Fonts, Icons, Theme, Weight, anim::SHORT};
 use smithay_client_toolkit::{
-    compositor::CompositorState,
+    compositor::{CompositorState, FrameCallbackData},
     reexports::client::{
         QueueHandle,
         protocol::{wl_output::WlOutput, wl_shm},
@@ -26,6 +26,7 @@ use crate::{
 
 /// Everything a panel draws from.
 pub struct Draw<'a> {
+    pub qh: &'a QueueHandle<App>,
     pub fonts: &'a mut Fonts,
     pub icons: &'a mut Icons,
     pub theme: &'a Theme,
@@ -37,7 +38,7 @@ pub struct Draw<'a> {
     pub quick_settings_open: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Button {
     Activities,
     Status,
@@ -56,6 +57,11 @@ pub struct Panel {
     status_region: Option<(f32, f32)>,
     /// The button under the pointer.
     hover: Option<Button>,
+    /// Hover pills fading: (button, true) for the "open" highlight.
+    anim: Animator<(Button, bool)>,
+    /// A frame callback is outstanding; draw when it fires.
+    frame_pending: bool,
+    dirty: bool,
 }
 
 impl Panel {
@@ -90,6 +96,9 @@ impl Panel {
             activities_region: None,
             status_region: None,
             hover: None,
+            anim: Animator::new(),
+            frame_pending: false,
+            dirty: false,
         }
     }
 
@@ -145,7 +154,7 @@ impl Panel {
 
     /// The pill behind a button: brighter while what it opens is open.
     fn button_background(
-        &self,
+        &mut self,
         canvas: &mut Canvas<'_>,
         theme: &Theme,
         (start, end): (f32, f32),
@@ -153,20 +162,34 @@ impl Panel {
         button: Button,
         open: bool,
     ) {
-        let color = if open {
-            theme.panel_button_active
-        } else if self.hover == Some(button) {
-            theme.panel_button_hover
-        } else {
+        let hovered = self.hover == Some(button);
+        let hovered = self
+            .anim
+            .get((button, false), if hovered { 1.0 } else { 0.0 }, SHORT);
+        let opened = self
+            .anim
+            .get((button, true), if open { 1.0 } else { 0.0 }, SHORT);
+        if hovered <= 0.0 && opened <= 0.0 {
             return;
-        };
+        }
+        let hover = theme.panel_button_hover;
+        let color = hover
+            .with_alpha(hover.a * hovered)
+            .mix(theme.panel_button_active, opened);
         let inset = theme.panel_button_inset;
         let h = height - 2.0 * inset;
         canvas.rounded_rect(start, inset, end - start, h, h / 2.0, color);
     }
 
+    /// The frame callback fired; true if a draw was held back for it.
+    pub fn frame_done(&mut self) -> bool {
+        self.frame_pending = false;
+        self.dirty
+    }
+
     pub fn draw(&mut self, pool: &mut SlotPool, format: wl_shm::Format, ctx: Draw<'_>) {
         let Draw {
+            qh,
             fonts,
             icons,
             theme,
@@ -179,6 +202,12 @@ impl Panel {
         if self.width == 0 {
             return; // not configured yet
         }
+        if self.frame_pending {
+            self.dirty = true;
+            return;
+        }
+        self.dirty = false;
+        self.anim.begin();
         let scale = self.scale;
         let (w, h) = (self.width as i32 * scale, self.height as i32 * scale);
         let (buffer, pixels) = match pool.create_buffer(w, h, w * 4, format) {
@@ -310,6 +339,12 @@ impl Panel {
         if let Err(err) = buffer.attach_to(surface) {
             warn!(?err, "can't attach panel buffer");
             return;
+        }
+        surface.frame(qh, FrameCallbackData(surface.clone()));
+        self.frame_pending = true;
+        // A pill still fading: draw again next frame.
+        if self.anim.running() {
+            self.dirty = true;
         }
         self.layer.commit();
     }

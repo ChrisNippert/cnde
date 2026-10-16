@@ -108,27 +108,24 @@ impl Painter<'_, '_> {
         );
     }
 
-    /// An on/off switch; (`x`, `y`) is its top-left.
-    pub fn switch(&mut self, x: f32, y: f32, on: bool) -> Rect {
+    /// An on/off switch; (`x`, `y`) is its top-left. `on` runs 0-1 so the
+    /// knob can slide (see [`crate::anim`]).
+    pub fn switch(&mut self, x: f32, y: f32, on: f32) -> Rect {
         let t = self.theme;
         let (w, h) = (t.switch_width, t.switch_height);
-        let track = if on { t.accent } else { t.switch_off };
+        let track = t.switch_off.mix(t.accent, on);
         self.canvas.rounded_rect(x, y, w, h, h / 2.0, track);
         let knob = h - 6.0;
-        let kx = if on { x + w - 3.0 - knob } else { x + 3.0 };
+        let kx = x + 3.0 + (w - 6.0 - knob) * on;
         self.canvas
             .circle(kx + knob / 2.0, y + h / 2.0, knob / 2.0, t.switch_knob);
         Rect::new(x, y, w, h)
     }
 
-    /// A flat rounded button background.
-    pub fn button(&mut self, rect: Rect, hover: bool) {
+    /// A flat rounded button background; `hover` (0-1) brightens it.
+    pub fn button(&mut self, rect: Rect, hover: f32) {
         let t = self.theme;
-        let color = if hover {
-            t.button_hover
-        } else {
-            t.button_background
-        };
+        let color = t.button_background.mix(t.button_hover, hover);
         self.canvas
             .rounded_rect(rect.x, rect.y, rect.w, rect.h, t.button_radius, color);
     }
@@ -142,15 +139,17 @@ impl Painter<'_, '_> {
             .sum()
     }
 
-    /// Linked toggle buttons, one per label, with `selected` lit; (`x`,
-    /// `y`) is the top-left. Returns each button's rect.
+    /// Linked toggle buttons, one per label; (`x`, `y`) is the top-left.
+    /// `selected` is the lit button's index, fractional while the
+    /// highlight slides between two; `hover(i)` is each button's hover
+    /// (0-1). Returns each button's rect.
     pub fn segmented(
         &mut self,
         x: f32,
         y: f32,
         labels: &[&str],
-        selected: Option<usize>,
-        hover: Option<usize>,
+        selected: Option<f32>,
+        hover: impl Fn(usize) -> f32,
     ) -> Vec<Rect> {
         let t = self.theme;
         let h = t.button_height;
@@ -160,51 +159,62 @@ impl Painter<'_, '_> {
             .rounded_rect(x, y, width, h, t.button_radius, t.button_background);
         let mut rects = Vec::with_capacity(labels.len());
         let mut bx = x;
-        for (i, label) in labels.iter().enumerate() {
+        for label in labels {
             let w = self.measure(label, size, Weight::Normal) + 24.0;
-            let rect = Rect::new(bx, y, w, h);
-            if selected == Some(i) {
+            rects.push(Rect::new(bx, y, w, h));
+            bx += w;
+        }
+        for (i, r) in rects.iter().enumerate() {
+            let amount = hover(i);
+            if amount > 0.0 {
+                let color = t.hover.with_alpha(t.hover.a * amount);
                 self.canvas.rounded_rect(
-                    bx + 2.0,
-                    y + 2.0,
-                    w - 4.0,
+                    r.x + 2.0,
+                    r.y + 2.0,
+                    r.w - 4.0,
                     h - 4.0,
                     t.button_radius - 2.0,
-                    t.accent,
-                );
-            } else if hover == Some(i) {
-                self.canvas.rounded_rect(
-                    bx + 2.0,
-                    y + 2.0,
-                    w - 4.0,
-                    h - 4.0,
-                    t.button_radius - 2.0,
-                    t.hover,
+                    color,
                 );
             }
-            let color = if selected == Some(i) {
-                t.on_accent
-            } else {
-                t.window_text
-            };
+        }
+        // The highlight, between the two buttons it's sliding between.
+        if let Some(pos) = selected.filter(|_| !rects.is_empty()) {
+            let pos = pos.clamp(0.0, (rects.len() - 1) as f32);
+            let (i, f) = (pos.floor() as usize, pos.fract());
+            let a = rects[i];
+            let b = rects[(i + 1).min(rects.len() - 1)];
+            let hx = a.x + (b.x - a.x) * f;
+            let hw = a.w + (b.w - a.w) * f;
+            self.canvas.rounded_rect(
+                hx + 2.0,
+                y + 2.0,
+                hw - 4.0,
+                h - 4.0,
+                t.button_radius - 2.0,
+                t.accent,
+            );
+        }
+        for (i, (label, r)) in labels.iter().zip(&rects).enumerate() {
+            // Text turns to the on-accent colour as the highlight arrives.
+            let lit = selected.map_or(0.0, |pos| (1.0 - (pos - i as f32).abs()).max(0.0));
+            let color = t.window_text.mix(t.on_accent, lit);
             self.label_v(
                 label,
-                bx + 12.0,
+                r.x + 12.0,
                 y + h / 2.0,
-                w,
+                r.w,
                 size,
                 Weight::Normal,
                 color,
             );
-            rects.push(rect);
-            bx += w;
         }
         rects
     }
 
     /// A button showing the current choice and a down arrow; `rect` is the
     /// whole button.
-    pub fn dropdown(&mut self, rect: Rect, label: &str, hover: bool) {
+    pub fn dropdown(&mut self, rect: Rect, label: &str, hover: f32) {
         let t = self.theme;
         self.button(rect, hover);
         let cy = rect.y + rect.h / 2.0;
@@ -236,7 +246,15 @@ impl Painter<'_, '_> {
             + 44.0
     }
 
-    /// A list of choices floating over the window. Returns each row's rect.
+    /// The height [`Painter::popover`] takes for `count` choices.
+    pub fn popover_height(count: usize) -> f32 {
+        36.0 * count as f32 + 12.0
+    }
+
+    /// A list of choices floating over the window. `appear` (0-1) fades it
+    /// in and slides it into place; `hover(i)` is each row's hover (0-1).
+    /// Returns each row's rect.
+    #[allow(clippy::too_many_arguments)]
     pub fn popover(
         &mut self,
         x: f32,
@@ -244,12 +262,15 @@ impl Painter<'_, '_> {
         width: f32,
         labels: &[&str],
         selected: Option<usize>,
-        hover: Option<usize>,
+        hover: impl Fn(usize) -> f32,
+        appear: f32,
     ) -> Vec<Rect> {
         let t = self.theme;
         let row = 36.0;
         let pad = 6.0;
-        let h = row * labels.len() as f32 + pad * 2.0;
+        let h = Self::popover_height(labels.len());
+        let y = y - 6.0 * (1.0 - appear);
+        let fade = |c: Color| c.with_alpha(c.a * appear);
         // A soft shadow: a few widening, fading outlines.
         for i in 1..=4 {
             let grow = i as f32 * 2.0;
@@ -259,19 +280,33 @@ impl Painter<'_, '_> {
                 width + grow * 2.0,
                 h + grow * 2.0,
                 t.popover_radius + grow,
-                Color::rgba(0, 0, 0, 0.05),
+                Color::rgba(0, 0, 0, 0.05 * appear),
             );
         }
         self.canvas
-            .rounded_rect(x, y, width, h, t.popover_radius, t.popover_background);
-        self.canvas
-            .stroke_rounded_rect(x, y, width, h, t.popover_radius, 1.0, t.card_separator);
+            .rounded_rect(x, y, width, h, t.popover_radius, fade(t.popover_background));
+        self.canvas.stroke_rounded_rect(
+            x,
+            y,
+            width,
+            h,
+            t.popover_radius,
+            1.0,
+            fade(t.card_separator),
+        );
         let mut rects = Vec::with_capacity(labels.len());
         for (i, label) in labels.iter().enumerate() {
             let rect = Rect::new(x + pad, y + pad + row * i as f32, width - pad * 2.0, row);
-            if hover == Some(i) {
-                self.canvas
-                    .rounded_rect(rect.x, rect.y, rect.w, rect.h, 6.0, t.hover);
+            let amount = hover(i) * appear;
+            if amount > 0.0 {
+                self.canvas.rounded_rect(
+                    rect.x,
+                    rect.y,
+                    rect.w,
+                    rect.h,
+                    6.0,
+                    t.hover.with_alpha(t.hover.a * amount),
+                );
             }
             let cy = rect.y + row / 2.0;
             self.label_v(
@@ -281,7 +316,7 @@ impl Painter<'_, '_> {
                 rect.w - 40.0,
                 t.font_size,
                 Weight::Normal,
-                t.window_text,
+                fade(t.window_text),
             );
             if selected == Some(i) {
                 self.icon(
@@ -289,7 +324,7 @@ impl Painter<'_, '_> {
                     rect.right() - 16.0,
                     cy,
                     16.0,
-                    t.window_text,
+                    fade(t.window_text),
                 );
             }
             rects.push(rect);
