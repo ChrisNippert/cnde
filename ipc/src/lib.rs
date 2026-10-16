@@ -116,6 +116,14 @@ pub enum Request {
     /// An app was just started: show a busy pointer until a window opens
     /// (or a few seconds pass).
     Launching,
+    /// Testing aid, honoured only by debug builds: move the pointer to
+    /// (x, y) in the global space, then press or release the left button.
+    FakePointer {
+        x: f64,
+        y: f64,
+        #[serde(default)]
+        press: Option<bool>,
+    },
 }
 
 /// The overview while the app grid shows: workspace thumbnails in a row

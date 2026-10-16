@@ -28,6 +28,8 @@ pub struct WinitBackend {
     damage_tracker: OutputDamageTracker,
     pub dmabuf_state: DmabufState,
     _dmabuf_global: DmabufGlobal,
+    /// The named cursor last shown on the host window.
+    cursor: smithay::input::pointer::CursorIcon,
 }
 
 pub fn init(
@@ -68,6 +70,7 @@ pub fn init(
             damage_tracker,
             dmabuf_state,
             _dmabuf_global: dmabuf_global,
+            cursor: smithay::input::pointer::CursorIcon::Default,
         },
         events,
     ))
@@ -175,6 +178,16 @@ impl State {
         let Backend::Winit(backend) = &mut self.backend else {
             return;
         };
+        // The host draws the pointer: show it the cursor clients name, so
+        // resize arrows and the like can be seen nested too.
+        let icon = match &self.cursor_status {
+            smithay::input::pointer::CursorImageStatus::Named(icon) => *icon,
+            _ => smithay::input::pointer::CursorIcon::Default,
+        };
+        if icon != backend.cursor {
+            backend.cursor = icon;
+            backend.graphics.window().set_cursor(icon);
+        }
         let damage = {
             let (renderer, mut framebuffer) = match backend.graphics.bind() {
                 Ok(bound) => bound,

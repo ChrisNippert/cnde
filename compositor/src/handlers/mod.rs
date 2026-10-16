@@ -5,8 +5,8 @@ mod xdg_shell;
 
 use smithay::{
     backend::allocator::dmabuf::Dmabuf,
-    delegate_data_device, delegate_dmabuf, delegate_output, delegate_seat, delegate_viewporter,
-    delegate_xdg_decoration,
+    delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_output, delegate_seat,
+    delegate_viewporter, delegate_xdg_decoration,
     input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
     reexports::{
         wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
@@ -38,6 +38,7 @@ impl SeatHandler for State {
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        tracing::trace!(?image, "cursor image");
         self.cursor_status = image;
         if self.backend.draws_cursor() {
             self.queue_redraw();
@@ -104,6 +105,11 @@ delegate_dmabuf!(State);
 // Surface cropping/scaling. Required by xwayland-satellite, and the basis
 // for fractional scaling later.
 delegate_viewporter!(State);
+
+// Clients name their cursor (resize arrows, text beam, ...) instead of
+// drawing it, so it matches the theme; GTK 4, Qt and cnde-settings use it.
+impl smithay::wayland::tablet_manager::TabletSeatHandler for State {}
+delegate_cursor_shape!(State);
 
 /// Who draws title bars: see `decorations`.
 impl XdgDecorationHandler for State {

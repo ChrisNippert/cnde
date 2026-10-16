@@ -266,6 +266,20 @@ impl State {
         }
     }
 
+    /// Debug builds' `FakePointer` IPC request, for driving nested tests.
+    pub fn fake_pointer(&mut self, location: Point<f64, Logical>, press: Option<bool>) {
+        let time = self.start_time.elapsed().as_millis() as u32;
+        self.on_pointer_motion(location, time);
+        if let Some(press) = press {
+            let state = if press {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Released
+            };
+            self.on_pointer_button(BTN_LEFT, state, time);
+        }
+    }
+
     fn on_pointer_motion(&mut self, location: Point<f64, Logical>, time: u32) {
         let Some(pointer) = self.seat.get_pointer() else {
             return;

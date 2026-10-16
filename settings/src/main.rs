@@ -46,7 +46,10 @@ use smithay_client_toolkit::{
     seat::{
         Capability, SeatHandler, SeatState,
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
-        pointer::{BTN_LEFT, PointerEvent, PointerEventKind, PointerHandler},
+        pointer::{
+            BTN_LEFT, CursorIcon, PointerEvent, PointerEventKind, PointerHandler, ThemeSpec,
+            ThemedPointer,
+        },
     },
     shell::{
         WaylandSurface,
@@ -71,6 +74,9 @@ const RESIZE_BORDER: f64 = 6.0;
 const ERROR_TIMEOUT: Duration = Duration::from_secs(6);
 /// Two header clicks this close together maximize.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+/// While resizing, a configure waits this long for the last frame to show
+/// before painting anyway.
+const CONFIGURE_WAIT: Duration = Duration::from_millis(40);
 
 struct App {
     registry: RegistryState,
@@ -79,6 +85,7 @@ struct App {
     shm: Shm,
     pool: SlotPool,
     qh: QueueHandle<App>,
+    conn: Connection,
     shm_format: wl_shm::Format,
     window: Window,
     loop_handle: LoopHandle<'static, App>,
@@ -97,7 +104,13 @@ struct App {
     dirty: bool,
 
     seat_handle: Option<wl_seat::WlSeat>,
-    pointer: Option<wl_pointer::WlPointer>,
+    pointer: Option<ThemedPointer>,
+    /// The surface the pointer's cursor image goes on, until a pointer
+    /// takes it.
+    cursor_surface: Option<wl_surface::WlSurface>,
+    cursor: CursorIcon,
+    /// A configure is waiting for the frame callback (or a timeout).
+    configure_waiting: bool,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     modifiers: Modifiers,
     pointer_pos: (f64, f64),
@@ -148,6 +161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let compositor = CompositorState::bind(&globals, &qh)?;
     let xdg_shell = XdgShell::bind(&globals, &qh)?;
     let shm = Shm::bind(&globals, &qh)?;
+    let cursor_surface = compositor.create_surface(&qh);
     let surface = compositor.create_surface(&qh);
     let window = xdg_shell.create_window(surface, WindowDecorations::RequestClient, &qh);
     window.set_title("Settings");
@@ -176,6 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool: SlotPool::new((DEFAULT_SIZE.0 * DEFAULT_SIZE.1 * 4) as usize, &shm)?,
         shm,
         qh: qh.clone(),
+        conn: conn.clone(),
         shm_format: wl_shm::Format::Argb8888,
         window,
         loop_handle: event_loop.handle(),
@@ -212,6 +227,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dirty: false,
         seat_handle: None,
         pointer: None,
+        cursor_surface: Some(cursor_surface),
+        cursor: CursorIcon::Default,
+        configure_waiting: false,
         keyboard: None,
         modifiers: Modifiers::default(),
         pointer_pos: (0.0, 0.0),
@@ -791,6 +809,28 @@ impl App {
         self.redraw();
     }
 
+    /// Resize arrows over the edges, the plain arrow elsewhere. The cursor
+    /// must be set again on every enter.
+    fn update_cursor(&mut self, entered: bool) {
+        let icon = match self.resize_edge(self.pointer_pos) {
+            Some(ResizeEdge::TopLeft) => CursorIcon::NwResize,
+            Some(ResizeEdge::TopRight) => CursorIcon::NeResize,
+            Some(ResizeEdge::BottomLeft) => CursorIcon::SwResize,
+            Some(ResizeEdge::BottomRight) => CursorIcon::SeResize,
+            Some(ResizeEdge::Left) => CursorIcon::WResize,
+            Some(ResizeEdge::Right) => CursorIcon::EResize,
+            Some(ResizeEdge::Top) => CursorIcon::NResize,
+            Some(ResizeEdge::Bottom) => CursorIcon::SResize,
+            _ => CursorIcon::Default,
+        };
+        if (entered || icon != self.cursor)
+            && let Some(pointer) = &self.pointer
+        {
+            self.cursor = icon;
+            let _ = pointer.set_cursor(&self.conn, icon);
+        }
+    }
+
     fn resize_edge(&self, (x, y): (f64, f64)) -> Option<ResizeEdge> {
         if self.maximized {
             return None;
@@ -891,9 +931,29 @@ impl WindowHandler for App {
             self.configured = true;
             self.choose_shm_format();
         }
-        // A new size must be answered with a buffer even mid-frame.
-        self.frame_pending = false;
-        self.redraw();
+        // Paint at the display's pace: a drag sends a configure per pointer
+        // motion, and painting each one at once queues frames up behind the
+        // pointer. The frame callback paints the latest size; if it doesn't
+        // come soon (hidden, say), paint anyway.
+        if !self.frame_pending {
+            self.redraw();
+            return;
+        }
+        self.dirty = true;
+        if !self.configure_waiting {
+            self.configure_waiting = true;
+            let _ = self.loop_handle.insert_source(
+                Timer::from_duration(CONFIGURE_WAIT),
+                |_, _, app| {
+                    app.configure_waiting = false;
+                    if app.dirty {
+                        app.frame_pending = false;
+                        app.redraw();
+                    }
+                    TimeoutAction::Drop
+                },
+            );
+        }
     }
 }
 
@@ -969,8 +1029,20 @@ impl SeatHandler for App {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
-        if capability == Capability::Pointer && self.pointer.is_none() {
-            self.pointer = self.seat.get_pointer(qh, &seat).ok();
+        if capability == Capability::Pointer
+            && self.pointer.is_none()
+            && let Some(surface) = self.cursor_surface.take()
+        {
+            self.pointer = self
+                .seat
+                .get_pointer_with_theme::<_, ()>(
+                    qh,
+                    &seat,
+                    self.shm.wl_shm(),
+                    surface,
+                    ThemeSpec::default(),
+                )
+                .ok();
         }
         if capability == Capability::Keyboard && self.keyboard.is_none() {
             self.keyboard = self
@@ -996,7 +1068,7 @@ impl SeatHandler for App {
         if capability == Capability::Pointer
             && let Some(pointer) = self.pointer.take()
         {
-            pointer.release();
+            pointer.pointer().release();
         }
         if capability == Capability::Keyboard
             && let Some(keyboard) = self.keyboard.take()
@@ -1019,6 +1091,8 @@ impl PointerHandler for App {
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     self.pointer_pos = event.position;
+                    let entered = matches!(event.kind, PointerEventKind::Enter { .. });
+                    self.update_cursor(entered);
                     if self.dragging.is_some() {
                         self.drag(event.position.0);
                         continue;

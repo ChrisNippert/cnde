@@ -149,6 +149,7 @@ impl State {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
+        smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(&dh);
         crate::ext_workspace::init(&dh);
         let capture = crate::capture::CaptureState::new(&dh);
         let mut seat_state = SeatState::new();

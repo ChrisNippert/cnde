@@ -175,6 +175,10 @@ impl State {
                 self.launching = Some(std::time::Instant::now());
                 self.queue_redraw();
             }
+            Request::FakePointer { x, y, press } if cfg!(debug_assertions) => {
+                self.fake_pointer((x, y).into(), press)
+            }
+            Request::FakePointer { .. } => {}
             Request::CancelScreenshot => {
                 if self.screenshot.active {
                     self.cancel_screenshot();
