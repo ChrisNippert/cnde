@@ -10,6 +10,7 @@ use smithay::{
         solid::{SolidColorBuffer, SolidColorRenderElement},
     },
     desktop::Window,
+    output::Output,
     utils::{Logical, Point, Rectangle, Scale, Size},
 };
 
@@ -34,6 +35,8 @@ const PREVIEW_BORDER_WIDTH: i32 = 2;
 
 pub struct SnapPreview {
     pub target: Placement,
+    /// The monitor the preview is on; the snap lands there.
+    pub output: Output,
     to: Rectangle<f64, Logical>,
     from: Rectangle<f64, Logical>,
     anim: Animation,
@@ -119,14 +122,18 @@ impl State {
     pub fn update_snap_preview(&mut self, window: &Window, pointer: Point<f64, Logical>) {
         let output = self.space.output_under(pointer).next().cloned();
         // Snap within what panels leave free, like maximize does.
-        let area = output.and_then(|o| self.usable_area(&o));
+        let area = output.as_ref().and_then(|o| self.usable_area(o));
         let target = area.and_then(|area| snap_target(pointer, area));
 
-        if self.snap_preview.as_ref().map(|p| p.target) == target {
+        let current = self
+            .snap_preview
+            .as_ref()
+            .map(|p| (p.target, p.output.clone()));
+        if current == target.zip(output.clone()) {
             return;
         }
         self.queue_redraw();
-        let (Some(target), Some(area)) = (target, area) else {
+        let (Some(target), Some(area), Some(output)) = (target, area, output) else {
             self.snap_preview = None;
             return;
         };
@@ -143,6 +150,7 @@ impl State {
         let buffer = || SolidColorBuffer::new(Size::default(), PREVIEW_COLOR);
         self.snap_preview = Some(SnapPreview {
             target,
+            output,
             to: placement_rect(target, area).to_f64(),
             from,
             anim: Animation::new(0.0, 1.0, presets::SNAP_PREVIEW),

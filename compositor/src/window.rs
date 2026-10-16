@@ -17,7 +17,7 @@ use tracing::debug;
 use crate::{
     animation::{Animation, presets},
     effects::{self, ClosingWindow, ResizeAnim},
-    snapshot::Snapshot,
+    snapshot::{LastFrame, Snapshot},
     state::State,
 };
 
@@ -38,6 +38,8 @@ pub struct WindowState {
     pub restore: Option<Rectangle<i32, Logical>>,
     pub open_anim: Option<Animation>,
     pub resize_anim: Option<ResizeAnim>,
+    /// What we last drew, for close animations of killed clients.
+    pub last_frame: Option<LastFrame>,
     /// Geometry size at the last commit, to notice client-driven resizes.
     pub last_size: Size<i32, Logical>,
 }
@@ -97,10 +99,13 @@ impl State {
     /// The area a window in `placement` may occupy on its monitor: the whole
     /// monitor when fullscreen, otherwise what panels leave free.
     fn area_for(&self, window: &Window, placement: Placement) -> Option<Rectangle<i32, Logical>> {
-        let output = self.output_for(window)?;
+        self.area_on(&self.output_for(window)?, placement)
+    }
+
+    fn area_on(&self, output: &Output, placement: Placement) -> Option<Rectangle<i32, Logical>> {
         match placement {
-            Placement::Fullscreen => self.space.output_geometry(&output),
-            _ => self.usable_area(&output),
+            Placement::Fullscreen => self.space.output_geometry(output),
+            _ => self.usable_area(output),
         }
     }
 
@@ -120,13 +125,23 @@ impl State {
     /// Keep showing a destroyed window as a fading, shrinking snapshot. Must
     /// run before the window is unmapped, while its buffers still exist.
     pub fn start_close_animation(&mut self, window: &Window) {
-        let Some(rect) = self.visual_rect(window) else {
-            return;
-        };
         let Some(below) = self.space.elements().position(|w| w == window) else {
             return;
         };
-        let snapshot = self.snapshot(window);
+        let last_frame = with_state(window, |s| s.last_frame.take());
+        // A killed client's surfaces are already gone: its geometry is empty
+        // and a live capture fails, so fall back to the last drawn frame.
+        let alive = !window.geometry().is_empty();
+        let rect = if alive {
+            self.visual_rect(window)
+        } else {
+            last_frame.as_ref().map(|frame| frame.rect)
+        };
+        let Some(rect) = rect else {
+            return;
+        };
+        let snapshot = if alive { self.snapshot(window) } else { None }
+            .or_else(|| Snapshot::from_last_frame(self.backend.renderer()?, last_frame?));
         debug!(captured = snapshot.is_some(), "window closing");
         if let Some(snapshot) = snapshot {
             self.closing.push(ClosingWindow::new(snapshot, rect, below));
@@ -225,15 +240,32 @@ impl State {
     /// `animate`, the window glides from where it is now once the client has
     /// redrawn at the new size.
     pub fn set_placement(&mut self, window: &Window, target: Placement, animate: bool) {
+        self.set_placement_on(window, target, animate, None);
+    }
+
+    /// [`set_placement`](Self::set_placement) on a specific monitor rather
+    /// than the one the window is mostly on (drag-to-snap uses the monitor
+    /// under the pointer, where the preview was shown).
+    pub fn set_placement_on(
+        &mut self,
+        window: &Window,
+        target: Placement,
+        animate: bool,
+        output: Option<Output>,
+    ) {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
         let current = Self::placement_of(window);
         debug!(from = ?current, to = ?target, "set_placement");
-        if current == target {
+        if current == target && output.is_none() {
             return;
         }
-        let Some(area) = self.area_for(window, target) else {
+        let area = match &output {
+            Some(output) => self.area_on(output, target),
+            None => self.area_for(window, target),
+        };
+        let Some(area) = area else {
             return;
         };
         let mapped_location = self.space.element_location(window);

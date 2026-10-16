@@ -28,7 +28,7 @@ use crate::{
     cursor::Cursors,
     effects::{self, ClosingWindow},
     snap::SnapPreview,
-    snapshot::Snapshot,
+    snapshot::{LastFrame, Snapshot},
     window::{Placement, with_state},
 };
 
@@ -202,6 +202,9 @@ fn window_elements(
     };
     with_state(win, |state| {
         let frame = effects::window_frame(state, live.to_f64(), now);
+        if !win.geometry().is_empty() {
+            state.last_frame = Some(LastFrame::record(renderer, win, scale, frame.rect));
+        }
         let rect = Rectangle::new(frame.rect.loc - output_loc, frame.rect.size);
         let mut elements = Vec::new();
 

@@ -63,10 +63,13 @@ impl PointerGrab<State> for MoveSurfaceGrab {
         if !handle.current_pressed().contains(&BTN_LEFT) {
             // No more buttons are pressed, release the grab, applying any
             // drag-to-edge snap that was being previewed.
-            let snap = data.snap_preview.as_ref().map(|p| p.target);
+            let snap = data
+                .snap_preview
+                .as_ref()
+                .map(|p| (p.target, p.output.clone()));
             handle.unset_grab(self, data, event.serial, event.time, true);
-            if let Some(target) = snap {
-                data.set_placement(&self.window, target, true);
+            if let Some((target, output)) = snap {
+                data.set_placement_on(&self.window, target, true, Some(output));
             }
         }
     }
