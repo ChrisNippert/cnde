@@ -911,6 +911,36 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
         );
     }
     if c.dock.position != DockPosition::Off {
+        let background = |v: cnde_config::DockBackground| {
+            s(match v {
+                cnde_config::DockBackground::Solid => "solid",
+                cnde_config::DockBackground::Frosted => "frosted",
+            })
+        };
+        rows.push(
+            Row::new(
+                "dock.background",
+                "Background",
+                Control::Segmented(choices(&[("Solid", s("solid")), ("Frosted", s("frosted"))])),
+                background(c.dock.background),
+                background(d.dock.background),
+            )
+            .sub("Frosted shows the wallpaper through, blurred"),
+        );
+    }
+    if on_edge {
+        rows.push(
+            Row::new(
+                "dock.extend",
+                "Stretch across the edge",
+                Control::switch(),
+                Value::Bool(c.dock.extend),
+                Value::Bool(d.dock.extend),
+            )
+            .sub("Instead of sitting in the middle, sized to its icons"),
+        );
+    }
+    if c.dock.position != DockPosition::Off {
         rows.push(Row::new(
             "dock.icon_size",
             "Icon size",

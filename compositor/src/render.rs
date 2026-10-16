@@ -94,6 +94,7 @@ render_elements! {
     Surface = WaylandSurfaceRenderElement<GlesRenderer>,
     Wallpaper = TextureRenderElement<GlesTexture>,
     Shader = PixelShaderElement,
+    Frost = crate::frost::Frost,
 }
 
 /// The pointer, if it's on this output: a themed image, or the surface a
@@ -172,6 +173,9 @@ pub fn output_elements(
     // Drawn below the windows (the overview's workspace cards and dimming);
     // replaces the bottom and background layers when not empty.
     backdrop: Vec<OutputElement>,
+    // Frosted glass under the dock (see `frost`): just below the layers
+    // above the windows.
+    frost: Vec<OutputElement>,
     popups: &mut PopupAnims,
     output: &Output,
     now: Instant,
@@ -242,6 +246,7 @@ pub fn output_elements(
     let mut elements = layer(renderer, Layer::Overlay);
     if !fullscreen {
         elements.extend(layer(renderer, Layer::Top));
+        elements.extend(frost);
     }
     elements.extend(window_elements);
     if fullscreen {

@@ -25,7 +25,7 @@ use smithay::{
     },
     output::Output,
     reexports::calloop::{LoopHandle, channel},
-    utils::{Buffer, Logical, Physical, Rectangle, Size, Transform},
+    utils::{Buffer, Logical, Physical, Point, Rectangle, Size, Transform},
 };
 use tracing::{info, warn};
 
@@ -209,6 +209,47 @@ impl Wallpapers {
             logical,
             Some(alpha),
         ))
+    }
+
+    /// The part of the frosted wallpaper under `area` (logical,
+    /// output-local), and where that part sits in the texture (x0, y0, x1,
+    /// y1 in texture coordinates).
+    pub fn blurred_crop(
+        &self,
+        output: &Output,
+        area: Rectangle<i32, Logical>,
+    ) -> Option<(TextureRenderElement<GlesTexture>, [f32; 4])> {
+        let entry = self.entries.get(&output.name())?;
+        let texture = entry.blurred.as_ref()?;
+        let mode = output.current_mode()?;
+        let size = output.current_transform().transform_size(mode.size);
+        let scale = output.current_scale().fractional_scale();
+        let logical = size.to_f64().to_logical(scale);
+        let blurred = entry.blurred_size;
+        let (fx, fy) = (
+            blurred.w as f64 / logical.w.max(1.0),
+            blurred.h as f64 / logical.h.max(1.0),
+        );
+        let area = area.to_f64();
+        let src = Rectangle::new(
+            Point::from((area.loc.x * fx, area.loc.y * fy)),
+            Size::from((area.size.w * fx, area.size.h * fy)),
+        );
+        let crop = [
+            (src.loc.x / blurred.w as f64) as f32,
+            (src.loc.y / blurred.h as f64) as f32,
+            ((src.loc.x + src.size.w) / blurred.w as f64) as f32,
+            ((src.loc.y + src.size.h) / blurred.h as f64) as f32,
+        ];
+        let element = TextureRenderElement::from_texture_buffer(
+            area.loc.to_physical(scale),
+            texture,
+            None,
+            Some(src),
+            Some(area.size.to_i32_round()),
+            Kind::Unspecified,
+        );
+        Some((element, crop))
     }
 
     /// A monitor is gone: free its texture.

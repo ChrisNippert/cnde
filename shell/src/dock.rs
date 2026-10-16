@@ -6,7 +6,7 @@
 //! one that isn't launches it, and a middle click always opens a new one.
 //! The window list and focusing go through the compositor (see `ipc`).
 
-use cnde_config::DockPosition;
+use cnde_config::{DockBackground, DockPosition};
 use cnde_ipc::WindowInfo;
 use cnde_ui::{Canvas, Color, Icons, Theme};
 use smithay_client_toolkit::{
@@ -257,6 +257,12 @@ pub struct Dock {
     pub output: WlOutput,
     pub layer: LayerSurface,
     position: DockPosition,
+    /// Stretched across its whole edge (`dock.extend`).
+    extend: bool,
+    /// Translucent: the compositor frosts the wallpaper behind it.
+    pub frosted: bool,
+    /// The size the compositor gave the surface (stretched docks).
+    surface_size: (u32, u32),
     scale: i32,
     configured: bool,
     frame_pending: bool,
@@ -275,6 +281,7 @@ impl Dock {
         qh: &QueueHandle<App>,
         output: WlOutput,
         position: DockPosition,
+        extend: bool,
         scale: i32,
     ) -> Self {
         let surface = compositor.create_surface(qh);
@@ -289,14 +296,24 @@ impl Dock {
             qh,
             surface,
             layer_kind,
-            Some("cnde-dock"),
+            Some(cnde_ipc::dock::NAMESPACE),
             Some(&output),
         );
+        // The overview dock always floats, sized to its icons.
+        let extend = extend && position != DockPosition::Overview;
         let (anchor, margin) = match position {
             DockPosition::Left => (Anchor::LEFT, EDGE_MARGIN),
             DockPosition::Right => (Anchor::RIGHT, EDGE_MARGIN),
             DockPosition::Overview => (Anchor::BOTTOM, OVERVIEW_MARGIN),
             _ => (Anchor::BOTTOM, EDGE_MARGIN),
+        };
+        // Stretched: flush against the edge, from end to end.
+        let (anchor, margin) = match (extend, position) {
+            (false, _) => (anchor, margin),
+            (true, DockPosition::Left | DockPosition::Right) => {
+                (anchor | Anchor::TOP | Anchor::BOTTOM, 0)
+            }
+            (true, _) => (anchor | Anchor::LEFT | Anchor::RIGHT, 0),
         };
         layer.set_anchor(anchor);
         layer.set_margin(margin, margin, margin, margin);
@@ -306,6 +323,9 @@ impl Dock {
             output,
             layer,
             position,
+            extend,
+            frosted: false,
+            surface_size: (0, 0),
             scale: scale.max(1),
             configured: false,
             frame_pending: false,
@@ -321,8 +341,31 @@ impl Dock {
         self.position
     }
 
+    pub fn extend(&self) -> bool {
+        self.extend
+    }
+
     fn layout(&self, icon: f32) -> Layout {
-        layout(&self.items, icon, self.vertical(), self.edit.is_some())
+        let layout = layout(&self.items, icon, self.vertical(), self.edit.is_some());
+        let length = if self.vertical() {
+            self.surface_size.1
+        } else {
+            self.surface_size.0
+        };
+        if self.extend {
+            spread(layout, length as f32, self.vertical())
+        } else {
+            layout
+        }
+    }
+
+    /// Corner radius of the background: square when it meets both ends.
+    fn radius(&self) -> f32 {
+        if self.extend {
+            0.0
+        } else {
+            cnde_ipc::dock::RADIUS as f32
+        }
     }
 
     /// Recompute the size after starting or finishing editing.
@@ -381,12 +424,16 @@ impl Dock {
         let size = (layout.width.ceil() as u32, layout.height.ceil() as u32);
         if size != self.size {
             self.size = size;
-            self.layer.set_size(size.0, size.1);
+            let thickness = if self.vertical() { size.0 } else { size.1 };
+            match (self.extend, self.vertical()) {
+                (false, _) => self.layer.set_size(size.0, size.1),
+                (true, true) => self.layer.set_size(thickness, 0),
+                (true, false) => self.layer.set_size(0, thickness),
+            }
             if self.position != DockPosition::Overview {
                 // Maximized windows stop at the dock.
-                let thickness = if self.vertical() { size.0 } else { size.1 };
-                self.layer
-                    .set_exclusive_zone(thickness as i32 + EDGE_MARGIN);
+                let margin = if self.extend { 0 } else { EDGE_MARGIN };
+                self.layer.set_exclusive_zone(thickness as i32 + margin);
             }
             if !self.configured {
                 self.layer.commit();
@@ -402,8 +449,9 @@ impl Dock {
         self.hover = self.hover.filter(|&h| h < cells);
     }
 
-    pub fn configured(&mut self) {
+    pub fn configured(&mut self, size: (u32, u32)) {
         self.configured = true;
+        self.surface_size = size;
     }
 
     pub fn set_scale(&mut self, scale: i32) {
@@ -440,7 +488,12 @@ impl Dock {
 
     /// The dock's own size, logical.
     pub fn size(&self) -> (u32, u32) {
-        self.size
+        let layout_size = self.size;
+        match (self.extend, self.vertical()) {
+            (true, true) if self.surface_size.1 > 0 => (layout_size.0, self.surface_size.1),
+            (true, false) if self.surface_size.0 > 0 => (self.surface_size.0, layout_size.1),
+            _ => layout_size,
+        }
     }
 
     pub fn items(&self) -> &[Item] {
@@ -506,6 +559,10 @@ impl Dock {
                 self.hover,
                 self.vertical(),
                 self.edit.as_ref(),
+                Look {
+                    radius: self.radius(),
+                    frosted: self.frosted,
+                },
                 icons,
                 theme,
                 icon,
@@ -534,24 +591,31 @@ fn paint(
     hover: Option<usize>,
     vertical: bool,
     edit: Option<&DockEdit>,
+    look: Look,
     icons: &mut Icons,
     theme: &Theme,
     icon: f32,
 ) {
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
     let drag = edit.and_then(|e| e.drag);
-    // Carrying the dock: tinted, so it's clear it's moving.
-    let background = if matches!(drag, Some(DockDrag::Move { .. })) {
-        theme.search_background.mix(theme.accent, 0.35)
+    // Frosted: a light tint over the blur the compositor draws behind.
+    let base = if look.frosted {
+        theme.search_background.with_alpha(FROSTED_ALPHA)
     } else {
         theme.search_background
+    };
+    // Carrying the dock: tinted, so it's clear it's moving.
+    let background = if matches!(drag, Some(DockDrag::Move { .. })) {
+        base.mix(theme.accent, 0.35)
+    } else {
+        base
     };
     canvas.rounded_rect(
         0.0,
         0.0,
         layout.width,
         layout.height,
-        theme.search_results_radius,
+        look.radius,
         background,
     );
     if edit.is_some() {
@@ -560,7 +624,7 @@ fn paint(
             0.0,
             layout.width,
             layout.height,
-            theme.search_results_radius,
+            look.radius,
             2.0,
             theme.accent,
         );
@@ -757,6 +821,61 @@ fn paint(
     }
 }
 
+/// How the dock's background is drawn.
+#[derive(Debug, Clone, Copy)]
+struct Look {
+    radius: f32,
+    frosted: bool,
+}
+
+/// How opaque a frosted dock's tint is.
+const FROSTED_ALPHA: f32 = 0.45;
+
+impl Look {
+    #[cfg(test)]
+    fn plain() -> Self {
+        Self {
+            radius: cnde_ipc::dock::RADIUS as f32,
+            frosted: false,
+        }
+    }
+}
+
+/// A stretched dock: the same cells, centred along `length`.
+fn spread(mut layout: Layout, length: f32, vertical: bool) -> Layout {
+    let natural = if vertical {
+        layout.height
+    } else {
+        layout.width
+    };
+    if length <= natural {
+        return layout;
+    }
+    let shift = ((length - natural) / 2.0).round();
+    let moved = |r: &mut Rect| {
+        if vertical {
+            r.y += shift;
+        } else {
+            r.x += shift;
+        }
+    };
+    layout.cells.iter_mut().for_each(moved);
+    if let Some(line) = &mut layout.separator {
+        moved(line);
+    }
+    if vertical {
+        layout.height = length;
+    } else {
+        layout.width = length;
+    }
+    layout
+}
+
+/// Whether `background` means the compositor frosts behind the dock.
+pub fn frosted(background: DockBackground) -> bool {
+    background == DockBackground::Frosted
+}
+
 /// The × on a pinned icon while editing: its top-right corner.
 fn badge_rect(cell: Rect) -> Rect {
     Rect {
@@ -836,6 +955,7 @@ mod tests {
                 Some(1),
                 false,
                 None,
+                Look::plain(),
                 &mut icons,
                 &theme,
                 48.0,

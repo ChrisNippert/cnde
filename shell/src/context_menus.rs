@@ -282,6 +282,23 @@ impl App {
                 Action::Config(vec![("dock.icon_size", Value::Int(size))]),
             ));
         }
+        entries.push(Entry::Section("Style".into()));
+        let frosted = dock.background == cnde_config::DockBackground::Frosted;
+        entries.push(Entry::check(
+            "Frosted",
+            frosted,
+            Action::Config(vec![(
+                "dock.background",
+                Value::Str(if frosted { "solid" } else { "frosted" }.into()),
+            )]),
+        ));
+        if dock.position != DockPosition::Overview {
+            entries.push(Entry::check(
+                "Stretch Across the Edge",
+                dock.extend,
+                Action::Config(vec![("dock.extend", Value::Bool(!dock.extend))]),
+            ));
+        }
         entries.push(Entry::Separator);
         let edit = if self.dock_editing {
             "Done Editing"

@@ -74,6 +74,7 @@ pub struct State {
     /// Snapshots of destroyed windows, still animating out.
     pub closing: Vec<ClosingWindow>,
     pub wallpapers: crate::wallpaper::Wallpapers,
+    pub dock_frost: crate::frost::DockFrost,
     pub overview: crate::overview::Overview,
     pub ipc: crate::ipc::IpcClients,
     pub popup_anims: crate::popup_anim::PopupAnims,
@@ -168,6 +169,7 @@ impl State {
             unmapped: Vec::new(),
             closing: Vec::new(),
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
+            dock_frost: Default::default(),
             overview: crate::overview::Overview::new(),
             ipc: Default::default(),
             popup_anims: Default::default(),

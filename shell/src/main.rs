@@ -620,11 +620,11 @@ impl App {
             DockPosition::Overview if !self.overview_open => None,
             _ => self.dock_output.clone(),
         };
-        if self
-            .dock
-            .as_ref()
-            .is_some_and(|d| Some(&d.output) != wanted.as_ref() || d.position() != position)
-        {
+        if self.dock.as_ref().is_some_and(|d| {
+            Some(&d.output) != wanted.as_ref()
+                || d.position() != position
+                || d.extend() != (self.config.dock.extend && position != DockPosition::Overview)
+        }) {
             self.dock = None;
         }
         let Some(output) = wanted else {
@@ -644,6 +644,7 @@ impl App {
                 &self.qh,
                 output,
                 position,
+                self.config.dock.extend,
                 scale,
             ));
         }
@@ -653,6 +654,7 @@ impl App {
             if dock.edit.is_some() != self.dock_editing {
                 dock.edit = self.dock_editing.then(dock::DockEdit::default);
             }
+            dock.frosted = dock::frosted(self.config.dock.background);
             dock.update(items, icon);
         }
         self.draw_dock();
@@ -997,7 +999,7 @@ impl LayerShellHandler for App {
             .as_ref()
             .is_some_and(|p| &p.layer == layer)
         {
-            self.dock_preview_configured();
+            self.dock_preview_configured(configure.new_size);
         }
         if let Some(launcher) = &mut self.launcher
             && &launcher.layer == layer
@@ -1008,7 +1010,7 @@ impl LayerShellHandler for App {
         if let Some(dock) = &mut self.dock
             && &dock.layer == layer
         {
-            dock.configured();
+            dock.configured(configure.new_size);
             self.draw_dock();
         }
         if let Some(ui) = &mut self.screenshot

@@ -115,6 +115,14 @@ pub enum Request {
 /// The overview while the app grid shows: workspace thumbnails in a row
 /// under the search box, the grid below them. Shared so the compositor's
 /// thumbnails and the shell's grid fit together.
+/// The dock, as the compositor needs to know it to frost what's behind it.
+pub mod dock {
+    /// The dock's layer-shell namespace.
+    pub const NAMESPACE: &str = "cnde-dock";
+    /// Corner radius of a dock that doesn't stretch across its edge.
+    pub const RADIUS: f64 = 24.0;
+}
+
 pub mod app_grid {
     /// The thumbnails' top, logical px below the top of the area the panel
     /// leaves free: under the search box (its margin, height and a gap).

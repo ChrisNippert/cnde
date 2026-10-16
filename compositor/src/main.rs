@@ -8,6 +8,7 @@ mod config;
 mod cursor;
 mod effects;
 mod ext_workspace;
+mod frost;
 mod grabs;
 mod handlers;
 mod input;

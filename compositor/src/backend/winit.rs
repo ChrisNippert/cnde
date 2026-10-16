@@ -183,6 +183,12 @@ impl State {
                     return;
                 }
             };
+            let frost = self.dock_frost.elements(
+                renderer,
+                &self.wallpapers,
+                &backend.output,
+                &self.config.dock,
+            );
             let backdrop = match output_geo {
                 Some(geo) => crate::overview::backdrop(
                     &mut self.overview,
@@ -213,6 +219,7 @@ impl State {
                     self.snap_preview.as_mut(),
                     scene.map(|s| s.windows),
                     backdrop,
+                    frost,
                     &mut self.popup_anims,
                     &backend.output,
                     now,

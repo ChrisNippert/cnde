@@ -723,6 +723,12 @@ impl State {
             ));
             elements.push(render::OutputElement::Wallpaper(frozen));
         } else {
+            let frost = self.dock_frost.elements(
+                &mut gpu.renderer,
+                &self.wallpapers,
+                &output,
+                &self.config.dock,
+            );
             let backdrop = match self.space.output_geometry(&output) {
                 Some(geo) => crate::overview::backdrop(
                     &mut self.overview,
@@ -741,6 +747,7 @@ impl State {
                 self.snap_preview.as_mut(),
                 scene.map(|s| s.windows),
                 backdrop,
+                frost,
                 &mut self.popup_anims,
                 &output,
                 now,

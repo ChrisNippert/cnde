@@ -276,6 +276,11 @@ pub struct Dock {
     pub favorites: Vec<String>,
     /// Logical pixels.
     pub icon_size: u32,
+    /// What's behind the icons.
+    pub background: DockBackground,
+    /// On a screen edge: stretch across the whole edge instead of sitting
+    /// in the middle, sized to its icons.
+    pub extend: bool,
 }
 
 impl Default for Dock {
@@ -289,8 +294,20 @@ impl Default for Dock {
                 "Alacritty.desktop".into(),
             ],
             icon_size: 48,
+            background: DockBackground::Solid,
+            extend: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DockBackground {
+    /// A filled colour from the style.
+    #[default]
+    Solid,
+    /// Translucent over a blurred copy of the wallpaper.
+    Frosted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

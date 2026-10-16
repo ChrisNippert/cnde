@@ -247,6 +247,16 @@ impl App {
             DockPosition::Right => (Anchor::RIGHT, (thick, long)),
             _ => (Anchor::BOTTOM, (long, thick)),
         };
+        // A stretched dock would stretch along the new edge too: the
+        // compositor sizes the preview (see `dock_preview_configured`).
+        let stretch = self.config.dock.extend && edge != DockPosition::Overview;
+        let (anchor, size, margin) = match (stretch, edge) {
+            (false, _) => (anchor, size, EDGE_MARGIN as i32),
+            (true, DockPosition::Left | DockPosition::Right) => {
+                (anchor | Anchor::TOP | Anchor::BOTTOM, (thick, 0), 0)
+            }
+            (true, _) => (anchor | Anchor::LEFT | Anchor::RIGHT, (0, thick), 0),
+        };
         let surface = self.compositor.create_surface(&self.qh);
         let layer = self.layer_shell.create_layer_surface(
             &self.qh,
@@ -256,7 +266,6 @@ impl App {
             Some(&dock.output),
         );
         layer.set_anchor(anchor);
-        let margin = EDGE_MARGIN as i32;
         layer.set_margin(margin, margin, margin, margin);
         layer.set_size(size.0, size.1);
         layer.set_exclusive_zone(-1);
@@ -277,11 +286,14 @@ impl App {
     }
 
     /// The preview's layer surface was configured: draw it.
-    pub fn dock_preview_configured(&mut self) {
+    pub fn dock_preview_configured(&mut self, size: (u32, u32)) {
         let Some(preview) = &mut self.dock_preview else {
             return;
         };
         preview.configured = true;
+        if size.0 > 0 && size.1 > 0 {
+            preview.size = size;
+        }
         let scale = self.dock.as_ref().map_or(1, |d| d.scale());
         let (w, h) = (preview.size.0 as i32 * scale, preview.size.1 as i32 * scale);
         let (buffer, pixels) = match self.pool.create_buffer(w, h, w * 4, self.shm_format) {
@@ -294,7 +306,11 @@ impl App {
         if let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) {
             let (lw, lh) = (preview.size.0 as f32, preview.size.1 as f32);
             let accent = self.theme.accent;
-            let radius = self.theme.search_results_radius;
+            let radius = if self.config.dock.extend {
+                0.0
+            } else {
+                cnde_ipc::dock::RADIUS as f32
+            };
             canvas.clear(Color::rgba(0, 0, 0, 0.0));
             canvas.rounded_rect(0.0, 0.0, lw, lh, radius, accent.with_alpha(0.22));
             canvas.stroke_rounded_rect(0.0, 0.0, lw, lh, radius, 2.0, accent);
