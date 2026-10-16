@@ -613,8 +613,10 @@ impl State {
         }
     }
 
+    /// Mark `crtc` as needing a frame. Rendering happens in
+    /// [`udev_render_queued`](Self::udev_render_queued) at the end of the
+    /// loop iteration, so several requests cost one frame.
     fn queue_output_redraw(&mut self, crtc: crtc::Handle) {
-        let handle = self.loop_handle.clone();
         let Some(udev) = self.udev() else {
             return;
         };
@@ -631,16 +633,31 @@ impl State {
             return;
         };
         match surface.redraw {
-            RedrawState::Idle => {
-                surface.redraw = RedrawState::Queued;
-                handle.insert_idle(move |state| state.render_output(crtc));
-            }
+            RedrawState::Idle => surface.redraw = RedrawState::Queued,
             RedrawState::Queued => {}
             RedrawState::WaitingForVblank { .. } => {
                 surface.redraw = RedrawState::WaitingForVblank {
                     redraw_needed: true,
                 };
             }
+        }
+    }
+
+    /// Render every output that has a frame queued.
+    pub fn udev_render_queued(&mut self) {
+        let queued: Vec<crtc::Handle> = self
+            .udev()
+            .and_then(|u| u.gpu.as_ref())
+            .map(|gpu| {
+                gpu.surfaces
+                    .iter()
+                    .filter(|(_, s)| s.redraw == RedrawState::Queued)
+                    .map(|(crtc, _)| *crtc)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for crtc in queued {
+            self.render_output(crtc);
         }
     }
 

@@ -99,6 +99,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Draw the first frames before blocking for events.
+    state.on_loop_iteration();
     event_loop.run(None, &mut state, State::on_loop_iteration)?;
     Ok(())
 }

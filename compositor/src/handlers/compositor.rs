@@ -108,6 +108,10 @@ impl State {
             .find(|w| w.toplevel().is_some_and(|t| t.wl_surface() == surface))
             .cloned();
         if let Some(window) = window {
+            // Clients often hide a window (null buffer) before destroying it,
+            // e.g. Electron apps on quit or closing to the tray. Animate that
+            // like a close, from the last frame we drew.
+            self.start_close_animation(&window);
             self.unmap_window(&window);
             self.unmapped.push(window);
         }

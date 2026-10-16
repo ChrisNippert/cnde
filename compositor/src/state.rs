@@ -201,15 +201,22 @@ impl State {
             self.pointer_focus_dirty = false;
             self.refresh_pointer_focus();
         }
-        if let Err(err) = self.display_handle.flush_clients() {
-            warn!(?err, "failed to flush clients");
-        }
         if self.redraw_queued {
             self.redraw_queued = false;
             match &self.backend {
                 Backend::Winit(winit) => winit.request_redraw(),
                 Backend::Udev(_) => self.udev_queue_redraw_all(),
             }
+        }
+        // Why render here and not in an idle callback: calloop runs idles
+        // *before* this hook, so an idle queued from here sat until some
+        // unrelated event woke the loop. Typing showed up late.
+        if matches!(self.backend, Backend::Udev(_)) {
+            self.udev_render_queued();
+        }
+        // Last, so frame callbacks sent while rendering go out now.
+        if let Err(err) = self.display_handle.flush_clients() {
+            warn!(?err, "failed to flush clients");
         }
     }
 

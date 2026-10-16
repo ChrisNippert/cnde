@@ -4,6 +4,7 @@
 use std::{cell::RefCell, time::Instant};
 
 use smithay::{
+    backend::renderer::utils::with_renderer_surface_state,
     desktop::Window,
     output::Output,
     reexports::{
@@ -129,9 +130,15 @@ impl State {
             return;
         };
         let last_frame = with_state(window, |s| s.last_frame.take());
-        // A killed client's surfaces are already gone: its geometry is empty
-        // and a live capture fails, so fall back to the last drawn frame.
-        let alive = !window.geometry().is_empty();
+        // Capture live only if the window still has contents. A killed
+        // client's surfaces are gone, and a hidden window (null buffer) may
+        // still report a size but has nothing to draw, so both fall back to
+        // the last frame we drew.
+        let alive = !window.geometry().is_empty()
+            && window.toplevel().is_some_and(|t| {
+                with_renderer_surface_state(t.wl_surface(), |s| s.buffer().is_some())
+                    .unwrap_or(false)
+            });
         let rect = if alive {
             self.visual_rect(window)
         } else {
