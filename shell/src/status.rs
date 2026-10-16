@@ -28,6 +28,8 @@ use zbus::{
 pub enum Update {
     Battery(Option<Battery>),
     Network(Network),
+    /// Whether the Wi-Fi radio is on; `None` if we can't switch it.
+    WifiEnabled(Option<bool>),
     Volume(Option<Volume>),
 }
 
@@ -158,6 +160,7 @@ fn network(tx: &Sender<Update>) -> zbus::Result<()> {
         iwd(&conn, tx)
     } else {
         let _ = tx.send(Update::Network(Network::Unavailable));
+        let _ = tx.send(Update::WifiEnabled(None));
         Ok(())
     }
 }
@@ -202,10 +205,15 @@ fn network_manager(conn: &Connection, tx: &Sender<Update>) -> zbus::Result<()> {
             strength: 0,
         })
     };
-    let mut out = Dedup::new(tx);
+    let radio = || {
+        Update::WifiEnabled(get_all(&manager, NM).and_then(|all| value(&all, "WirelessEnabled")))
+    };
+    let (mut out, mut out_radio) = (Dedup::new(tx), Dedup::new(tx));
     out.send(Update::Network(read()));
+    out_radio.send(radio());
     for _ in manager.receive_properties_changed()? {
         out.send(Update::Network(read()));
+        out_radio.send(radio());
     }
     Ok(())
 }
@@ -216,6 +224,8 @@ fn iwd(conn: &Connection, tx: &Sender<Update>) -> zbus::Result<()> {
         .destination(IWD)?
         .path("/")?
         .build()?;
+    // Switching iwd's radio isn't wired up yet.
+    let _ = tx.send(Update::WifiEnabled(None));
     let mut out = Dedup::new(tx);
     loop {
         let managed = objects.get_managed_objects()?;

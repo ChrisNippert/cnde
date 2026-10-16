@@ -1,6 +1,6 @@
 //! Drawing into a caller-owned pixel buffer.
 
-use tiny_skia::{FillRule, Paint, PathBuilder, PixmapMut, Rect, Transform};
+use tiny_skia::{FillRule, Mask, Paint, PathBuilder, PixmapMut, Rect, Transform};
 
 use crate::{
     icons::Icons,
@@ -54,6 +54,51 @@ impl<'a> Canvas<'a> {
             Transform::identity(),
             None,
         );
+    }
+
+    pub fn circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color) {
+        self.rounded_rect(
+            cx - radius,
+            cy - radius,
+            radius * 2.0,
+            radius * 2.0,
+            radius,
+            color,
+        );
+    }
+
+    /// An iOS-style fat slider: a fully rounded track, filled from the left
+    /// to `value` (0-1). The fill is clipped to the track, so it keeps the
+    /// rounded left end and has a straight right edge.
+    #[allow(clippy::too_many_arguments)]
+    pub fn slider(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        value: f32,
+        track: Color,
+        fill: Color,
+    ) {
+        self.rounded_rect(x, y, w, h, h / 2.0, track);
+        let s = self.scale;
+        let (px, py, pw, ph) = (x * s, y * s, w * s, h * s);
+        let Some(path) = rounded_rect_path(px, py, pw, ph, ph / 2.0) else {
+            return;
+        };
+        let Some(mut mask) = Mask::new(self.pixmap.width(), self.pixmap.height()) else {
+            return;
+        };
+        mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+        let Some(rect) = Rect::from_xywh(px, py, pw * value.clamp(0.0, 1.0), ph) else {
+            return;
+        };
+        let mut paint = Paint::default();
+        paint.set_color(skia_color(fill));
+        paint.anti_alias = true;
+        self.pixmap
+            .fill_rect(rect, &paint, Transform::identity(), Some(&mask));
     }
 
     /// Draw `layout` with its top-left at logical (`x`, `y`).
@@ -171,6 +216,21 @@ mod tests {
         let mut px = [10, 20, 30, 255];
         blend_premultiplied(&mut px, [200, 100, 50], 0);
         assert_eq!(px, [10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn slider_fill_is_clipped_to_the_track() {
+        let mut pixels = vec![0u8; 100 * 20 * 4];
+        let mut canvas = Canvas::new(&mut pixels, 100, 20, 1.0).unwrap();
+        let track = Color::rgba(255, 255, 255, 0.2);
+        canvas.slider(0.0, 0.0, 100.0, 20.0, 0.5, track, Color::rgb(255, 255, 255));
+        let alpha = |x: usize, y: usize| pixels[(y * 100 + x) * 4 + 3];
+        assert_eq!(alpha(25, 10), 255, "filled half is opaque");
+        assert!(
+            alpha(75, 10) > 40 && alpha(75, 10) < 60,
+            "rest is the track"
+        );
+        assert_eq!(alpha(0, 0), 0, "rounded corner stays empty");
     }
 
     #[test]

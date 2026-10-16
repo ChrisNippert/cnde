@@ -3,8 +3,10 @@
 //! (ARCHITECTURE.md §5). It only redraws when something changes: the
 //! minute ticks, workspaces change, or a monitor comes or goes.
 
+mod actions;
 mod config;
 mod panel;
+mod quick_settings;
 mod status;
 mod workspaces;
 
@@ -27,31 +29,41 @@ use smithay_client_toolkit::{
         client::{
             Connection, QueueHandle,
             globals::registry_queue_init,
-            protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+            protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
         },
     },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
         Capability, SeatHandler, SeatState,
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
         pointer::{BTN_LEFT, PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
         WaylandSurface,
         wlr_layer::{LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
+        xdg::{
+            XdgShell,
+            popup::{Popup, PopupConfigure, PopupHandler},
+            window::{Window, WindowConfigure, WindowHandler},
+        },
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
 use tracing::{info, warn};
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::ExtWorkspaceManagerV1;
 
-use crate::{panel::Panel, status::Update, workspaces::Workspaces};
+use crate::{
+    actions::Actions, panel::Panel, quick_settings::QuickSettings, status::Update,
+    workspaces::Workspaces,
+};
 
 /// The latest of everything the status threads report.
 #[derive(Debug, Default)]
 pub struct Status {
     pub battery: Option<status::Battery>,
     pub network: status::Network,
+    pub wifi_enabled: Option<bool>,
     pub volume: Option<status::Volume>,
 }
 
@@ -60,6 +72,7 @@ impl Status {
         match update {
             Update::Battery(battery) => self.battery = battery,
             Update::Network(network) => self.network = network,
+            Update::WifiEnabled(enabled) => self.wifi_enabled = enabled,
             Update::Volume(volume) => self.volume = volume,
         }
     }
@@ -71,6 +84,7 @@ pub struct App {
     seat: SeatState,
     compositor: CompositorState,
     layer_shell: LayerShell,
+    xdg_shell: XdgShell,
     shm: Shm,
     pool: SlotPool,
     qh: QueueHandle<App>,
@@ -85,7 +99,12 @@ pub struct App {
     status: Status,
     panels: Vec<Panel>,
     pub workspaces: Workspaces,
+    actions: Actions,
+    /// Open quick settings, and the panel-surface rect it hangs from.
+    quick_settings: Option<(QuickSettings, (i32, i32, i32, i32))>,
+    seat_handle: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -110,6 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         seat: SeatState::new(&globals, &qh),
         compositor: CompositorState::bind(&globals, &qh)?,
         layer_shell: LayerShell::bind(&globals, &qh)?,
+        xdg_shell: XdgShell::bind(&globals, &qh)?,
         pool: SlotPool::new(4 * 1024 * 1024, &shm)?,
         shm_format: wl_shm::Format::Argb8888,
         shm,
@@ -121,7 +141,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         status: Status::default(),
         panels: Vec::new(),
         workspaces: Workspaces::default(),
+        actions: Actions::start(),
+        quick_settings: None,
+        seat_handle: None,
         pointer: None,
+        keyboard: None,
     };
     app.workspaces.manager = globals
         .bind::<ExtWorkspaceManagerV1, _, _>(&qh, 1..=1, workspaces::ManagerData)
@@ -214,6 +238,79 @@ impl App {
         for i in 0..self.panels.len() {
             self.draw_panel(i);
         }
+        self.draw_quick_settings();
+    }
+
+    fn draw_quick_settings(&mut self) {
+        if let Some((qs, _)) = &mut self.quick_settings {
+            qs.draw(
+                &mut self.pool,
+                self.shm_format,
+                &mut self.fonts,
+                &mut self.icons,
+                &self.theme,
+                &self.status,
+            );
+        }
+    }
+
+    /// Clicking the status area opens quick settings, or closes it.
+    fn toggle_quick_settings(&mut self, panel_index: usize, serial: u32) {
+        if self.quick_settings.take().is_some() {
+            return;
+        }
+        let (Some(panel), Some(seat)) = (self.panels.get(panel_index), &self.seat_handle) else {
+            return;
+        };
+        let Some(anchor) = panel.status_anchor() else {
+            return;
+        };
+        self.quick_settings = QuickSettings::open(
+            &self.compositor,
+            &self.xdg_shell,
+            &self.qh,
+            &panel.layer,
+            seat,
+            serial,
+            anchor,
+            &self.theme,
+            panel.scale(),
+        )
+        .map(|qs| (qs, anchor));
+    }
+
+    fn quick_settings_pointer(&mut self, event: &PointerEvent) {
+        let Some((qs, anchor)) = &mut self.quick_settings else {
+            return;
+        };
+        let close = match event.kind {
+            PointerEventKind::Press {
+                button: BTN_LEFT, ..
+            } => qs.press(
+                event.position,
+                &self.status,
+                &self.actions,
+                &self.xdg_shell,
+                &self.theme,
+                *anchor,
+            ),
+            PointerEventKind::Motion { .. } => {
+                qs.motion(event.position, &self.actions);
+                false
+            }
+            PointerEventKind::Release {
+                button: BTN_LEFT, ..
+            } => {
+                qs.release();
+                false
+            }
+            _ => return,
+        };
+        if close {
+            self.quick_settings = None;
+        } else {
+            self.draw_quick_settings();
+        }
     }
 
     fn draw_panel(&mut self, index: usize) {
@@ -250,6 +347,12 @@ impl CompositorHandler for App {
         {
             self.panels[i].set_scale(factor);
             self.draw_panel(i);
+        }
+        if let Some((qs, _)) = &mut self.quick_settings
+            && qs.popup.wl_surface() == surface
+        {
+            qs.set_scale(factor);
+            self.draw_quick_settings();
         }
     }
     fn transform_changed(
@@ -330,6 +433,10 @@ impl SeatHandler for App {
         if capability == Capability::Pointer && self.pointer.is_none() {
             self.pointer = self.seat.get_pointer(qh, &seat).ok();
         }
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            self.keyboard = self.seat.get_keyboard(qh, &seat, None).ok();
+        }
+        self.seat_handle = Some(seat);
     }
     fn remove_capability(
         &mut self,
@@ -356,23 +463,142 @@ impl PointerHandler for App {
         events: &[PointerEvent],
     ) {
         for event in events {
+            let on_quick_settings = self
+                .quick_settings
+                .as_ref()
+                .is_some_and(|(qs, _)| qs.popup.wl_surface() == &event.surface);
+            if on_quick_settings {
+                self.quick_settings_pointer(event);
+                continue;
+            }
             let PointerEventKind::Press {
-                button: BTN_LEFT, ..
+                button: BTN_LEFT,
+                serial,
+                ..
             } = event.kind
             else {
                 continue;
             };
-            let Some(panel) = self
+            let Some(index) = self
                 .panels
                 .iter()
-                .find(|p| p.layer.wl_surface() == &event.surface)
+                .position(|p| p.layer.wl_surface() == &event.surface)
             else {
                 continue;
             };
-            if let Some(handle) = panel.workspace_at(event.position) {
+            let panel = &self.panels[index];
+            if panel.status_at(event.position) {
+                self.toggle_quick_settings(index, serial);
+            } else if let Some(handle) = panel.workspace_at(event.position) {
                 self.workspaces.activate(&handle);
             }
         }
+    }
+}
+
+impl PopupHandler for App {
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        popup: &Popup,
+        _: PopupConfigure,
+    ) {
+        if let Some((qs, _)) = &mut self.quick_settings
+            && &qs.popup == popup
+        {
+            qs.configured();
+            self.draw_quick_settings();
+        }
+    }
+
+    /// The compositor dismissed it (a click outside).
+    fn done(&mut self, _: &Connection, _: &QueueHandle<Self>, popup: &Popup) {
+        if self
+            .quick_settings
+            .as_ref()
+            .is_some_and(|(qs, _)| &qs.popup == popup)
+        {
+            self.quick_settings = None;
+        }
+    }
+}
+
+/// Required by sctk's xdg-shell binding; the shell never opens windows.
+impl WindowHandler for App {
+    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {}
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &Window,
+        _: WindowConfigure,
+        _: u32,
+    ) {
+    }
+}
+
+impl KeyboardHandler for App {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+    }
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+    }
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        if event.keysym == Keysym::Escape {
+            self.quick_settings = None;
+        }
+    }
+    fn repeat_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: Modifiers,
+        _: RawModifiers,
+        _: u32,
+    ) {
     }
 }
 

@@ -43,6 +43,8 @@ pub struct Panel {
     scale: i32,
     /// Clickable workspace dots from the last draw (logical x range).
     hit_regions: Vec<(f64, f64, ExtWorkspaceHandleV1)>,
+    /// The status icons' logical x range, from the last draw.
+    status_region: Option<(f32, f32)>,
 }
 
 impl Panel {
@@ -75,6 +77,7 @@ impl Panel {
             height: theme.panel_height,
             scale: 1,
             hit_regions: Vec::new(),
+            status_region: None,
         }
     }
 
@@ -98,6 +101,21 @@ impl Panel {
     pub fn set_scale(&mut self, scale: i32) {
         self.scale = scale.max(1);
         self.layer.wl_surface().set_buffer_scale(self.scale);
+    }
+
+    pub fn scale(&self) -> i32 {
+        self.scale
+    }
+
+    pub fn status_at(&self, (x, _y): (f64, f64)) -> bool {
+        self.status_region
+            .is_some_and(|(start, end)| (start as f64..end as f64).contains(&x))
+    }
+
+    /// Where quick settings hangs from: the status area, panel coordinates.
+    pub fn status_anchor(&self) -> Option<(i32, i32, i32, i32)> {
+        let (start, end) = self.status_region?;
+        Some((start as i32, 0, (end - start) as i32, self.height as i32))
     }
 
     pub fn workspace_at(&self, (x, _y): (f64, f64)) -> Option<ExtWorkspaceHandleV1> {
@@ -209,6 +227,8 @@ impl Panel {
             right -= icon;
             canvas.icon(icons, name, right, icon_y, icon, theme.panel_foreground);
         }
+        // The whole status cluster (plus a little slack) opens quick settings.
+        self.status_region = Some((right - theme.status_spacing, width));
 
         // Debug aid: CNDE_SHELL_DUMP=path writes each frame's raw RGBA
         // pixels (with a "WxH\n" header) for inspecting the look offline.
@@ -236,7 +256,7 @@ impl Panel {
     }
 }
 
-fn volume_icon(volume: Volume) -> &'static str {
+pub fn volume_icon(volume: Volume) -> &'static str {
     match (volume.muted, volume.percent) {
         (true, _) | (_, 0) => "audio-volume-muted-symbolic",
         (_, 1..=33) => "audio-volume-low-symbolic",
