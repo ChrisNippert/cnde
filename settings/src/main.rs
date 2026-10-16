@@ -137,6 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or_default();
     let theme = theme_for(&config);
+    cnde_ui::anim::set_speed(config.animations.speed as f32);
     let mut icons = Icons::new();
     icons.set_theme(&config.appearance.icon_theme);
     let fonts = Fonts::new(theme.font_families);
@@ -292,6 +293,7 @@ impl App {
     }
 
     fn set_config(&mut self, config: Config) {
+        cnde_ui::anim::set_speed(config.animations.speed as f32);
         if config.appearance != self.ui.config.appearance {
             self.res.theme = theme_for(&config);
             self.res.icons.set_theme(&config.appearance.icon_theme);
@@ -543,7 +545,14 @@ impl App {
         let Some((key, rect)) = self.dragging.clone() else {
             return;
         };
-        let Some(row) = self.painted.rows.iter().find(|r| r.key == key) else {
+        // The slider's row: a setting can also have a switch row (animations
+        // on/off and their speed share one key).
+        let Some(row) = self
+            .painted
+            .rows
+            .iter()
+            .find(|r| r.key == key && matches!(r.control, Control::Slider { .. }))
+        else {
             return;
         };
         let Control::Slider {

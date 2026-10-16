@@ -581,7 +581,12 @@ impl Launcher {
             };
             // The grid fades and zooms in when it opens.
             let appear = self.grid_opened.map_or(1.0, |at| {
-                let t = (at.elapsed().as_secs_f32() / GRID_APPEAR.as_secs_f32()).min(1.0);
+                let duration = cnde_ui::anim::scaled(GRID_APPEAR).as_secs_f32();
+                let t = if duration > 0.0 {
+                    (at.elapsed().as_secs_f32() / duration).min(1.0)
+                } else {
+                    1.0
+                };
                 1.0 - (1.0 - t).powi(3)
             });
             if appear >= 1.0 {

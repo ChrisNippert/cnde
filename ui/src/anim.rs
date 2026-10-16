@@ -10,8 +10,22 @@
 use std::{
     collections::HashMap,
     hash::Hash,
+    sync::atomic::{AtomicU32, Ordering},
     time::{Duration, Instant},
 };
+
+/// `animations.speed` from the config: durations are multiplied by it, and
+/// 0 turns animations off. Stored as f32 bits.
+static SPEED: AtomicU32 = AtomicU32::new(0x3f80_0000); // 1.0
+
+pub fn set_speed(speed: f32) {
+    SPEED.store(speed.max(0.0).to_bits(), Ordering::Relaxed);
+}
+
+/// `duration` after the speed setting.
+pub fn scaled(duration: Duration) -> Duration {
+    duration.mul_f32(f32::from_bits(SPEED.load(Ordering::Relaxed)))
+}
 
 /// How long most control animations take (libadwaita uses 150-250 ms).
 pub const SHORT: Duration = Duration::from_millis(150);
@@ -95,7 +109,7 @@ impl<K: Hash + Eq + Clone> Animator<K> {
                         from: tween.value(now),
                         to: target,
                         start: now,
-                        duration,
+                        duration: scaled(duration),
                     };
                 }
                 tween.value(now)
@@ -127,7 +141,7 @@ impl<K: Hash + Eq + Clone> Animator<K> {
                 from,
                 to,
                 start: Instant::now(),
-                duration,
+                duration: scaled(duration),
             },
         );
     }

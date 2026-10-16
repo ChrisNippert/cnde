@@ -183,6 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = config::load();
     let theme = config::theme_from(&config);
+    cnde_ui::anim::set_speed(config.animations.speed as f32);
     let mut icons = Icons::new();
     icons.set_theme(&config.appearance.icon_theme);
     let fonts = Fonts::new(theme.font_families);
