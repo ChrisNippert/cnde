@@ -25,15 +25,17 @@ use crate::{
 
 pub type WorkspaceId = u64;
 
-pub struct Workspace {
+/// Generic over the window type only so the strip logic can be unit-tested
+/// with plain numbers; the compositor uses `Window`.
+pub struct Workspace<W = Window> {
     #[allow(dead_code)] // identifies workspaces to ext-workspace clients (next)
     pub id: WorkspaceId,
     /// Bottom to top.
-    pub windows: Vec<Window>,
+    pub windows: Vec<W>,
 }
 
-pub struct Workspaces {
-    pub list: Vec<Workspace>,
+pub struct Workspaces<W = Window> {
+    pub list: Vec<Workspace<W>>,
     /// Index of the workspace on the main monitor.
     pub active: usize,
     next_id: WorkspaceId,
@@ -63,7 +65,7 @@ pub struct Swipe {
     position: f64,
 }
 
-impl Workspaces {
+impl<W: PartialEq + Clone> Workspaces<W> {
     pub fn new() -> Self {
         let mut workspaces = Self {
             list: Vec::new(),
@@ -73,6 +75,20 @@ impl Workspaces {
         };
         workspaces.push_empty();
         workspaces
+    }
+
+    /// Insert an empty workspace at the start of the strip, keeping the
+    /// same workspace active.
+    fn push_empty_front(&mut self) {
+        self.list.insert(
+            0,
+            Workspace {
+                id: self.next_id,
+                windows: Vec::new(),
+            },
+        );
+        self.next_id += 1;
+        self.active += 1;
     }
 
     fn push_empty(&mut self) {
@@ -99,22 +115,69 @@ impl Workspaces {
         self.motion.is_some()
     }
 
-    fn index_of(&self, window: &Window) -> Option<usize> {
+    fn index_of(&self, window: &W) -> Option<usize> {
         self.list.iter().position(|ws| ws.windows.contains(window))
     }
 
-    pub fn remove_window(&mut self, window: &Window) {
+    pub fn remove_window(&mut self, window: &W) {
         for ws in &mut self.list {
             ws.windows.retain(|w| w != window);
         }
     }
 
     /// Move `window` to the top of its workspace's stacking order.
-    pub fn raise(&mut self, window: &Window) {
+    pub fn raise(&mut self, window: &W) {
         if let Some(index) = self.index_of(window) {
             let windows = &mut self.list[index].windows;
             windows.retain(|w| w != window);
             windows.push(window.clone());
+        }
+    }
+
+    /// Keep the strip tidy: drop empty workspaces nobody is looking at, keep
+    /// enough to fill every monitor, and keep one spare empty workspace past
+    /// each end (one more than GNOME's trailing one), so sliding either way
+    /// from the edge brings in a fresh workspace instead of doing nothing.
+    /// `main` monitors sit left of the main one and `right_of_main` right of it.
+    pub fn normalize(&mut self, main: usize, right_of_main: usize) {
+        let ws = self;
+        let visible = |active: usize, i: usize| i + main >= active && i <= active + right_of_main;
+
+        // Remove hidden empty workspaces, except the spares at each end
+        // (back to front, so indices hold).
+        let mut i = ws.list.len();
+        while i > 0 {
+            i -= 1;
+            let is_end = i == 0 || i + 1 == ws.list.len();
+            if ws.list[i].windows.is_empty() && !visible(ws.active, i) && !is_end {
+                ws.list.remove(i);
+                if i < ws.active {
+                    ws.active -= 1;
+                }
+            }
+        }
+
+        // Front: every monitor left of main has a workspace, plus a spare
+        // empty one beyond the leftmost.
+        while ws.active < main + 1 || !ws.list[0].windows.is_empty() {
+            ws.push_empty_front();
+        }
+        while ws.active > main + 1 && ws.list[0].windows.is_empty() && ws.list[1].windows.is_empty()
+        {
+            ws.list.remove(0);
+            ws.active -= 1;
+        }
+
+        // Back: every monitor right of main, plus a spare empty one.
+        let visible_end = ws.active + right_of_main;
+        while ws.list.len() <= visible_end + 1 || !ws.list[ws.list.len() - 1].windows.is_empty() {
+            ws.push_empty();
+        }
+        while ws.list.len() > visible_end + 2
+            && ws.list[ws.list.len() - 1].windows.is_empty()
+            && ws.list[ws.list.len() - 2].windows.is_empty()
+        {
+            ws.list.pop();
         }
     }
 
@@ -239,44 +302,10 @@ impl State {
         }
     }
 
-    /// Keep the strip tidy, GNOME-style: drop empty workspaces nobody is
-    /// looking at, keep enough to fill every monitor, and always have one
-    /// empty workspace at the end.
     fn normalize_workspaces(&mut self) {
         let (outputs, main) = self.strip_outputs();
         let right_of_main = outputs.len().saturating_sub(main + 1);
-        let ws = &mut self.workspaces;
-        let visible_end = ws.active + right_of_main; // inclusive
-        let visible_start = ws.active.saturating_sub(main);
-
-        // Remove hidden empty workspaces (from the back, so indices hold).
-        let mut i = ws.list.len();
-        while i > 0 {
-            i -= 1;
-            let visible = (visible_start..=visible_end).contains(&i);
-            let is_last = i + 1 == ws.list.len();
-            if ws.list[i].windows.is_empty() && !visible && !is_last {
-                ws.list.remove(i);
-                if i < ws.active {
-                    ws.active -= 1;
-                }
-            }
-        }
-        // Fill every monitor, plus one trailing empty workspace.
-        let visible_end = ws.active + right_of_main;
-        while ws.list.len() <= visible_end {
-            ws.push_empty();
-        }
-        if ws.list.last().is_some_and(|last| !last.windows.is_empty()) {
-            ws.push_empty();
-        }
-        // More than one empty workspace past the visible range: trim.
-        while ws.list.len() > visible_end + 2
-            && ws.list[ws.list.len() - 1].windows.is_empty()
-            && ws.list[ws.list.len() - 2].windows.is_empty()
-        {
-            ws.list.pop();
-        }
+        self.workspaces.normalize(main, right_of_main);
     }
 
     /// Record every visible window's position relative to its monitor, so
@@ -302,6 +331,10 @@ impl State {
     /// window comes along.
     pub fn step_workspace(&mut self, step: isize, carry: bool) {
         let now = Instant::now();
+        if !self.workspaces.is_moving() {
+            // Make sure the spare workspaces at both ends exist.
+            self.normalize_workspaces();
+        }
         let current_target = self
             .workspaces
             .motion
@@ -357,6 +390,9 @@ impl State {
     }
 
     pub fn swipe_begin(&mut self) {
+        if !self.workspaces.is_moving() {
+            self.normalize_workspaces();
+        }
         let now = Instant::now();
         let start = self.workspaces.position(now);
         if !self.workspaces.is_moving() {
@@ -598,5 +634,71 @@ impl State {
             layout.push((window.clone(), rect));
         }
         Some(layout)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A strip from occupancy: `true` = has a window (numbered by index).
+    fn strip(occupied: &[bool], active: usize) -> Workspaces<u32> {
+        let mut ws = Workspaces::<u32>::new();
+        ws.list.clear();
+        for (i, &full) in occupied.iter().enumerate() {
+            ws.list.push(Workspace {
+                id: i as u64,
+                windows: if full { vec![i as u32] } else { vec![] },
+            });
+        }
+        ws.active = active;
+        ws
+    }
+
+    fn shape(ws: &Workspaces<u32>) -> (Vec<bool>, usize) {
+        (
+            ws.list.iter().map(|w| !w.windows.is_empty()).collect(),
+            ws.active,
+        )
+    }
+
+    #[test]
+    fn fresh_single_monitor_gets_spares_both_sides() {
+        let mut ws = strip(&[true], 0);
+        ws.normalize(0, 0);
+        assert_eq!(shape(&ws), (vec![false, true, false], 1));
+    }
+
+    #[test]
+    fn two_monitors_main_left() {
+        // Main shows a window, the right monitor its own workspace.
+        let mut ws = strip(&[true, true], 0);
+        ws.normalize(0, 1);
+        // spare | main | right | spare
+        assert_eq!(shape(&ws), (vec![false, true, true, false], 1));
+    }
+
+    #[test]
+    fn hidden_empties_are_removed_but_ends_kept() {
+        // _ A _ _ B _ _ with main on A: the gaps go, spares stay.
+        let mut ws = strip(&[false, true, false, false, true, false, false], 1);
+        ws.normalize(0, 0);
+        assert_eq!(shape(&ws), (vec![false, true, true, false], 1));
+    }
+
+    #[test]
+    fn visible_empty_workspace_is_kept() {
+        // Looking at an empty workspace between two full ones.
+        let mut ws = strip(&[false, true, false, true, false], 2);
+        ws.normalize(0, 0);
+        assert_eq!(shape(&ws), (vec![false, true, false, true, false], 2));
+    }
+
+    #[test]
+    fn monitor_left_of_main_gets_a_workspace() {
+        let mut ws = strip(&[true], 0);
+        ws.normalize(1, 0); // one monitor left of main
+        // spare | left | main | spare
+        assert_eq!(shape(&ws), (vec![false, false, true, false], 2));
     }
 }
