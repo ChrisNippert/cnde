@@ -119,6 +119,15 @@ Required for a usable desktop:
 
 Add others when a real app needs them, not speculatively.
 
+**Screen capture** is `ext-image-copy-capture-v1` (with
+`ext-image-capture-source-v1` and `ext-foreign-toplevel-list-v1` for picking
+windows), not `wlr-screencopy`: it's the standardized successor, and
+xdg-desktop-portal-wlr 0.8+, grim and OBS speak it. Apps reach it through
+xdg-desktop-portal → xdg-desktop-portal-wlr → PipeWire (`data/cnde-portals.conf`).
+The compositor exports its environment to the session bus at startup so
+the portals, started on demand by D-Bus, can find it. A cnde-shell picker
+replacing the wlr portal's dmenu-style chooser (fuzzel for now) is planned.
+
 ## 5. Shell (`cnde-shell`)
 
 One process that draws all persistent desktop UI as **layer-shell surfaces**:

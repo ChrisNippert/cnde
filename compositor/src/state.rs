@@ -77,6 +77,7 @@ pub struct State {
     pub overview: crate::overview::Overview,
     pub ipc: crate::ipc::IpcClients,
     pub popup_anims: crate::popup_anim::PopupAnims,
+    pub capture: crate::capture::CaptureState,
     /// Drag-to-edge preview while a window is being moved.
     pub snap_preview: Option<SnapPreview>,
     pub popups: PopupManager,
@@ -128,6 +129,7 @@ impl State {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         crate::ext_workspace::init(&dh);
+        let capture = crate::capture::CaptureState::new(&dh);
         let mut seat_state = SeatState::new();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, seat_name);
@@ -163,6 +165,7 @@ impl State {
             overview: crate::overview::Overview::new(),
             ipc: Default::default(),
             popup_anims: Default::default(),
+            capture,
             snap_preview: None,
             popups: PopupManager::default(),
 
@@ -241,6 +244,13 @@ impl State {
         // unrelated event woke the loop. Typing showed up late.
         if matches!(self.backend, Backend::Udev(_)) {
             self.udev_render_queued();
+        }
+        // Window captures don't wait for a monitor to redraw: the window may
+        // be on a hidden workspace.
+        if self.capture.has_pending()
+            && let Some(renderer) = self.backend.renderer()
+        {
+            crate::capture::capture_toplevels(&mut self.capture, renderer, &self.space);
         }
         self.refresh_ext_workspaces();
         // Last, so frame callbacks sent while rendering go out now.

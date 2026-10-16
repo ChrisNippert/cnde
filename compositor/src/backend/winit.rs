@@ -208,7 +208,7 @@ impl State {
             if let Some(wallpaper) = self.wallpapers.element(renderer, &backend.output) {
                 elements.push(render::OutputElement::Wallpaper(wallpaper));
             }
-            match backend.damage_tracker.render_output(
+            let damage = match backend.damage_tracker.render_output(
                 renderer,
                 &mut framebuffer,
                 age,
@@ -220,7 +220,17 @@ impl State {
                     warn!(?err, "rendering failed");
                     return;
                 }
-            }
+            };
+            drop(framebuffer);
+            crate::capture::capture_output(
+                &mut self.capture,
+                renderer,
+                &backend.output,
+                &elements,
+                0,
+                damage.is_some(),
+            );
+            damage
         };
 
         if let Some(damage) = damage {

@@ -45,6 +45,7 @@ impl CompositorHandler for State {
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
+            self.capture.surface_committed(&root);
             if let Some(window) = self.window_for_surface(&root) {
                 window.on_commit();
                 // A client resizing itself (e.g. finishing a maximize) can change

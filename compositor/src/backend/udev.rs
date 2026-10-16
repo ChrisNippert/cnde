@@ -364,6 +364,11 @@ impl State {
             );
         }
 
+        // Screen captures may hand us dma-bufs to render into.
+        let capture_dmabuf = crate::capture::DmabufInfo {
+            device: render_node.dev_id(),
+            formats: capture_formats(&renderer),
+        };
         udev.gpu = Some(Gpu {
             node,
             renderer,
@@ -373,6 +378,7 @@ impl State {
             vblank_token,
         });
         self.shm_state.update_formats(shm_formats);
+        self.capture.dmabuf = Some(capture_dmabuf);
         info!(%node, %render_node, "GPU ready");
         Ok(())
     }
@@ -525,6 +531,7 @@ impl State {
         }
         self.space.unmap_output(&surface.output);
         self.wallpapers.forget(&surface.output.name());
+        self.capture.output_removed(&surface.output);
         self.display_handle.remove_global::<State>(surface.global);
     }
 
@@ -703,6 +710,7 @@ impl State {
                 elapsed,
             ));
         }
+        let cursor_count = elements.len();
         let backdrop = match self.space.output_geometry(&output) {
             Some(geo) => crate::overview::backdrop(
                 &mut self.overview,
@@ -741,6 +749,15 @@ impl State {
                 false
             }
         };
+        // Screen captures copy what this frame showed.
+        crate::capture::capture_output(
+            &mut self.capture,
+            &mut gpu.renderer,
+            &output,
+            &elements,
+            cursor_count,
+            rendered,
+        );
 
         if rendered {
             match surface.drm_output.queue_frame(()) {
@@ -856,4 +873,26 @@ fn pick_mode(connector: &connector::Info) -> Option<smithay::reexports::drm::con
         .filter(|m| m.size() == preferred.size())
         .max_by_key(|m| m.vrefresh())
         .copied()
+}
+
+/// The 8-bit RGB formats (and modifiers) we can render capture frames into.
+fn capture_formats(renderer: &GlesRenderer) -> Vec<(Fourcc, Vec<u64>)> {
+    let wanted = [
+        Fourcc::Argb8888,
+        Fourcc::Xrgb8888,
+        Fourcc::Abgr8888,
+        Fourcc::Xbgr8888,
+    ];
+    let formats = renderer.egl_context().dmabuf_render_formats();
+    wanted
+        .iter()
+        .filter_map(|&code| {
+            let modifiers: Vec<u64> = formats
+                .iter()
+                .filter(|f| f.code == code)
+                .map(|f| u64::from(f.modifier))
+                .collect();
+            (!modifiers.is_empty()).then_some((code, modifiers))
+        })
+        .collect()
 }

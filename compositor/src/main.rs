@@ -3,6 +3,7 @@
 
 mod animation;
 mod backend;
+mod capture;
 mod config;
 mod cursor;
 mod effects;
@@ -15,6 +16,7 @@ mod keybinds;
 mod layers;
 mod overview;
 mod popup_anim;
+mod portals;
 mod render;
 mod shaders;
 mod snap;
@@ -108,6 +110,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // Before autostart, so launched apps get DISPLAY.
     xwayland::setup(&mut state, &event_loop.handle());
+    if !nested {
+        portals::setup(&state.client_env());
+    }
     if state.config.panel.enabled {
         spawn::supervise_shell(&state.client_env());
     }

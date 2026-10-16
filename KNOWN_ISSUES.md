@@ -26,6 +26,18 @@ entries when they're done.
   highlight on windows.
 - **Wallpaper changes** swap instantly instead of crossfading.
 
+- **Screen capture:**
+  - Any client can capture the screen (as with wlroots compositors); a
+    permission prompt and a "screen is shared" indicator should come with
+    our own portal.
+  - A captured window on a hidden workspace doesn't get frame callbacks,
+    so most apps stop drawing and the share freezes until it's shown.
+  - Captures always report full damage, so encoders redo the whole frame.
+  - The GPU (dma-buf) capture path hasn't been seen working yet; the shm
+    path was checked end to end with a test client.
+  - With GNOME running in another session on the same systemd user bus,
+    start cnde under `dbus-run-session`, or apps get GNOME's portal.
+
 - **Monitor names:** make and model are "Unknown"; `smithay-drm-extras`'s EDID
   feature needs an older libdisplay-info than Arch ships.
 - **Multi-GPU laptops** (render on one GPU, display on another) aren't supported;

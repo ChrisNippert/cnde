@@ -183,6 +183,7 @@ impl State {
             s.open_anim = Some(Animation::new(0.0, 1.0, presets::WINDOW_OPEN));
         });
         self.space.map_element(window.clone(), location, true);
+        self.capture.window_mapped(&window);
         self.add_window_to_workspace(&window);
         self.focus_window(Some(&window));
         self.queue_redraw();
@@ -192,6 +193,7 @@ impl State {
     /// Called when a mapped toplevel attaches a null buffer or is destroyed.
     pub fn unmap_window(&mut self, window: &Window) {
         self.space.unmap_elem(window);
+        self.capture.window_unmapped(window);
         self.remove_window_from_workspaces(window);
         let topmost = self.space.elements().last().cloned();
         self.focus_window(topmost.as_ref());
