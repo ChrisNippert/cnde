@@ -143,6 +143,18 @@ pub struct Appearance {
     pub color_scheme: ColorScheme,
     /// Who draws window title bars, for apps that let the desktop do it.
     pub titlebars: Titlebars,
+    /// Buttons at the right end of title bars (ours, and GTK apps').
+    pub window_buttons: WindowButtons,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowButtons {
+    /// Minimize, maximize and close.
+    #[default]
+    All,
+    /// Close only, as in GNOME.
+    Close,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

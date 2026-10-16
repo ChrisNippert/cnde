@@ -549,7 +549,10 @@ impl State {
                 Rectangle::new(geo.loc + local, size)
             }
             Placement::Fullscreen => geo,
-            placement => placement_rect(placement, area),
+            placement => crate::decorations::content_rect(
+                placement_rect(placement, area),
+                crate::decorations::titlebar_height(window),
+            ),
         })
     }
 
@@ -557,7 +560,7 @@ impl State {
     /// `rest_rect` says, so the end of a slide is exactly where windows
     /// settle. Windows that must change size (maximized onto a different
     /// monitor) are configured and shown squeezed until they redraw.
-    fn rebuild_space(&mut self) {
+    pub(crate) fn rebuild_space(&mut self) {
         let mapped: Vec<Window> = self.space.elements().cloned().collect();
         for window in &mapped {
             self.space.unmap_elem(window);
@@ -569,6 +572,9 @@ impl State {
             };
             let windows = self.workspaces.list[index].windows.clone();
             for window in windows {
+                if with_state(&window, |s| s.minimized) {
+                    continue;
+                }
                 let Some(rest) = self.rest_rect(&window, &outputs, slot as isize) else {
                     continue;
                 };
@@ -614,7 +620,7 @@ impl State {
             let slot = index as f64 - position + main as f64;
             let (from, t) = (slot.floor() as isize, slot - slot.floor());
             for window in &self.workspaces.list[index as usize].windows {
-                if motion.carried.as_ref() == Some(window) {
+                if motion.carried.as_ref() == Some(window) || with_state(window, |s| s.minimized) {
                     continue;
                 }
                 let (Some(a), Some(b)) = (

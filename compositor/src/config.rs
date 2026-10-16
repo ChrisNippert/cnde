@@ -118,6 +118,8 @@ impl State {
         animation::set_speed(self.config.animations.speed);
         self.decorations.dark =
             self.config.appearance.color_scheme == cnde_config::ColorScheme::Dark;
+        self.decorations.all_buttons =
+            self.config.appearance.window_buttons == cnde_config::WindowButtons::All;
         if old.is_some_and(|old| old.appearance.titlebars != self.config.appearance.titlebars) {
             self.apply_titlebars_config();
         }
@@ -160,6 +162,7 @@ impl State {
         let nested = matches!(self.backend, crate::backend::Backend::Winit(_));
         if !nested && old.is_none_or(|old| old.appearance != self.config.appearance) {
             publish_color_scheme(self.config.appearance.color_scheme);
+            publish_window_buttons(self.config.appearance.window_buttons);
         }
     }
 
@@ -199,9 +202,23 @@ fn publish_color_scheme(scheme: cnde_config::ColorScheme) {
         cnde_config::ColorScheme::Dark => "prefer-dark",
         cnde_config::ColorScheme::Light => "default",
     };
+    gsettings_set("org.gnome.desktop.interface", "color-scheme", value);
+}
+
+/// Apps that draw their own title bars (GTK) place their buttons by this.
+fn publish_window_buttons(buttons: cnde_config::WindowButtons) {
+    let value = match buttons {
+        cnde_config::WindowButtons::All => "appmenu:minimize,maximize,close",
+        cnde_config::WindowButtons::Close => "appmenu:close",
+    };
+    gsettings_set("org.gnome.desktop.wm.preferences", "button-layout", value);
+}
+
+/// Shared with any GNOME session on this account (one dconf database).
+fn gsettings_set(schema: &'static str, key: &'static str, value: &'static str) {
     std::thread::spawn(move || {
         let result = std::process::Command::new("gsettings")
-            .args(["set", "org.gnome.desktop.interface", "color-scheme", value])
+            .args(["set", schema, key, value])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

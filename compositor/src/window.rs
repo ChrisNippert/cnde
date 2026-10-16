@@ -53,6 +53,9 @@ pub struct WindowState {
     /// The title bar cnde draws for it, if it's one that lets us.
     pub titlebar: Option<crate::decorations::Titlebar>,
     pub titlebar_hover: Option<crate::decorations::Part>,
+    /// Hidden until activated again (the dock, the overview's search).
+    /// It stays in its workspace, just not in the space.
+    pub minimized: bool,
 }
 
 pub fn with_state<T>(window: &Window, f: impl FnOnce(&mut WindowState) -> T) -> T {
@@ -255,6 +258,21 @@ impl State {
         keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
         // Title bars show which window has focus.
         self.queue_redraw();
+    }
+
+    /// Hide `window` until it's activated again; it shrinks away like a
+    /// closing one.
+    pub fn minimize(&mut self, window: &Window) {
+        if !self.space.elements().any(|w| w == window) {
+            return;
+        }
+        self.start_close_animation(window);
+        with_state(window, |s| s.minimized = true);
+        self.space.unmap_elem(window);
+        let topmost = self.space.elements().last().cloned();
+        self.focus_window(topmost.as_ref());
+        self.queue_redraw();
+        self.queue_pointer_refresh();
     }
 
     pub fn close_focused(&mut self) {

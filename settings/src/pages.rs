@@ -352,6 +352,22 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     }),
                 )
                 .sub("Draw title bars for apps that would otherwise use their toolkit's plain one"),
+                Row::new(
+                    "appearance.window_buttons",
+                    "Title bar buttons",
+                    Control::Segmented(choices(&[
+                        ("Minimize, Maximize, Close", s("all")),
+                        ("Close", s("close")),
+                    ])),
+                    s(match c.appearance.window_buttons {
+                        cnde_config::WindowButtons::All => "all",
+                        cnde_config::WindowButtons::Close => "close",
+                    }),
+                    s(match d.appearance.window_buttons {
+                        cnde_config::WindowButtons::All => "all",
+                        cnde_config::WindowButtons::Close => "close",
+                    }),
+                ),
             ],
         ),
         group(

@@ -220,6 +220,7 @@ impl State {
         }) else {
             return;
         };
+        let minimized = crate::window::with_state(&window, |s| std::mem::take(&mut s.minimized));
         let visible = self.space.elements().any(|w| w == &window);
         if !visible {
             let current = self
@@ -227,7 +228,13 @@ impl State {
                 .motion
                 .as_ref()
                 .map_or(self.workspaces.active, |m| m.to) as isize;
-            self.step_workspace(index as isize - current, false);
+            let step = index as isize - current;
+            if step != 0 {
+                self.step_workspace(step, false);
+            } else if minimized {
+                // On screen already: put it back where it was.
+                self.rebuild_space();
+            }
         }
         self.focus_window(Some(&window));
         if self.overview.is_open() {

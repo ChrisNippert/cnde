@@ -62,6 +62,7 @@ const DRAG_THRESHOLD: f64 = 4.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Part {
     Title,
+    Minimize,
     Maximize,
     Close,
     Resize(ResizeEdge),
@@ -100,14 +101,20 @@ pub fn content_rect(rect: Rectangle<i32, Logical>, bar: i32) -> Rectangle<i32, L
     )
 }
 
-/// The button (or the title) at `x` along a bar `width` wide.
-fn part_at(width: f64, x: f64) -> Part {
+/// The button (or the title) at `x` along a bar `width` wide; `all`:
+/// minimize and maximize too, not just close.
+fn part_at(width: f64, x: f64, all: bool) -> Part {
+    let step = (BUTTON + BUTTON_GAP) as f64;
     let close = width - SIDE as f64 - BUTTON as f64;
-    let maximize = close - BUTTON_GAP as f64 - BUTTON as f64;
-    if x >= close && x < close + BUTTON as f64 {
+    let on = |start: f64| x >= start && x < start + BUTTON as f64;
+    if on(close) {
         Part::Close
-    } else if x >= maximize && x < maximize + BUTTON as f64 {
+    } else if !all {
+        Part::Title
+    } else if on(close - step) {
         Part::Maximize
+    } else if on(close - 2.0 * step) {
+        Part::Minimize
     } else {
         Part::Title
     }
@@ -129,6 +136,7 @@ struct Key {
     dark: bool,
     rounded: bool,
     maximized: bool,
+    all_buttons: bool,
 }
 
 /// Fonts and icons for drawing bars, loaded when the first one is needed.
@@ -138,6 +146,8 @@ pub struct Decorations {
     icons: Option<Icons>,
     /// The light/dark style.
     pub dark: bool,
+    /// Minimize and maximize buttons too (`appearance.window_buttons`).
+    pub all_buttons: bool,
 }
 
 /// A press on a bar that may yet become a drag (or a double-click).
@@ -186,6 +196,7 @@ impl Decorations {
             dark: self.dark,
             rounded: state.placement == Placement::Floating,
             maximized: state.placement == Placement::Maximized,
+            all_buttons: self.all_buttons,
         };
         if state.titlebar.as_ref().is_none_or(|t| t.key != key) {
             let buffer = self.paint(&key)?;
@@ -297,19 +308,23 @@ fn paint(canvas: &mut Canvas<'_>, fonts: &mut Fonts, icons: &mut Icons, key: &Ke
         ink.with_alpha(if key.dark { 0.10 } else { 0.08 }),
     );
 
-    // The buttons, right to left: close, maximize.
+    // The buttons, right to left: close, maximize, minimize.
     let y = (height - BUTTON) / 2.0;
     let close_x = width - SIDE - BUTTON;
     let maximize_x = close_x - BUTTON_GAP - BUTTON;
+    let minimize_x = maximize_x - BUTTON_GAP - BUTTON;
     let maximize_icon = if key.maximized {
         "window-restore-symbolic"
     } else {
         "window-maximize-symbolic"
     };
-    for (x, part, icon) in [
+    let buttons = [
         (close_x, Part::Close, "window-close-symbolic"),
         (maximize_x, Part::Maximize, maximize_icon),
-    ] {
+        (minimize_x, Part::Minimize, "window-minimize-symbolic"),
+    ];
+    let shown = if key.all_buttons { 3 } else { 1 };
+    for (x, part, icon) in buttons.into_iter().take(shown) {
         let fill = if key.hover == Some(part) { 0.18 } else { 0.10 };
         canvas.circle(
             x + BUTTON / 2.0,
@@ -329,7 +344,12 @@ fn paint(canvas: &mut Canvas<'_>, fonts: &mut Fonts, icons: &mut Icons, key: &Ke
     }
 
     // The title, centred on the bar but kept clear of the buttons.
-    let reserve = SIDE + 2.0 * BUTTON + BUTTON_GAP + 12.0;
+    let reserve = SIDE + 3.0 * BUTTON + 2.0 * BUTTON_GAP + 12.0;
+    let reserve = if key.all_buttons {
+        reserve
+    } else {
+        SIDE + BUTTON + 12.0
+    };
     let room = (width - 2.0 * reserve).max(0.0);
     if room > 0.0 && !key.title.is_empty() {
         let mut layout = fonts.layout(&key.title, 14.0, Weight::Bold, canvas.scale());
@@ -415,7 +435,11 @@ impl State {
                 Size::from((geo.size.w, geo.size.h + bar)),
             );
             if frame.contains(pos) {
-                return Some((window.clone(), part_at(frame.size.w, pos.x - frame.loc.x)));
+                let all = self.decorations.all_buttons;
+                return Some((
+                    window.clone(),
+                    part_at(frame.size.w, pos.x - frame.loc.x, all),
+                ));
             }
             if with_state(window, |s| s.placement) != Placement::Floating {
                 continue;
@@ -502,7 +526,8 @@ impl State {
             }
             None => {}
         }
-        let hover = under.filter(|(_, part)| matches!(part, Part::Close | Part::Maximize));
+        let hover =
+            under.filter(|(_, part)| matches!(part, Part::Close | Part::Maximize | Part::Minimize));
         if hover.as_ref().map(|(w, p)| (w, *p))
             != self.bar_input.hover.as_ref().map(|(w, p)| (w, *p))
         {
@@ -573,6 +598,7 @@ impl State {
                     }
                 }
                 Part::Maximize => self.toggle_maximize(&press.window),
+                Part::Minimize => self.minimize(&press.window),
                 Part::Title | Part::Resize(_) => {}
             }
         }
@@ -617,10 +643,12 @@ mod tests {
     #[test]
     fn buttons_sit_at_the_right_end() {
         let width = 600.0;
-        assert_eq!(part_at(width, 10.0), Part::Title);
-        assert_eq!(part_at(width, width - SIDE as f64 - 1.0), Part::Close);
+        assert_eq!(part_at(width, 10.0, true), Part::Title);
+        assert_eq!(part_at(width, width - SIDE as f64 - 1.0, true), Part::Close);
         let maximize = width - SIDE as f64 - 2.0 * BUTTON as f64 - BUTTON_GAP as f64 + 1.0;
-        assert_eq!(part_at(width, maximize), Part::Maximize);
+        assert_eq!(part_at(width, maximize, true), Part::Maximize);
+        let minimize = maximize - (BUTTON + BUTTON_GAP) as f64;
+        assert_eq!(part_at(width, minimize, true), Part::Minimize);
     }
 
     #[test]

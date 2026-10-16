@@ -101,6 +101,12 @@ impl XdgShellHandler for State {
         }
     }
 
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.window_for_surface(surface.wl_surface()) {
+            self.minimize(&window);
+        }
+    }
+
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         self.placement_request(&surface, Placement::Maximized);
     }

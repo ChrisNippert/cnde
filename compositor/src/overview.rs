@@ -387,7 +387,9 @@ impl State {
             // a card of any shape.
             let mut windows = Vec::new();
             for window in &workspace.windows {
-                if carried.as_ref() == Some(window) {
+                if carried.as_ref() == Some(window)
+                    || crate::window::with_state(window, |s| s.minimized)
+                {
                     continue;
                 }
                 let (Some(a), Some(b)) = (
