@@ -33,6 +33,19 @@ long-lived processes**, plus helpers that start only when needed.
 | `xdg-desktop-portal-cnde` | started by D-Bus activation | Screenshots, screencast, output config for portals | small |
 | `xwayland-satellite` | started on first X11 client | XWayland bridge | only if X11 apps are used |
 
+**Modular installs**
+
+Only the compositor is required. The others ship as separate packages
+(`packaging/arch/PKGBUILD` splits them) and everything copes with a part
+being absent:
+
+- `autostart.shell` picks the shell command: `cnde-shell` by default,
+  another bar, or `""` for none.
+- Without `cnde-settings`, the shell leaves out its Settings menu items and
+  the quick-settings gear; `config.toml` still does everything.
+- Without `cnde-icons`, symbolic icons come from Adwaita (and an
+  uninstalled build finds them in the source tree's `icons/`).
+
 **Crash rules**
 
 - If `cnde-shell` crashes, the compositor restarts it, and windows are unaffected.
@@ -57,7 +70,9 @@ cnde/
 ├── ui/                     # shared crate: our widget toolkit (see §5.1)
 ├── ipc/                    # shared crate: compositor <-> shell/settings protocol types
 ├── config/                 # shared crate: config schema, load/save, defaults
-└── resources/              # session files, systemd units, default config, icons
+├── data/                   # session file, desktop entries, portal configs
+├── icons/                  # cnde's symbolic icon theme (and its generator)
+└── packaging/              # distro packages (Arch split PKGBUILD)
 ```
 
 ## 4. Compositor

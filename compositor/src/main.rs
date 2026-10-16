@@ -118,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         portals::setup(&state.client_env());
     }
     if state.config.panel.enabled {
-        spawn::supervise_shell(&state.client_env());
+        spawn::supervise_shell(&state.client_env(), &state.config.autostart.shell);
     }
     for command in &state.config.autostart.commands {
         spawn::spawn_command_line(command, &state.client_env());

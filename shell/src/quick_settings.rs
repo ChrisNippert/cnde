@@ -212,9 +212,18 @@ pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layou
         w: FOOTER_HEIGHT,
         h: FOOTER_HEIGHT,
     };
-    let settings_button = Rect {
-        x: power_button.x - theme.qs_gap - FOOTER_HEIGHT,
-        ..power_button
+    // No gear when cnde-settings isn't installed.
+    let settings_button = if cfg!(test) || crate::apps::settings_installed() {
+        Rect {
+            x: power_button.x - theme.qs_gap - FOOTER_HEIGHT,
+            ..power_button
+        }
+    } else {
+        Rect {
+            w: 0.0,
+            h: 0.0,
+            ..power_button
+        }
     };
     y += FOOTER_HEIGHT + pad;
 
@@ -895,20 +904,22 @@ fn paint(
         );
     }
     let g = layout.settings_button;
-    canvas.circle(
-        g.x + g.w / 2.0,
-        g.y + g.h / 2.0,
-        g.w / 2.0,
-        theme.qs_toggle_off,
-    );
-    canvas.icon(
-        icons,
-        "emblem-system-symbolic",
-        g.x + (g.w - 18.0) / 2.0,
-        g.y + (g.h - 18.0) / 2.0,
-        18.0,
-        theme.popup_text,
-    );
+    if g.w > 0.0 {
+        canvas.circle(
+            g.x + g.w / 2.0,
+            g.y + g.h / 2.0,
+            g.w / 2.0,
+            theme.qs_toggle_off,
+        );
+        canvas.icon(
+            icons,
+            "emblem-system-symbolic",
+            g.x + (g.w - 18.0) / 2.0,
+            g.y + (g.h - 18.0) / 2.0,
+            18.0,
+            theme.popup_text,
+        );
+    }
     let p = layout.power_button;
     let power_bg = if layout.power_menu.is_some() {
         theme.qs_toggle_on

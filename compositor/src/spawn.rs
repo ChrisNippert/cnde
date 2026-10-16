@@ -59,20 +59,31 @@ pub fn spawn_browser(env: &ClientEnv) {
 /// Run cnde-shell for the whole session, restarting it if it crashes
 /// (ARCHITECTURE.md §2). Restarts back off so a crash loop can't spin, and
 /// the backoff resets once it has stayed up a while.
-pub fn supervise_shell(env: &ClientEnv) {
+/// `shell` is `autostart.shell`: a command line, or empty for none.
+pub fn supervise_shell(env: &ClientEnv, shell: &str) {
     let env = env.clone();
-    // Next to our own binary first (a dev build), then $PATH.
-    let program = std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.join("cnde-shell")))
-        .filter(|path| path.is_file())
-        .map_or_else(|| "cnde-shell".into(), |path| path.into_os_string());
+    let mut argv = split_command_line(shell);
+    if argv.is_empty() {
+        info!("no shell configured (autostart.shell)");
+        return;
+    }
+    // Ours: next to our own binary first (a dev build), then $PATH.
+    if argv[0] == "cnde-shell"
+        && let Some(sibling) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| Some(exe.parent()?.join("cnde-shell")))
+            .filter(|path| path.is_file())
+    {
+        argv[0] = sibling.to_string_lossy().into_owned();
+    }
+    let (program, args) = (argv[0].clone(), argv[1..].to_vec());
     thread::spawn(move || {
         let mut backoff = std::time::Duration::from_secs(1);
         loop {
             let started = std::time::Instant::now();
             let mut command = Command::new(&program);
             command
+                .args(&args)
                 .env("WAYLAND_DISPLAY", &env.wayland_display)
                 .env_remove("WAYLAND_SOCKET")
                 .stdin(Stdio::null());
@@ -86,7 +97,7 @@ pub fn supervise_shell(env: &ClientEnv) {
                     warn!(
                         ?program,
                         ?err,
-                        "can't start cnde-shell; no panel this session"
+                        "can't start the shell; no panel this session"
                     );
                     return;
                 }
@@ -94,7 +105,7 @@ pub fn supervise_shell(env: &ClientEnv) {
             if started.elapsed() > std::time::Duration::from_secs(30) {
                 backoff = std::time::Duration::from_secs(1);
             }
-            warn!(?status, ?backoff, "cnde-shell exited; restarting");
+            warn!(?status, ?backoff, ?program, "the shell exited; restarting");
             thread::sleep(backoff);
             backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
         }

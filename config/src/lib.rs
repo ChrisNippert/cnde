@@ -432,11 +432,24 @@ pub struct Launcher {
     pub command: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Autostart {
     /// Commands run once when the compositor starts.
     pub commands: Vec<String>,
+    /// The shell (top bar, dock, overview search), kept running for the
+    /// whole session and restarted if it crashes. Another program can take
+    /// its place, or "" for none.
+    pub shell: String,
+}
+
+impl Default for Autostart {
+    fn default() -> Self {
+        Self {
+            commands: Vec::new(),
+            shell: "cnde-shell".into(),
+        }
+    }
 }
 
 #[derive(Debug)]

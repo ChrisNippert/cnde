@@ -79,5 +79,8 @@
 # command = ""             # e.g. "fuzzel"
 
 [autostart]
-# Run once at startup, e.g. a bar while the cnde shell doesn't exist yet.
+# Run once at startup.
 # commands = ["waybar"]
+# The shell: top bar, dock, overview search, quick settings. Kept running
+# and restarted if it crashes. "" runs none (e.g. with waybar above).
+# shell = "cnde-shell"

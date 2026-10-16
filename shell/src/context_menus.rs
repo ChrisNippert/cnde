@@ -174,6 +174,7 @@ impl App {
         let Some(seat) = self.seat_handle.clone() else {
             return;
         };
+        let entries = without_settings_if_missing(entries);
         self.quick_settings = None;
         self.menu = Menu::open(
             &self.compositor,
@@ -415,6 +416,29 @@ impl App {
             Action::EditPanel => self.start_panel_edit(),
         }
     }
+}
+
+/// Drop "… Settings" items when cnde-settings isn't installed, and any
+/// separators left doubled or dangling.
+fn without_settings_if_missing(entries: Vec<Entry>) -> Vec<Entry> {
+    if crate::apps::settings_installed() {
+        return entries;
+    }
+    let mut out: Vec<Entry> = Vec::new();
+    for entry in entries {
+        match entry {
+            Entry::Item {
+                action: Action::Settings(_),
+                ..
+            } => {}
+            Entry::Separator if out.is_empty() || matches!(out.last(), Some(Entry::Separator)) => {}
+            other => out.push(other),
+        }
+    }
+    while matches!(out.last(), Some(Entry::Separator)) {
+        out.pop();
+    }
+    out
 }
 
 fn panel_height(theme: &cnde_ui::Theme) -> i32 {

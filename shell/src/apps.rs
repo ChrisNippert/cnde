@@ -357,14 +357,38 @@ pub fn launch(app: &App, terminal: &str) {
     }
 }
 
-/// Start cnde-settings (on `page`, e.g. "dock"): the one next to our
-/// binary, else from PATH.
+/// cnde-settings: the one next to our binary, else from PATH. `None` if
+/// it isn't installed (it's a separate package), and then nothing offers
+/// to open it.
+pub fn settings_program() -> Option<std::ffi::OsString> {
+    static PROGRAM: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+    PROGRAM
+        .get_or_init(|| {
+            let sibling = std::env::current_exe()
+                .ok()
+                .and_then(|exe| Some(exe.parent()?.join("cnde-settings")))
+                .filter(|exe| exe.is_file());
+            let on_path = || {
+                std::env::var_os("PATH").and_then(|path| {
+                    std::env::split_paths(&path)
+                        .map(|dir| dir.join("cnde-settings"))
+                        .find(|exe| exe.is_file())
+                })
+            };
+            sibling.or_else(on_path).map(|exe| exe.into_os_string())
+        })
+        .clone()
+}
+
+pub fn settings_installed() -> bool {
+    settings_program().is_some()
+}
+
+/// Start cnde-settings (on `page`, e.g. "dock").
 pub fn open_settings(page: Option<&str>) {
-    let program = std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.join("cnde-settings")))
-        .filter(|exe| exe.is_file())
-        .map_or_else(|| "cnde-settings".into(), |exe| exe.into_os_string());
+    let Some(program) = settings_program() else {
+        return;
+    };
     let result = Command::new(&program)
         .args(page)
         .current_dir(std::env::var_os("HOME").unwrap_or_else(|| "/".into()))
