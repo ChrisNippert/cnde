@@ -6,6 +6,7 @@ mod backend;
 mod config;
 mod cursor;
 mod effects;
+mod ext_workspace;
 mod grabs;
 mod handlers;
 mod input;

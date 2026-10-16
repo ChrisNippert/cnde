@@ -65,6 +65,7 @@ pub struct State {
 
     pub space: Space<Window>,
     pub workspaces: crate::workspaces::Workspaces,
+    pub ext_workspace_state: crate::ext_workspace::ExtWorkspaceState,
     /// A three-finger swipe is driving the workspace strip.
     pub swipe_active: bool,
     /// Toplevels that exist but haven't attached a buffer yet. They are mapped
@@ -122,6 +123,7 @@ impl State {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
+        crate::ext_workspace::init(&dh);
         let mut seat_state = SeatState::new();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, seat_name);
@@ -149,6 +151,7 @@ impl State {
 
             space: Space::default(),
             workspaces: crate::workspaces::Workspaces::new(),
+            ext_workspace_state: Default::default(),
             swipe_active: false,
             unmapped: Vec::new(),
             closing: Vec::new(),
@@ -229,6 +232,7 @@ impl State {
         if matches!(self.backend, Backend::Udev(_)) {
             self.udev_render_queued();
         }
+        self.refresh_ext_workspaces();
         // Last, so frame callbacks sent while rendering go out now.
         if let Err(err) = self.display_handle.flush_clients() {
             warn!(?err, "failed to flush clients");

@@ -28,7 +28,7 @@ pub type WorkspaceId = u64;
 /// Generic over the window type only so the strip logic can be unit-tested
 /// with plain numbers; the compositor uses `Window`.
 pub struct Workspace<W = Window> {
-    #[allow(dead_code)] // identifies workspaces to ext-workspace clients (next)
+    /// Stable identity for ext-workspace clients across renumbering.
     pub id: WorkspaceId,
     /// Bottom to top.
     pub windows: Vec<W>,
