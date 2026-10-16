@@ -274,7 +274,12 @@ impl App {
             ));
         }
         entries.push(Entry::Separator);
-        entries.push(Entry::item("Edit Dock…", Action::EditDock));
+        let edit = if self.dock_editing {
+            "Done Editing"
+        } else {
+            "Edit Dock…"
+        };
+        entries.push(Entry::item(edit, Action::EditDock));
         entries.push(Entry::item("Dock Settings", Action::Settings(Some("dock"))));
         entries
     }
@@ -320,7 +325,14 @@ impl App {
                 )]),
             ),
             Entry::Separator,
-            Entry::item("Edit Top Bar…", Action::EditPanel),
+            Entry::item(
+                if self.panel_editing() {
+                    "Done Editing"
+                } else {
+                    "Edit Top Bar…"
+                },
+                Action::EditPanel,
+            ),
             Entry::item("Top Bar Settings", Action::Settings(Some("top"))),
         ]
     }
@@ -337,9 +349,10 @@ impl App {
                     self.ipc.send(&cnde_ipc::Request::CloseWindow { id });
                 }
             }
-            // In-place editing comes next; until then, the settings page.
-            Action::EditDock => crate::apps::open_settings(Some("dock")),
-            Action::EditPanel => crate::apps::open_settings(Some("top")),
+            Action::EditDock if self.dock_editing => self.finish_dock_edit(),
+            Action::EditDock => self.start_dock_edit(),
+            Action::EditPanel if self.panel_editing() => self.finish_panel_edit(),
+            Action::EditPanel => self.start_panel_edit(),
         }
     }
 }

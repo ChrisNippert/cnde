@@ -24,6 +24,10 @@ entries when they're done.
   unzoomed spot; windows on hidden workspaces don't update live; the search
   box is only on the main monitor; no app grid button yet; no hover
   highlight on windows.
+- **Right-click menus and edit mode** haven't been tried with a real mouse
+  yet (only rendered nested). Moving the dock by its grip gives no preview of
+  where it'll land beyond tinting the dock; it jumps on release. A clock dragged
+  in edit mode follows the pointer but only lands in thirds of the bar.
 - **Settings app:** no resize cursors at the window edges (the compositor
   lacks cursor-shape-v1); no keyboard navigation between controls (Tab) and
   no AccessKit yet; the light style isn't drawn (the switch only picks the

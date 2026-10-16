@@ -3,6 +3,7 @@
 //! the centre, and the status icons on the right open quick settings.
 
 use chrono::Local;
+use cnde_config::ClockPosition;
 use cnde_ui::{Animator, Canvas, Fonts, Icons, Theme, Weight, anim::SHORT};
 use smithay_client_toolkit::{
     compositor::{CompositorState, FrameCallbackData},
@@ -36,7 +37,33 @@ pub struct Draw<'a> {
     /// What the buttons open is open (they're drawn highlighted).
     pub overview_open: bool,
     pub quick_settings_open: bool,
+    pub clock_position: ClockPosition,
 }
+
+/// Editing the bar in place (from its right-click menu).
+#[derive(Debug, Default)]
+pub struct PanelEdit {
+    pub drag: Option<PanelDrag>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PanelDrag {
+    /// Dragging the bottom edge: where the press was, and the height then.
+    Height { start_y: f64, start_height: u32 },
+    /// Carrying the clock; its centre follows the pointer.
+    Clock { x: f32 },
+}
+
+/// What a press hits while editing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditTarget {
+    Done,
+    Clock,
+    Height,
+}
+
+/// How close to the bottom edge a press grabs it.
+const EDGE_GRAB: f32 = 7.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Button {
@@ -57,6 +84,10 @@ pub struct Panel {
     status_region: Option<(f32, f32)>,
     /// The button under the pointer.
     hover: Option<Button>,
+    /// Being edited in place.
+    pub edit: Option<PanelEdit>,
+    clock_region: Option<(f32, f32)>,
+    done_region: Option<(f32, f32)>,
     /// Hover pills fading: (button, true) for the "open" highlight.
     anim: Animator<(Button, bool)>,
     /// A frame callback is outstanding; draw when it fires.
@@ -96,6 +127,9 @@ impl Panel {
             activities_region: None,
             status_region: None,
             hover: None,
+            edit: None,
+            clock_region: None,
+            done_region: None,
             anim: Animator::new(),
             frame_pending: false,
             dirty: false,
@@ -138,6 +172,39 @@ impl Panel {
             Some(Button::Status)
         } else {
             None
+        }
+    }
+
+    /// What's under `point` while editing.
+    pub fn edit_target(&self, (x, y): (f64, f64)) -> Option<EditTarget> {
+        let (x, y) = (x as f32, y as f32);
+        let inside = |r: Option<(f32, f32)>| r.is_some_and(|(a, b)| x >= a && x < b);
+        if inside(self.done_region) {
+            Some(EditTarget::Done)
+        } else if y >= self.height as f32 - EDGE_GRAB {
+            Some(EditTarget::Height)
+        } else if inside(self.clock_region) {
+            Some(EditTarget::Clock)
+        } else {
+            None
+        }
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Resize live while the bottom edge is dragged.
+    pub fn set_height(&mut self, height: u32) {
+        if height != self.height {
+            self.height = height;
+            self.layer.set_size(0, height);
+            self.layer.set_exclusive_zone(height as i32);
+            self.layer.commit();
         }
     }
 
@@ -198,6 +265,7 @@ impl Panel {
             status,
             overview_open,
             quick_settings_open,
+            clock_position,
         } = ctx;
         if self.width == 0 {
             return; // not configured yet
@@ -260,13 +328,6 @@ impl Panel {
             x += dot_w + theme.workspace_spacing;
         }
 
-        // Clock, centred.
-        let text = format_clock(clock_format);
-        let mut clock = fonts.layout(&text, theme.font_size, Weight::Bold, scale as f32);
-        let clock_x = ((width - clock.width) / 2.0).round();
-        let clock_y = ((height - clock.height) / 2.0).round();
-        canvas.text(fonts, &mut clock, clock_x, clock_y, theme.panel_foreground);
-
         // Status, right-aligned: network, volume, battery (+ percentage),
         // one button. Measured first so its hover pill goes underneath.
         let icon = theme.status_icon_size;
@@ -318,6 +379,84 @@ impl Panel {
             canvas.text(fonts, text, x.round(), text_y, fg);
         }
 
+        // Editing: a Done button left of the status icons.
+        self.done_region = None;
+        let mut right_limit = region.0;
+        if self.edit.is_some() {
+            let mut label = fonts.layout("Done", theme.font_size, Weight::Bold, scale as f32);
+            let bw = label.width + 2.0 * pad + 8.0;
+            let bx = region.0 - 8.0 - bw;
+            let inset = theme.panel_button_inset;
+            let bh = height - 2.0 * inset;
+            canvas.rounded_rect(bx, inset, bw, bh, bh / 2.0, theme.accent);
+            let ty = ((height - label.height) / 2.0).round();
+            let tx = (bx + (bw - label.width) / 2.0).round();
+            canvas.text(fonts, &mut label, tx, ty, theme.on_accent);
+            self.done_region = Some((bx, bx + bw));
+            right_limit = bx;
+        }
+
+        // Clock: centred, or beside the dots or the status icons.
+        let text = format_clock(clock_format);
+        let mut clock = fonts.layout(&text, theme.font_size, Weight::Bold, scale as f32);
+        const GAP: f32 = 16.0;
+        let slot_x = |position: ClockPosition| match position {
+            ClockPosition::Left => activities.1 + GAP,
+            ClockPosition::Center => (width - clock.width) / 2.0,
+            ClockPosition::Right => right_limit - GAP - clock.width,
+        };
+        let dragged = match self.edit.as_ref().and_then(|e| e.drag) {
+            Some(PanelDrag::Clock { x }) => Some(x),
+            _ => None,
+        };
+        let clock_x = match dragged {
+            Some(x) => {
+                // Where it would land, outlined.
+                let target = slot_x(clock_slot(x, width));
+                let outline = theme.accent.with_alpha(0.7);
+                canvas.stroke_rounded_rect(
+                    target - 6.0,
+                    3.0,
+                    clock.width + 12.0,
+                    height - 6.0,
+                    (height - 6.0) / 2.0,
+                    1.5,
+                    outline,
+                );
+                x - clock.width / 2.0
+            }
+            None => slot_x(clock_position),
+        }
+        .round();
+        let clock_y = ((height - clock.height) / 2.0).round();
+        canvas.text(fonts, &mut clock, clock_x, clock_y, theme.panel_foreground);
+        self.clock_region = Some((clock_x - 6.0, clock_x + clock.width + 6.0));
+
+        if self.edit.is_some() {
+            // The bar outlined, the clock marked movable, a grip to resize.
+            canvas.stroke_rounded_rect(0.0, 0.0, width, height, 0.0, 2.0, theme.accent);
+            if dragged.is_none() {
+                let dim = theme.panel_foreground.with_alpha(0.35);
+                canvas.stroke_rounded_rect(
+                    clock_x - 6.0,
+                    3.0,
+                    clock.width + 12.0,
+                    height - 6.0,
+                    (height - 6.0) / 2.0,
+                    1.0,
+                    dim,
+                );
+            }
+            canvas.rounded_rect(
+                width / 2.0 - 20.0,
+                height - 5.0,
+                40.0,
+                3.0,
+                1.5,
+                theme.accent,
+            );
+        }
+
         // Debug aid: CNDE_SHELL_DUMP=path writes each frame's raw RGBA
         // pixels (with a "WxH\n" header) for inspecting the look offline.
 
@@ -347,6 +486,17 @@ impl Panel {
             self.dirty = true;
         }
         self.layer.commit();
+    }
+}
+
+/// Which slot a clock dropped at `x` goes to: the bar's thirds.
+pub fn clock_slot(x: f32, width: f32) -> ClockPosition {
+    if x < width / 3.0 {
+        ClockPosition::Left
+    } else if x > width * 2.0 / 3.0 {
+        ClockPosition::Right
+    } else {
+        ClockPosition::Center
     }
 }
 

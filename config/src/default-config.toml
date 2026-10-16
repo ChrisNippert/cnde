@@ -54,6 +54,7 @@
 # foreground = "#ffffff"
 # font_size = 14
 # clock_format = "%a %b %-d  %H:%M"   # e.g. "%I:%M %p" for 12-hour
+# clock_position = "center"   # or "left", "right"
 # workspace_dot_size = 7
 # workspace_active_width = 28
 

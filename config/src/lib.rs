@@ -231,6 +231,7 @@ pub struct Panel {
     pub font_size: f32,
     /// strftime-style, e.g. "%H:%M" or "%a %b %-d  %I:%M %p".
     pub clock_format: String,
+    pub clock_position: ClockPosition,
     pub workspace_dot_size: f32,
     /// Width of the pill marking active workspaces.
     pub workspace_active_width: f32,
@@ -246,10 +247,22 @@ impl Default for Panel {
             foreground: "#ffffff".into(),
             font_size: 14.0,
             clock_format: "%a %b %-d  %H:%M".into(),
+            clock_position: ClockPosition::Center,
             workspace_dot_size: 7.0,
             workspace_active_width: 28.0,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClockPosition {
+    /// Next to the workspace dots.
+    Left,
+    #[default]
+    Center,
+    /// Next to the status icons.
+    Right,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

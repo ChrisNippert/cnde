@@ -130,7 +130,25 @@ pub struct Layout {
     pub separator: Option<Rect>,
 }
 
-pub fn layout(items: &[Item], icon: f32, vertical: bool) -> Layout {
+/// The edit-mode buttons after the apps button, in order.
+pub const CONTROLS: [Control; 4] = [
+    Control::Move,
+    Control::Smaller,
+    Control::Bigger,
+    Control::Done,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    /// Drag towards a screen edge to move the dock there.
+    Move,
+    Smaller,
+    Bigger,
+    Done,
+}
+
+/// `editing` adds the edit-mode buttons ([`CONTROLS`]) at the end.
+pub fn layout(items: &[Item], icon: f32, vertical: bool, editing: bool) -> Layout {
     let cell = icon + 2.0 * CELL_PAD;
     let favorites = items.iter().filter(|i| i.favorite).count();
     let separated = favorites > 0 && favorites < items.len();
@@ -154,10 +172,15 @@ pub fn layout(items: &[Item], icon: f32, vertical: bool) -> Layout {
             }
         }
     };
-    for i in 0..=items.len() {
+    let count = items.len() + 1 + if editing { CONTROLS.len() } else { 0 };
+    for i in 0..count {
         // The separator before the first non-favorite, and before the apps
         // button if there are any items at all.
-        if (separated && i == favorites) || (i == items.len() && !items.is_empty()) {
+        let before_controls = editing && i == items.len() + 1;
+        if (separated && i == favorites)
+            || (i == items.len() && !items.is_empty())
+            || before_controls
+        {
             let line = if vertical {
                 Rect {
                     x: INNER_PAD + CELL_PAD,
@@ -196,6 +219,33 @@ pub fn layout(items: &[Item], icon: f32, vertical: bool) -> Layout {
     }
 }
 
+/// Editing the dock in place (from its right-click menu).
+#[derive(Debug, Default)]
+pub struct DockEdit {
+    pub drag: Option<DockDrag>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DockDrag {
+    /// A pinned icon being carried to a new place; `at` is the pointer.
+    Icon { index: usize, at: (f64, f64) },
+    /// The move grip, being dragged towards a screen edge.
+    Move { at: (f64, f64) },
+}
+
+/// What a press hits while editing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditHit {
+    /// The × on a pinned icon: unpin it.
+    Unpin(usize),
+    /// A pinned icon: start carrying it.
+    Icon(usize),
+    Control(Control),
+}
+
+/// The × badge's size, at an icon's top corner.
+const BADGE: f32 = 18.0;
+
 pub enum Click {
     Nothing,
     Launch(String),
@@ -214,6 +264,7 @@ pub struct Dock {
     size: (u32, u32),
     items: Vec<Item>,
     hover: Option<usize>,
+    pub edit: Option<DockEdit>,
 }
 
 impl Dock {
@@ -262,11 +313,61 @@ impl Dock {
             size: (0, 0),
             items: Vec::new(),
             hover: None,
+            edit: None,
         }
     }
 
     pub fn position(&self) -> DockPosition {
         self.position
+    }
+
+    fn layout(&self, icon: f32) -> Layout {
+        layout(&self.items, icon, self.vertical(), self.edit.is_some())
+    }
+
+    /// Recompute the size after starting or finishing editing.
+    pub fn relayout(&mut self, icon: f32) {
+        let items = std::mem::take(&mut self.items);
+        self.size = (0, 0);
+        self.update(items, icon);
+    }
+
+    /// What a press at `point` hits while editing.
+    pub fn edit_hit(&self, point: (f64, f64), icon: f32) -> Option<EditHit> {
+        let layout = self.layout(icon);
+        let index = layout.cells.iter().position(|c| c.contains(point))?;
+        let cell = layout.cells[index];
+        if let Some(item) = self.items.get(index) {
+            if !item.favorite {
+                return None;
+            }
+            let badge = badge_rect(cell);
+            return Some(if badge.contains(point) {
+                EditHit::Unpin(index)
+            } else {
+                EditHit::Icon(index)
+            });
+        }
+        let control = index.checked_sub(self.items.len() + 1)?;
+        CONTROLS.get(control).map(|c| EditHit::Control(*c))
+    }
+
+    /// Where a carried icon would land: an index among the pinned ones.
+    pub fn drop_index(&self, at: (f64, f64), icon: f32) -> usize {
+        let layout = self.layout(icon);
+        let favorites = self.items.iter().filter(|i| i.favorite).count();
+        let along = if self.vertical() { at.1 } else { at.0 } as f32;
+        layout.cells[..favorites]
+            .iter()
+            .filter(|c| {
+                let centre = if self.vertical() {
+                    c.y + c.h / 2.0
+                } else {
+                    c.x + c.w / 2.0
+                };
+                along > centre
+            })
+            .count()
     }
 
     fn vertical(&self) -> bool {
@@ -276,7 +377,7 @@ impl Dock {
     /// New items or icon size: resize (and reserve the space, on an edge).
     pub fn update(&mut self, items: Vec<Item>, icon: f32) {
         self.items = items;
-        let layout = layout(&self.items, icon, self.vertical());
+        let layout = self.layout(icon);
         let size = (layout.width.ceil() as u32, layout.height.ceil() as u32);
         if size != self.size {
             self.size = size;
@@ -291,7 +392,14 @@ impl Dock {
                 self.layer.commit();
             }
         }
-        self.hover = self.hover.filter(|&h| h <= self.items.len());
+        let cells = self.items.len()
+            + 1
+            + if self.edit.is_some() {
+                CONTROLS.len()
+            } else {
+                0
+            };
+        self.hover = self.hover.filter(|&h| h < cells);
     }
 
     pub fn configured(&mut self) {
@@ -310,7 +418,7 @@ impl Dock {
 
     /// Returns true if the hover changed.
     pub fn hover(&mut self, point: Option<(f64, f64)>, icon: f32) -> bool {
-        let layout = layout(&self.items, icon, self.vertical());
+        let layout = self.layout(icon);
         let hover = point.and_then(|p| layout.cells.iter().position(|c| c.contains(p)));
         std::mem::replace(&mut self.hover, hover) != hover
     }
@@ -318,7 +426,7 @@ impl Dock {
     /// The cell under `point`: its index and rect. The last index is the
     /// apps button (past the end of [`Dock::items`]).
     pub fn cell_at(&self, point: (f64, f64), icon: f32) -> Option<(usize, Rect)> {
-        let layout = layout(&self.items, icon, self.vertical());
+        let layout = self.layout(icon);
         layout
             .cells
             .iter()
@@ -330,13 +438,18 @@ impl Dock {
         self.scale
     }
 
+    /// The dock's own size, logical.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
     pub fn items(&self) -> &[Item] {
         &self.items
     }
 
     /// `new_window`: middle click, always launch.
     pub fn click(&self, point: (f64, f64), icon: f32, new_window: bool) -> Click {
-        let layout = layout(&self.items, icon, self.vertical());
+        let layout = self.layout(icon);
         let Some(index) = layout.cells.iter().position(|c| c.contains(point)) else {
             return Click::Nothing;
         };
@@ -369,7 +482,7 @@ impl Dock {
             return;
         }
         self.dirty = false;
-        let layout = layout(&self.items, icon, self.vertical());
+        let layout = self.layout(icon);
         let scale = self.scale;
         let (w, h) = (
             (layout.width.ceil() * scale as f32) as i32,
@@ -392,6 +505,7 @@ impl Dock {
                 &self.items,
                 self.hover,
                 self.vertical(),
+                self.edit.as_ref(),
                 icons,
                 theme,
                 icon,
@@ -419,24 +533,51 @@ fn paint(
     items: &[Item],
     hover: Option<usize>,
     vertical: bool,
+    edit: Option<&DockEdit>,
     icons: &mut Icons,
     theme: &Theme,
     icon: f32,
 ) {
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
+    let drag = edit.and_then(|e| e.drag);
+    // Carrying the dock: tinted, so it's clear it's moving.
+    let background = if matches!(drag, Some(DockDrag::Move { .. })) {
+        theme.search_background.mix(theme.accent, 0.35)
+    } else {
+        theme.search_background
+    };
     canvas.rounded_rect(
         0.0,
         0.0,
         layout.width,
         layout.height,
         theme.search_results_radius,
-        theme.search_background,
+        background,
     );
+    if edit.is_some() {
+        canvas.stroke_rounded_rect(
+            0.0,
+            0.0,
+            layout.width,
+            layout.height,
+            theme.search_results_radius,
+            2.0,
+            theme.accent,
+        );
+    }
+    let carried = match drag {
+        Some(DockDrag::Icon { index, at }) => Some((index, at)),
+        _ => None,
+    };
     if let Some(line) = layout.separator {
         canvas.rounded_rect(line.x, line.y, line.w, line.h, 0.0, theme.qs_toggle_off);
     }
     for (i, cell) in layout.cells.iter().enumerate() {
-        if hover == Some(i) {
+        // The carried icon is drawn at the pointer instead, last.
+        if carried.is_some_and(|(index, _)| index == i) {
+            continue;
+        }
+        if hover == Some(i) && drag.is_none() {
             canvas.rounded_rect(
                 cell.x + 2.0,
                 cell.y + 2.0,
@@ -448,15 +589,59 @@ fn paint(
         }
         let (x, y) = (cell.x + CELL_PAD, cell.y + CELL_PAD);
         let Some(item) = items.get(i) else {
-            // The apps button.
-            let size = icon * 0.5;
+            // The apps button, then (editing) the edit buttons.
+            let control = i.checked_sub(items.len() + 1).and_then(|c| CONTROLS.get(c));
+            if control == Some(&Control::Move) {
+                // A four-way arrow: drag me somewhere.
+                let (cx, cy) = (cell.x + cell.w / 2.0, cell.y + cell.h / 2.0);
+                let size = icon * 0.26;
+                let reach = icon * 0.17;
+                for (name, dx, dy) in [
+                    ("pan-up-symbolic", 0.0, -reach),
+                    ("pan-down-symbolic", 0.0, reach),
+                    ("pan-start-symbolic", -reach, 0.0),
+                    ("pan-end-symbolic", reach, 0.0),
+                ] {
+                    canvas.icon(
+                        icons,
+                        name,
+                        cx + dx - size / 2.0,
+                        cy + dy - size / 2.0,
+                        size,
+                        theme.popup_text,
+                    );
+                }
+                continue;
+            }
+            let name = match control {
+                None => "view-app-grid-symbolic",
+                Some(Control::Move) => unreachable!("drawn above"),
+                Some(Control::Smaller) => "zoom-out-symbolic",
+                Some(Control::Bigger) => "zoom-in-symbolic",
+                Some(Control::Done) => "object-select-symbolic",
+            };
+            let mut color = theme.popup_text;
+            if control == Some(&Control::Done) {
+                canvas.circle(
+                    cell.x + cell.w / 2.0,
+                    cell.y + cell.h / 2.0,
+                    cell.w * 0.3,
+                    theme.accent,
+                );
+                color = theme.on_accent;
+            }
+            let size = if control.is_some() {
+                icon * 0.4
+            } else {
+                icon * 0.5
+            };
             canvas.icon(
                 icons,
-                "view-app-grid-symbolic",
+                name,
                 cell.x + (cell.w - size) / 2.0,
                 cell.y + (cell.h - size) / 2.0,
                 size,
-                theme.popup_text,
+                color,
             );
             continue;
         };
@@ -470,14 +655,31 @@ fn paint(
                 theme.qs_dim,
             );
         }
+        if edit.is_some() && item.favorite {
+            let b = badge_rect(*cell);
+            canvas.circle(
+                b.x + b.w / 2.0,
+                b.y + b.h / 2.0,
+                b.w / 2.0,
+                theme.popup_text,
+            );
+            canvas.icon(
+                icons,
+                "window-close-symbolic",
+                b.x + 3.0,
+                b.y + 3.0,
+                b.w - 6.0,
+                theme.search_background.with_alpha(1.0),
+            );
+        }
         // Running: a dot by the icon; focused: a short bar.
         if !item.windows.is_empty() {
             let dot = 4.0;
             let long = if item.focused { 14.0 } else { dot };
             let color = if item.focused {
-                theme.workspace_active
+                theme.popup_text
             } else {
-                theme.workspace_dot
+                theme.qs_dim
             };
             let (dx, dy, dw, dh) = if vertical {
                 (cell.x + 1.0, cell.y + (cell.h - long) / 2.0, dot, long)
@@ -491,6 +693,77 @@ fn paint(
             };
             canvas.rounded_rect(dx, dy, dw, dh, dot / 2.0, color);
         }
+    }
+    if let Some((index, at)) = carried
+        && let (Some(item), Some(cell)) = (items.get(index), layout.cells.get(index))
+    {
+        // Where it would go: a bar between icons.
+        let favorites = items.iter().filter(|i| i.favorite).count();
+        let along = if vertical { at.1 } else { at.0 } as f32;
+        let slot = layout.cells[..favorites]
+            .iter()
+            .filter(|c| {
+                along
+                    > if vertical {
+                        c.y + c.h / 2.0
+                    } else {
+                        c.x + c.w / 2.0
+                    }
+            })
+            .count();
+        let edge = match layout.cells.get(slot) {
+            Some(c) if slot < favorites => {
+                if vertical {
+                    c.y
+                } else {
+                    c.x
+                }
+            }
+            _ => {
+                let last = layout.cells[favorites - 1];
+                if vertical {
+                    last.y + last.h
+                } else {
+                    last.x + last.w
+                }
+            }
+        };
+        if vertical {
+            canvas.rounded_rect(
+                cell.x + 6.0,
+                edge - 1.5,
+                cell.w - 12.0,
+                3.0,
+                1.5,
+                theme.accent,
+            );
+        } else {
+            canvas.rounded_rect(
+                edge - 1.5,
+                cell.y + 6.0,
+                3.0,
+                cell.h - 12.0,
+                1.5,
+                theme.accent,
+            );
+        }
+        // The icon itself, under the pointer (along the dock only).
+        let (x, y) = if vertical {
+            (cell.x + CELL_PAD, at.1 as f32 - icon / 2.0)
+        } else {
+            (at.0 as f32 - icon / 2.0, cell.y + CELL_PAD)
+        };
+        canvas.app_icon(icons, &item.icon, x, y, icon);
+    }
+}
+
+/// The × on a pinned icon while editing: its top-right corner.
+fn badge_rect(cell: Rect) -> Rect {
+    Rect {
+        x: cell.x + cell.w - BADGE - 1.0,
+        y: cell.y + 1.0,
+        w: BADGE,
+        h: BADGE,
     }
 }
 
@@ -519,14 +792,14 @@ mod tests {
             };
             3
         ];
-        let l = layout(&items, 48.0, false);
+        let l = layout(&items, 48.0, false, false);
         assert_eq!(l.cells.len(), 4);
         assert!(
             l.cells[3].x > l.cells[2].x + l.cells[2].w,
             "a gap before the apps button"
         );
         assert!(l.width > l.height);
-        let v = layout(&items, 48.0, true);
+        let v = layout(&items, 48.0, true, false);
         assert!(v.height > v.width);
     }
 
@@ -550,7 +823,7 @@ mod tests {
         .collect();
         let windows = vec![window(1, "firefox", true), window(2, "discord", false)];
         let items = items(&favorites, &apps, &windows);
-        let l = layout(&items, 48.0, false);
+        let l = layout(&items, 48.0, false, false);
         let (w, h) = (l.width.ceil() as u32, l.height.ceil() as u32);
         let mut pixels = vec![0u8; (w * h * 4) as usize];
         {
@@ -562,6 +835,7 @@ mod tests {
                 &items,
                 Some(1),
                 false,
+                None,
                 &mut icons,
                 &theme,
                 48.0,

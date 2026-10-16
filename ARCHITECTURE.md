@@ -327,6 +327,15 @@ Every default listed here can be rebound or reconfigured.
   - Bar at the bottom instead of the top, or a bar on every monitor (§5.2).
   - Extra applets (later, via extensions §9).
 - These are **options on one panel**, not separate modes or layouts to switch between.
+- **Right-click menus** (`shell/src/menu.rs`, xdg_popups with a grab): dock icons
+  (windows, new window, pin, quit), the dock and the top bar (their common options),
+  and the wallpaper. The wallpaper isn't a client surface, so the compositor reports
+  right-clicks on bare desktop (`Event::DesktopMenu`) and the shell hangs the menu
+  off a 1x1 layer surface placed there.
+- **Edit mode** (from those menus, `shell/src/edit_mode.rs`): the dock and bar edit
+  in place, writing config.toml as you go. Dock: drag pinned icons to reorder, × to
+  unpin, drag the move grip to a screen edge, −/+ or the wheel for icon size. Bar:
+  drag the bottom edge for height, drag the clock to the left, centre or right.
 
 ### 5.4 Explicitly not in v1
 

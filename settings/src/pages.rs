@@ -687,6 +687,14 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
     ]
 }
 
+fn clock_position(v: cnde_config::ClockPosition) -> Value {
+    s(match v {
+        cnde_config::ClockPosition::Left => "left",
+        cnde_config::ClockPosition::Center => "center",
+        cnde_config::ClockPosition::Right => "right",
+    })
+}
+
 /// Clock formats offered in the dropdown; anything else shows as custom.
 const CLOCKS: &[(&str, &str)] = &[
     ("Fri Oct 16  14:30", "%a %b %-d  %H:%M"),
@@ -738,6 +746,17 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                     Control::Dropdown(clocks),
                     s(&p.clock_format),
                     s(&dp.clock_format),
+                ),
+                Row::new(
+                    "panel.clock_position",
+                    "Clock position",
+                    Control::Segmented(choices(&[
+                        ("Left", s("left")),
+                        ("Center", s("center")),
+                        ("Right", s("right")),
+                    ])),
+                    clock_position(p.clock_position),
+                    clock_position(dp.clock_position),
                 ),
                 Row::new(
                     "panel.clock_format",

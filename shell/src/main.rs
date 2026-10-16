@@ -8,6 +8,7 @@ mod apps;
 mod config;
 mod context_menus;
 mod dock;
+mod edit_mode;
 mod ipc;
 mod launcher;
 mod menu;
@@ -135,6 +136,11 @@ pub struct App {
     /// The desktop menu's 1x1 anchor, waiting to be configured, and the
     /// scale of its monitor.
     desktop_holder: Option<(smithay_client_toolkit::shell::wlr_layer::LayerSurface, i32)>,
+    /// The dock is being edited in place (kept across it being recreated,
+    /// e.g. when it moves to another edge).
+    dock_editing: bool,
+    /// Where the dock's move grip was pressed.
+    dock_drag_start: Option<(f64, f64)>,
     /// The latest input serial, for grabs the compositor started for us.
     last_serial: u32,
     /// The screenshot tool, while the screen is frozen for one.
@@ -232,6 +238,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         menu: None,
         desktop_holder: None,
         last_serial: 0,
+        dock_editing: false,
+        dock_drag_start: None,
         windows: Vec::new(),
         dock_output: None,
         overview_open: false,
@@ -276,6 +284,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.redraw_all();
             TimeoutAction::ToDuration(until_next_minute())
         })?;
+
+    // Debug aid: CNDE_SHELL_EDIT=dock,panel starts in edit mode, for
+    // looking at it without a right-click.
+    if let Ok(which) = std::env::var("CNDE_SHELL_EDIT") {
+        event_loop.handle().insert_source(
+            Timer::from_duration(Duration::from_secs(2)),
+            move |_, _, app| {
+                if which.contains("dock") {
+                    app.start_dock_edit();
+                }
+                if which.contains("panel") {
+                    app.start_panel_edit();
+                }
+                TimeoutAction::Drop
+            },
+        )?;
+    }
 
     loop {
         event_loop.dispatch(None, &mut app)?;
@@ -577,6 +602,8 @@ impl App {
         }
         let Some(output) = wanted else {
             self.dock = None;
+            // Editing ends with the dock (the overview closing).
+            self.dock_editing = false;
             return;
         };
         if self.dock.is_none() {
@@ -594,8 +621,12 @@ impl App {
             ));
         }
         let items = dock::items(&self.config.dock.favorites, &self.apps, &self.windows);
+        let icon = self.config.dock.icon_size as f32;
         if let Some(dock) = &mut self.dock {
-            dock.update(items, self.config.dock.icon_size as f32);
+            if dock.edit.is_some() != self.dock_editing {
+                dock.edit = self.dock_editing.then(dock::DockEdit::default);
+            }
+            dock.update(items, icon);
         }
         self.draw_dock();
     }
@@ -735,6 +766,7 @@ impl App {
                 status: &self.status,
                 overview_open: self.overview_open,
                 quick_settings_open: self.quick_settings.is_some(),
+                clock_position: self.config.panel.clock_position,
             },
         );
     }
@@ -1067,6 +1099,17 @@ impl PointerHandler for App {
             if let Some(dock) = &mut self.dock
                 && dock.layer.wl_surface() == &event.surface
             {
+                let right_click = matches!(
+                    event.kind,
+                    PointerEventKind::Press {
+                        button: BTN_RIGHT,
+                        ..
+                    }
+                );
+                if dock.edit.is_some() && !right_click {
+                    self.dock_edit_pointer(event);
+                    continue;
+                }
                 let icon = self.config.dock.icon_size as f32;
                 let click = match event.kind {
                     PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -1154,6 +1197,17 @@ impl PointerHandler for App {
             else {
                 continue;
             };
+            let right_click = matches!(
+                event.kind,
+                PointerEventKind::Press {
+                    button: BTN_RIGHT,
+                    ..
+                }
+            );
+            if self.panels[index].edit.is_some() && !right_click {
+                self.panel_edit_pointer(index, event);
+                continue;
+            }
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     let hover = self.panels[index].button_at(event.position);
