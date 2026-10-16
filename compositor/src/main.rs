@@ -104,24 +104,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Environment for a real session, inherited by every client we launch.
-/// Only the defaults: anything the user already set wins.
 fn set_session_environment() {
-    let defaults = [
+    // We *are* the session, so these always win. A TTY login sets
+    // XDG_SESSION_TYPE=tty, and Electron 38+ / Chromium pick X11 vs Wayland
+    // from it (Discord failed with "Missing X server" because of that).
+    let session = [
         ("XDG_SESSION_TYPE", "wayland"),
         ("XDG_CURRENT_DESKTOP", "cnde"),
+    ];
+    // Defaults only: anything the user already set wins.
+    let defaults = [
         ("XCURSOR_THEME", cursor::DEFAULT_THEME),
         ("XCURSOR_SIZE", "24"),
-        // No XWayland yet (Milestone 4): run Electron/Chromium apps (VS Code,
-        // Discord, ...) and Qt apps natively on Wayland, with X11 as Qt's
-        // fallback once it exists.
+        // No XWayland yet (Milestone 4): run older Electron apps (< 38, which
+        // ignore XDG_SESSION_TYPE) and Qt apps natively on Wayland, with X11
+        // as Qt's fallback once it exists.
         ("ELECTRON_OZONE_PLATFORM_HINT", "auto"),
         ("QT_QPA_PLATFORM", "wayland;xcb"),
     ];
-    for (key, value) in defaults {
-        if std::env::var_os(key).is_none() {
-            // Safety: called first thing in main, before any other thread exists.
-            unsafe { std::env::set_var(key, value) };
-        }
+    let unset = |key: &str| std::env::var_os(key).is_none();
+    for (key, value) in session
+        .into_iter()
+        .chain(defaults.into_iter().filter(|(key, _)| unset(key)))
+    {
+        // Safety: called first thing in main, before any other thread exists.
+        unsafe { std::env::set_var(key, value) };
     }
 }
 
