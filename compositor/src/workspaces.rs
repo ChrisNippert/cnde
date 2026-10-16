@@ -545,6 +545,11 @@ impl State {
                 }
             }
         }
+        // Why: the space only works out which monitors each window touches
+        // in refresh(). Freshly mapped windows count as on no monitor until
+        // then, and this can run after the iteration's refresh, so they'd
+        // vanish for one frame (the flash at the end of a slide).
+        self.space.refresh();
     }
 
     /// What `output` should show while the strip is moving. Every window
