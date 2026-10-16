@@ -11,7 +11,7 @@ use smithay::{
         pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent, RelativeMotionEvent},
     },
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
-    utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
+    utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial, Size},
 };
 
 use tracing::debug;
@@ -25,6 +25,9 @@ use crate::{
 };
 
 const BTN_LEFT: u32 = 0x110;
+/// Size of a restored window that never had a floating size, as a fraction
+/// of the usable area.
+const DEFAULT_FLOATING_FRACTION: f64 = 0.6;
 const BTN_RIGHT: u32 = 0x111;
 
 impl State {
@@ -322,15 +325,38 @@ impl State {
             let Some(geo) = self.space.element_geometry(&window) else {
                 return;
             };
-            let restore_size =
-                with_state(&window, |s| s.restore.map(|r| r.size)).unwrap_or(geo.size);
             let pointer_pos = start_data.location;
+            let area = self
+                .space
+                .output_under(pointer_pos)
+                .next()
+                .cloned()
+                .and_then(|output| self.usable_area(&output))
+                .unwrap_or(geo);
+            // A window that opened maximized/fullscreen has no remembered
+            // floating size; pick one rather than letting the client choose
+            // a size we can't position against.
+            let restore_size = match with_state(&window, |s| s.restore.map(|r| r.size)) {
+                Some(size) => size,
+                None => {
+                    let size = Size::from((
+                        (area.size.w as f64 * DEFAULT_FLOATING_FRACTION) as i32,
+                        (area.size.h as f64 * DEFAULT_FLOATING_FRACTION) as i32,
+                    ));
+                    with_state(&window, |s| s.restore = Some(Rectangle::new(geo.loc, size)));
+                    size
+                }
+            };
+            // Keep the pointer at the same relative spot on the window, in
+            // both directions, so the restored window lands under it.
             let fraction_x = (pointer_pos.x - geo.loc.x as f64) / geo.size.w.max(1) as f64;
+            let fraction_y = (pointer_pos.y - geo.loc.y as f64) / geo.size.h.max(1) as f64;
             // No animation: the window must stick to the pointer.
             self.set_placement(&window, Placement::Floating, false);
             let new_loc = Point::<f64, Logical>::from((
                 pointer_pos.x - fraction_x * restore_size.w as f64,
-                geo.loc.y as f64,
+                // Never above the usable area, so the titlebar stays reachable.
+                (pointer_pos.y - fraction_y * restore_size.h as f64).max(area.loc.y as f64),
             ));
             self.space
                 .map_element(window.clone(), new_loc.to_i32_round(), true);
