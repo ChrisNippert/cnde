@@ -623,7 +623,7 @@ fn paint(
     scale: f32,
 ) {
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
-    let fg = theme.panel_foreground;
+    let fg = theme.popup_text;
     paint_pill(canvas, layout, fonts, icons, theme, state.query, scale);
     if let Some(grid) = &layout.grid {
         paint_grid(canvas, grid, fonts, icons, theme, state, scale);
@@ -693,7 +693,7 @@ fn paint_pill(
     query: &str,
     scale: f32,
 ) {
-    let fg = theme.panel_foreground;
+    let fg = theme.popup_text;
     let pill = layout.pill;
     canvas.rounded_rect(
         pill.x,
@@ -813,13 +813,7 @@ fn paint_grid(
         app_icon(canvas, icons, theme, &app.icon, icon_x, icon_y, size);
         let mut name = fit(fonts, &app.name, 13.0, Weight::Normal, scale, cell.w - 16.0);
         let x = (cell.x + (cell.w - name.width) / 2.0).round();
-        canvas.text(
-            fonts,
-            &mut name,
-            x,
-            icon_y + size + 10.0,
-            theme.panel_foreground,
-        );
+        canvas.text(fonts, &mut name, x, icon_y + size + 10.0, theme.popup_text);
     }
     // Page dots.
     if grid.pages > 1 {

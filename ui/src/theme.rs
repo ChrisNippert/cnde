@@ -32,6 +32,9 @@ impl Color {
 
 #[derive(Debug, Clone)]
 pub struct Theme {
+    /// The dark palette (vs the light one).
+    pub dark: bool,
+
     // Panel
     pub panel_background: Color,
     pub panel_foreground: Color,
@@ -138,12 +141,17 @@ pub struct Theme {
 
     // General
     pub accent: Color,
+    /// Text and icons on shell popups: quick settings, search, the dock.
+    pub popup_text: Color,
+    /// Text and icons on an accent-coloured fill.
+    pub on_accent: Color,
     pub padding: f32,
 }
 
 impl Theme {
     pub fn dark() -> Self {
         Self {
+            dark: true,
             panel_background: Color::rgb(0x00, 0x00, 0x00),
             panel_foreground: Color::rgb(0xff, 0xff, 0xff),
             panel_height: 32,
@@ -241,8 +249,52 @@ impl Theme {
             ],
 
             accent: Color::rgb(0x35, 0x84, 0xe4),
+            popup_text: Color::rgb(0xff, 0xff, 0xff),
+            on_accent: Color::rgb(0xff, 0xff, 0xff),
             padding: 12.0,
         }
+    }
+}
+
+impl Theme {
+    /// libadwaita's light palette. The top bar keeps its own colours (it's
+    /// black in both styles, as in GNOME); everything else follows.
+    pub fn light() -> Self {
+        let ink = |a: f32| Color::rgba(0x00, 0x00, 0x06, a);
+        let paper = Color::rgba(0xfa, 0xfa, 0xfb, 0.96);
+        Self {
+            dark: false,
+            qs_background: paper,
+            qs_tile: ink(0.05),
+            qs_toggle_off: ink(0.10),
+            qs_slider_track: ink(0.10),
+            qs_slider_fill: Color::rgb(0x35, 0x84, 0xe4),
+            qs_on_fill: Color::rgb(0xff, 0xff, 0xff),
+            qs_dim: ink(0.55),
+            search_background: paper,
+            search_selected: ink(0.08),
+            popup_text: Color::rgb(0x24, 0x24, 0x28),
+
+            window_background: Color::rgb(0xfa, 0xfa, 0xfb),
+            window_sidebar: Color::rgb(0xeb, 0xeb, 0xed),
+            window_text: Color::rgb(0x24, 0x24, 0x28),
+            window_dim: ink(0.55),
+            sidebar_selected: ink(0.10),
+            hover: ink(0.04),
+            card_background: Color::rgb(0xff, 0xff, 0xff),
+            card_separator: ink(0.09),
+            switch_off: ink(0.15),
+            button_background: ink(0.08),
+            button_hover: ink(0.12),
+            entry_background: ink(0.06),
+            popover_background: Color::rgb(0xff, 0xff, 0xff),
+            error: Color::rgb(0xc3, 0x00, 0x00),
+            ..Self::dark()
+        }
+    }
+
+    pub fn for_dark(dark: bool) -> Self {
+        if dark { Self::dark() } else { Self::light() }
     }
 }
 

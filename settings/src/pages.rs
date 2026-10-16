@@ -334,7 +334,7 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     scheme(c.appearance.color_scheme),
                     scheme(d.appearance.color_scheme),
                 )
-                .sub("For now this picks which wallpaper shows"),
+                .sub("Menus, quick settings and this window; also picks the wallpaper"),
             ],
         ),
         group(

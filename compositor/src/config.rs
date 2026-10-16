@@ -144,6 +144,9 @@ impl State {
         if old.is_none_or(|old| old.outputs != self.config.outputs) {
             self.apply_output_layout();
         }
+        if old.is_none_or(|old| old.appearance != self.config.appearance) {
+            publish_color_scheme(self.config.appearance.color_scheme);
+        }
     }
 
     /// Apply mouse/touchpad settings to one libinput device.
@@ -171,4 +174,26 @@ impl State {
             let _ = device.config_scroll_set_natural_scroll_enabled(natural);
         }
     }
+}
+
+/// Tell apps about light/dark. The GTK portal backend (our default for the
+/// Settings portal) serves `org.freedesktop.appearance.color-scheme` from
+/// this GNOME setting, and libadwaita, Qt 6 and browsers follow it. It's
+/// shared with a GNOME session on the same account, like any preference.
+fn publish_color_scheme(scheme: cnde_config::ColorScheme) {
+    let value = match scheme {
+        cnde_config::ColorScheme::Dark => "prefer-dark",
+        cnde_config::ColorScheme::Light => "default",
+    };
+    std::thread::spawn(move || {
+        let result = std::process::Command::new("gsettings")
+            .args(["set", "org.gnome.desktop.interface", "color-scheme", value])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if let Err(err) = result {
+            tracing::debug!(%err, "no gsettings; apps won't follow the style");
+        }
+    });
 }

@@ -182,6 +182,11 @@ impl Painter<'_, '_> {
                     t.hover,
                 );
             }
+            let color = if selected == Some(i) {
+                t.on_accent
+            } else {
+                t.window_text
+            };
             self.label_v(
                 label,
                 bx + 12.0,
@@ -189,7 +194,7 @@ impl Painter<'_, '_> {
                 w,
                 size,
                 Weight::Normal,
-                t.window_text,
+                color,
             );
             rects.push(rect);
             bx += w;
@@ -245,17 +250,22 @@ impl Painter<'_, '_> {
         let row = 36.0;
         let pad = 6.0;
         let h = row * labels.len() as f32 + pad * 2.0;
+        // A soft shadow: a few widening, fading outlines.
+        for i in 1..=4 {
+            let grow = i as f32 * 2.0;
+            self.canvas.rounded_rect(
+                x - grow,
+                y - grow + 2.0,
+                width + grow * 2.0,
+                h + grow * 2.0,
+                t.popover_radius + grow,
+                Color::rgba(0, 0, 0, 0.05),
+            );
+        }
         self.canvas
             .rounded_rect(x, y, width, h, t.popover_radius, t.popover_background);
-        self.canvas.stroke_rounded_rect(
-            x,
-            y,
-            width,
-            h,
-            t.popover_radius,
-            1.0,
-            Color::rgba(0xff, 0xff, 0xff, 0.08),
-        );
+        self.canvas
+            .stroke_rounded_rect(x, y, width, h, t.popover_radius, 1.0, t.card_separator);
         let mut rects = Vec::with_capacity(labels.len());
         for (i, label) in labels.iter().enumerate() {
             let rect = Rect::new(x + pad, y + pad + row * i as f32, width - pad * 2.0, row);

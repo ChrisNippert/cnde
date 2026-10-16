@@ -437,7 +437,7 @@ fn paint(
                 cell.x + (cell.w - size) / 2.0,
                 cell.y + (cell.h - size) / 2.0,
                 size,
-                theme.panel_foreground,
+                theme.popup_text,
             );
             continue;
         };

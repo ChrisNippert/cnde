@@ -136,7 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ok()
         })
         .unwrap_or_default();
-    let theme = Theme::dark();
+    let theme = theme_for(&config);
     let fonts = Fonts::new(theme.font_families);
 
     let compositor = CompositorState::bind(&globals, &qh)?;
@@ -275,11 +275,19 @@ impl App {
         });
         match result {
             Ok(config) => {
-                self.ui.config = config;
+                self.set_config(config);
                 self.clear_error();
             }
             Err(err) => self.show_error(format!("Not saved: {err}")),
         }
+        self.redraw();
+    }
+
+    fn set_config(&mut self, config: Config) {
+        if config.appearance.color_scheme != self.ui.config.appearance.color_scheme {
+            self.res.theme = theme_for(&config);
+        }
+        self.ui.config = config;
         self.redraw();
     }
 
@@ -315,8 +323,7 @@ impl App {
         match Config::load_or_create(path) {
             Ok(config) if config != self.ui.config => {
                 info!("config changed on disk");
-                self.ui.config = config;
-                self.redraw();
+                self.set_config(config);
             }
             Ok(_) => {}
             Err(err) => warn!(%err, "config on disk has an error; showing the last good one"),
@@ -638,6 +645,10 @@ impl App {
             _ => return None,
         })
     }
+}
+
+fn theme_for(config: &Config) -> Theme {
+    Theme::for_dark(config.appearance.color_scheme == cnde_config::ColorScheme::Dark)
 }
 
 /// "~/…" for paths in the home directory, as hand-written configs do.

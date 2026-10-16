@@ -440,8 +440,9 @@ impl QuickSettings {
                 });
                 return true;
             }
-            // Not wired up yet (Bluetooth, dark mode, notifications).
-            Some(Hit::Bluetooth | Hit::DarkMode | Hit::DoNotDisturb) | None => {}
+            Some(Hit::DarkMode) => crate::config::set_dark(!theme.dark),
+            // Not wired up yet (Bluetooth, notifications).
+            Some(Hit::Bluetooth | Hit::DoNotDisturb) | None => {}
         }
         false
     }
@@ -623,8 +624,8 @@ fn paint(
                 "Bluetooth".into(),
             ),
             Hit::DarkMode => (
+                theme.dark,
                 true,
-                false,
                 "weather-clear-night-symbolic",
                 "Dark Mode".into(),
             ),
@@ -654,7 +655,14 @@ fn paint(
             rect.x + (rect.w - icon_size) / 2.0,
             rect.y + (rect.h - icon_size) / 2.0,
             icon_size,
-            Color::rgba(255, 255, 255, fade),
+            {
+                let fg = if on {
+                    theme.on_accent
+                } else {
+                    theme.popup_text
+                };
+                fg.with_alpha(fg.a * fade)
+            },
         );
         // Fit the label under its toggle: a little smaller if need be,
         // shortened only as a last resort (long network names).
@@ -702,7 +710,7 @@ fn paint(
     let icon_color = if covered && !muted {
         theme.qs_on_fill
     } else {
-        Color::rgb(255, 255, 255)
+        theme.popup_text
     };
     let name = status.volume.map_or("audio-volume-muted-symbolic", |vol| {
         volume_icon(crate::status::Volume {
@@ -741,7 +749,7 @@ fn paint(
             if covered {
                 theme.qs_on_fill
             } else {
-                Color::rgb(255, 255, 255)
+                theme.popup_text
             },
         );
     }
@@ -782,7 +790,7 @@ fn paint(
                 }
             };
             let fg = if active {
-                Color::rgb(255, 255, 255)
+                theme.on_accent
             } else {
                 theme.qs_dim
             };
@@ -821,7 +829,7 @@ fn paint(
             rect.x + (rect.w - 20.0) / 2.0,
             rect.y + 12.0,
             20.0,
-            Color::rgb(255, 255, 255),
+            theme.popup_text,
         );
         let mut text = fonts.layout(label, theme.qs_label_size, Weight::Normal, s);
         let tx = (rect.x + (rect.w - text.width) / 2.0).round();
@@ -865,7 +873,7 @@ fn paint(
         g.x + (g.w - 18.0) / 2.0,
         g.y + (g.h - 18.0) / 2.0,
         18.0,
-        Color::rgb(255, 255, 255),
+        theme.popup_text,
     );
     let p = layout.power_button;
     let power_bg = if layout.power_menu.is_some() {
@@ -880,7 +888,11 @@ fn paint(
         p.x + (p.w - 18.0) / 2.0,
         p.y + (p.h - 18.0) / 2.0,
         18.0,
-        Color::rgb(255, 255, 255),
+        if layout.power_menu.is_some() {
+            theme.on_accent
+        } else {
+            theme.popup_text
+        },
     );
 }
 

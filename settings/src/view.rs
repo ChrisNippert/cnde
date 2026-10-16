@@ -697,7 +697,8 @@ mod tests {
     fn render(ui: &Ui, name: &str) -> Painted {
         let (w, h) = (920u32, 680u32);
         let mut pixels = vec![0u8; (w * h * 4) as usize];
-        let theme = Theme::dark();
+        let theme =
+            Theme::for_dark(ui.config.appearance.color_scheme == cnde_config::ColorScheme::Dark);
         let mut res = Res {
             fonts: Fonts::new(theme.font_families),
             icons: Icons::new(),
@@ -754,5 +755,12 @@ mod tests {
         ui.error = Some("Not saved: panel.height must be 16 to 96, got 4".into());
         ui.scroll = 200.0;
         render(&ui, "panel-edit");
+
+        ui.config.appearance.color_scheme = cnde_config::ColorScheme::Light;
+        ui.edit = None;
+        ui.error = None;
+        ui.scroll = 0.0;
+        ui.popover = Some(painted.rows[clock].key.clone());
+        render(&ui, "panel-light");
     }
 }

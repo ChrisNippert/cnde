@@ -671,7 +671,7 @@ fn paint(
         };
         let mut text = fonts.layout(label, 14.0, Weight::Normal, scale);
         let color = if *which == mode {
-            theme.panel_foreground
+            theme.popup_text
         } else {
             theme.qs_dim
         };
@@ -684,9 +684,9 @@ fn paint(
     // The shutter: a white ring around a white dot.
     let c = bar.capture;
     let (cx, cy, r) = (c.x + c.w / 2.0, c.y + c.h / 2.0, c.w / 2.0);
-    canvas.circle(cx, cy, r, Color::rgb(255, 255, 255));
+    canvas.circle(cx, cy, r, theme.popup_text);
     canvas.circle(cx, cy, r - 3.0, theme.search_background);
-    canvas.circle(cx, cy, r - 6.0, Color::rgb(255, 255, 255));
+    canvas.circle(cx, cy, r - 6.0, theme.popup_text);
     let x = bar.close;
     canvas.circle(
         x.x + x.w / 2.0,
@@ -700,7 +700,7 @@ fn paint(
         x.x + (x.w - 16.0) / 2.0,
         x.y + (x.h - 16.0) / 2.0,
         16.0,
-        theme.panel_foreground,
+        theme.popup_text,
     );
 }
 

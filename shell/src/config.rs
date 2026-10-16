@@ -34,7 +34,8 @@ pub fn theme_from(config: &Config) -> Theme {
             Color::rgba(r, g, b, a as f32 / 255.0)
         })
     };
-    let mut theme = Theme::dark();
+    let mut theme =
+        Theme::for_dark(config.appearance.color_scheme == cnde_config::ColorScheme::Dark);
     theme.panel_height = panel.height;
     theme.panel_background = color(&panel.background, theme.panel_background);
     theme.panel_foreground = color(&panel.foreground, theme.panel_foreground);
@@ -47,6 +48,24 @@ pub fn theme_from(config: &Config) -> Theme {
         .panel_foreground
         .with_alpha(theme.panel_foreground.a * 0.45);
     theme
+}
+
+/// Switch the light/dark style by editing config.toml; the reload that
+/// follows applies it, here and everywhere else.
+pub fn set_dark(dark: bool) {
+    let Some(path) = cnde_config::default_path() else {
+        return;
+    };
+    let result = cnde_config::ConfigFile::open(&path).and_then(|mut file| {
+        file.set(
+            "appearance.color_scheme",
+            if dark { "dark" } else { "light" },
+        );
+        file.save()
+    });
+    if let Err(err) = result {
+        warn!(%err, "can't switch the style");
+    }
 }
 
 /// Watch the config's directory (editors often save by renaming over the
