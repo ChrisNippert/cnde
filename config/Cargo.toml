@@ -7,3 +7,5 @@ license.workspace = true
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+# Editing config.toml in place for the settings app, keeping comments.
+toml_edit = "0.25"

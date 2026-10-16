@@ -1,0 +1,16 @@
+[package]
+name = "cnde-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cnde-ui = { path = "../ui" }
+cnde-config = { path = "../config" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "xkbcommon"] }
+# inotify for following hand edits of the config.
+rustix = { version = "1", features = ["fs"] }
+# Wallpaper thumbnails; the same formats the compositor can show.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

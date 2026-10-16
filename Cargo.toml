@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["compositor", "config", "ipc", "ui", "shell"]
+members = ["compositor", "config", "ipc", "ui", "shell", "settings"]
 
 [workspace.package]
 version = "0.1.0"

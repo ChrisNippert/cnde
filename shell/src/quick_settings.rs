@@ -39,6 +39,8 @@ pub enum Hit {
     DarkMode,
     DoNotDisturb,
     Power,
+    /// Opens cnde-settings.
+    Settings,
     Suspend,
     Reboot,
     PowerOff,
@@ -73,6 +75,7 @@ pub struct Layout {
     pub power_profiles: Option<(Rect, Vec<Rect>)>,
     pub footer_y: f32,
     pub power_button: Rect,
+    pub settings_button: Rect,
     pub power_menu: Option<Vec<(Rect, Hit)>>,
 }
 
@@ -206,6 +209,10 @@ pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layou
         w: FOOTER_HEIGHT,
         h: FOOTER_HEIGHT,
     };
+    let settings_button = Rect {
+        x: power_button.x - theme.qs_gap - FOOTER_HEIGHT,
+        ..power_button
+    };
     y += FOOTER_HEIGHT + pad;
 
     Layout {
@@ -218,6 +225,7 @@ pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layou
         power_profiles,
         footer_y,
         power_button,
+        settings_button,
         power_menu,
     }
 }
@@ -250,6 +258,11 @@ impl Layout {
             .find(|(rect, _)| rect.contains(point))
             .map(|(_, hit)| *hit)
             .or_else(|| self.power_button.contains(point).then_some(Hit::Power))
+            .or_else(|| {
+                self.settings_button
+                    .contains(point)
+                    .then_some(Hit::Settings)
+            })
     }
 
     /// Volume (0-100) for a pointer at `x` over the slider.
@@ -415,6 +428,10 @@ impl QuickSettings {
                 }
             }
             Some(Hit::Power) => self.toggle_power_menu(xdg_shell, theme, anchor),
+            Some(Hit::Settings) => {
+                crate::apps::open_settings();
+                return true;
+            }
             Some(hit @ (Hit::Suspend | Hit::Reboot | Hit::PowerOff)) => {
                 actions.run(match hit {
                     Hit::Suspend => Action::Suspend,
@@ -835,6 +852,21 @@ fn paint(
             theme.qs_dim,
         );
     }
+    let g = layout.settings_button;
+    canvas.circle(
+        g.x + g.w / 2.0,
+        g.y + g.h / 2.0,
+        g.w / 2.0,
+        theme.qs_toggle_off,
+    );
+    canvas.icon(
+        icons,
+        "emblem-system-symbolic",
+        g.x + (g.w - 18.0) / 2.0,
+        g.y + (g.h - 18.0) / 2.0,
+        18.0,
+        Color::rgb(255, 255, 255),
+    );
     let p = layout.power_button;
     let power_bg = if layout.power_menu.is_some() {
         theme.qs_toggle_on
@@ -896,6 +928,7 @@ mod tests {
         );
         assert_eq!(l.hit(centre(l.volume)), Some(Hit::Volume));
         assert_eq!(l.hit(centre(l.power_button)), Some(Hit::Power));
+        assert_eq!(l.hit(centre(l.settings_button)), Some(Hit::Settings));
         assert!(l.power_menu.is_none());
     }
 

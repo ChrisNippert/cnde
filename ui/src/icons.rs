@@ -51,7 +51,8 @@ impl Icons {
                 .map(|d| PathBuf::from(d).join("icons")),
         );
         let mut app_themes: Vec<String> = gtk_icon_theme().into_iter().collect();
-        for theme in ["hicolor", "Adwaita"] {
+        // AdwaitaLegacy has the classic full-colour icons (preferences-system).
+        for theme in ["hicolor", "Adwaita", "AdwaitaLegacy"] {
             if !app_themes.iter().any(|t| t == theme) {
                 app_themes.push(theme.into());
             }

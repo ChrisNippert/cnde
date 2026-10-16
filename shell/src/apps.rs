@@ -32,6 +32,9 @@ pub struct App {
     generic_lower: String,
 }
 
+const SETTINGS_ID: &str = "cnde-settings.desktop";
+const SETTINGS_ENTRY: &str = include_str!("../../data/cnde-settings.desktop");
+
 /// Every directory that may hold `.desktop` files, most important first:
 /// the user's own entries override the system's.
 pub fn application_dirs() -> Vec<PathBuf> {
@@ -89,6 +92,18 @@ pub fn load(dirs: &[PathBuf]) -> Vec<App> {
             };
             by_id.insert(id.clone(), parse(&id, &text, &desktop));
         }
+    }
+    // Our settings app, from next to our own binary, unless installed.
+    if !by_id.contains_key(SETTINGS_ID)
+        && let Some(exe) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| Some(exe.parent()?.join("cnde-settings")))
+            .filter(|exe| exe.is_file())
+    {
+        let entry =
+            SETTINGS_ENTRY.replace("Exec=cnde-settings", &format!("Exec=\"{}\"", exe.display()));
+        // OnlyShowIn is for installed copies; this one is always ours.
+        by_id.insert(SETTINGS_ID.into(), parse(SETTINGS_ID, &entry, "cnde"));
     }
     let mut apps: Vec<App> = by_id.into_values().flatten().collect();
     apps.sort_by(|a, b| a.name_lower.cmp(&b.name_lower));
@@ -339,6 +354,28 @@ pub fn launch(app: &App, terminal: &str) {
         .status();
     if let Err(err) = result {
         warn!(id = %app.id, %err, "can't launch");
+    }
+}
+
+/// Start cnde-settings: the one next to our binary, else from PATH.
+pub fn open_settings() {
+    let program = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("cnde-settings")))
+        .filter(|exe| exe.is_file())
+        .map_or_else(|| "cnde-settings".into(), |exe| exe.into_os_string());
+    let result = Command::new(&program)
+        .current_dir(std::env::var_os("HOME").unwrap_or_else(|| "/".into()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    match result {
+        // Reaped on a thread so it doesn't linger as a zombie.
+        Ok(mut child) => {
+            std::thread::spawn(move || child.wait());
+        }
+        Err(err) => warn!(?program, %err, "can't open settings"),
     }
 }
 

@@ -24,6 +24,12 @@ entries when they're done.
   unzoomed spot; windows on hidden workspaces don't update live; the search
   box is only on the main monitor; no app grid button yet; no hover
   highlight on windows.
+- **Settings app:** no resize cursors at the window edges (the compositor
+  lacks cursor-shape-v1); no keyboard navigation between controls (Tab) and
+  no AccessKit yet; the light style isn't drawn (the switch only picks the
+  wallpaper); dock favorites and autostart aren't editable in the GUI yet;
+  no "add picture" for wallpapers (needs a file chooser); thumbnails are
+  decoded on every launch; a second launch opens a second window.
 - **Screenshots:** no "saved" notification yet (notifications don't exist);
   a region can't span two monitors (it's cut to the one holding its
   centre); no option to include the pointer; pasting from the clipboard

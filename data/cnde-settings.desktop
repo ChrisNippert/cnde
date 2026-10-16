@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+GenericName=Settings
+Comment=Wallpaper, displays, mouse, keyboard, top bar and dock
+Exec=cnde-settings
+Icon=preferences-system
+Categories=Settings;DesktopSettings;
+Keywords=preferences;configuration;wallpaper;background;display;monitor;scale;mouse;touchpad;keyboard;layout;panel;bar;dock;animation;
+OnlyShowIn=cnde;
+StartupNotify=false

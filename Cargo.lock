@@ -445,6 +445,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]
@@ -453,6 +454,19 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cnde-settings"
+version = "0.1.0"
+dependencies = [
+ "cnde-config",
+ "cnde-ui",
+ "image",
+ "rustix 1.1.5",
+ "smithay-client-toolkit 0.21.1",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2572,6 +2586,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

@@ -1,6 +1,9 @@
 //! Drawing into a caller-owned pixel buffer.
 
-use tiny_skia::{FillRule, Mask, Paint, PathBuilder, PixmapMut, Rect, Transform};
+use tiny_skia::{
+    FillRule, FilterQuality, Mask, Paint, PathBuilder, Pattern, PixmapMut, PixmapRef, Rect,
+    SpreadMode, Stroke, Transform,
+};
 
 use crate::{
     icons::Icons,
@@ -54,6 +57,79 @@ impl<'a> Canvas<'a> {
             Transform::identity(),
             None,
         );
+    }
+
+    /// The outline of a rounded rectangle, `width` logical px thick, drawn
+    /// inside the rectangle's edge.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stroke_rounded_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        width: f32,
+        color: Color,
+    ) {
+        let s = self.scale;
+        let inset = width / 2.0;
+        let (x, y, w, h) = (
+            (x + inset) * s,
+            (y + inset) * s,
+            (w - width) * s,
+            (h - width) * s,
+        );
+        let r = ((radius - inset) * s).min(w / 2.0).min(h / 2.0).max(0.0);
+        let Some(path) = rounded_rect_path(x, y, w, h, r) else {
+            return;
+        };
+        let mut paint = Paint::default();
+        paint.set_color(skia_color(color));
+        paint.anti_alias = true;
+        let stroke = Stroke {
+            width: width * s,
+            ..Stroke::default()
+        };
+        self.pixmap
+            .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+    }
+
+    /// `image` scaled to cover the rectangle (cropping what doesn't fit),
+    /// with rounded corners.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image(&mut self, image: PixmapRef<'_>, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+        let s = self.scale;
+        let (x, y, w, h) = (x * s, y * s, w * s, h * s);
+        let (iw, ih) = (image.width() as f32, image.height() as f32);
+        let zoom = (w / iw).max(h / ih);
+        let (tx, ty) = (x + (w - iw * zoom) / 2.0, y + (h - ih * zoom) / 2.0);
+        let r = (radius * s).min(w / 2.0).min(h / 2.0).max(0.0);
+        let Some(path) = rounded_rect_path(x, y, w, h, r) else {
+            return;
+        };
+        let paint = Paint {
+            shader: Pattern::new(
+                image,
+                SpreadMode::Pad,
+                FilterQuality::Bilinear,
+                1.0,
+                Transform::from_row(zoom, 0.0, 0.0, zoom, tx, ty),
+            ),
+            anti_alias: true,
+            ..Paint::default()
+        };
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+
+    pub fn scale(&self) -> f32 {
+        self.scale
     }
 
     pub fn circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color) {
@@ -110,13 +186,31 @@ impl<'a> Canvas<'a> {
         y: f32,
         color: Color,
     ) {
+        let (w, h) = self.size();
+        self.text_clipped(fonts, layout, x, y, color, (0.0, 0.0, w, h));
+    }
+
+    /// [`Canvas::text`], drawing only inside `clip` (logical x, y, w, h).
+    pub fn text_clipped(
+        &mut self,
+        fonts: &mut Fonts,
+        layout: &mut TextLayout,
+        x: f32,
+        y: f32,
+        color: Color,
+        clip: (f32, f32, f32, f32),
+    ) {
         let s = self.scale;
         let origin = ((x * s).round() as i32, (y * s).round() as i32);
         let (width, height) = (self.pixmap.width() as i32, self.pixmap.height() as i32);
+        let x0 = ((clip.0 * s).floor() as i32).max(0);
+        let y0 = ((clip.1 * s).floor() as i32).max(0);
+        let x1 = (((clip.0 + clip.2) * s).ceil() as i32).min(width);
+        let y1 = (((clip.1 + clip.3) * s).ceil() as i32).min(height);
         let data = self.pixmap.data_mut();
         fonts.draw(layout, color, |px, py, glyph_alpha, rgb| {
             let (px, py) = (origin.0 + px, origin.1 + py);
-            if px < 0 || py < 0 || px >= width || py >= height {
+            if px < x0 || py < y0 || px >= x1 || py >= y1 {
                 return;
             }
             let i = ((py * width + px) * 4) as usize;

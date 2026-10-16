@@ -9,6 +9,11 @@ use std::{
 
 use serde::Deserialize;
 
+mod edit;
+pub use edit::ConfigFile;
+// The value type `ConfigFile::set` takes.
+pub use toml_edit;
+
 /// Written to disk on first run so every option is discoverable.
 pub const DEFAULT_CONFIG: &str = include_str!("default-config.toml");
 

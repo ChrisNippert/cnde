@@ -161,7 +161,10 @@ so all three look like one product.
   it later is far harder.
 - **Widget set:** only what we need, grown on demand. Label, button, toggle,
   slider, list row, text entry, scroll view, popover, icon.
-- **Model:** retained widget tree, layout pass, then paint only damaged regions.
+- **Model:** immediate mode. A client repaints its whole surface when something
+  changes; each widget call (`ui::widgets::Painter`) draws one control and
+  returns its rect, which the client keeps for hit-testing until the next
+  paint. Our surfaces are small and change rarely, so this is cheap.
   Keep it simple, and don't build a general-purpose toolkit.
 
 ### 5.2 Core features (user requirements)
@@ -366,6 +369,23 @@ Every default listed here can be rebound or reconfigured.
 - The `config` crate owns the schema, defaults and validation. The compositor, shell and settings app all use it.
 - The compositor watches the file and **hot-reloads** it. An invalid config keeps the last good one and shows an error notification.
 - The settings app is a GUI over this same file, so hand-editing and the GUI never disagree.
+
+### 8.2 The settings app (`cnde-settings`)
+
+- A normal xdg-toplevel window with its own header bars and a page sidebar,
+  libadwaita style. `cnde-settings <page>` opens on a page ("displays", "mouse", ...).
+  The shell lists it in the app grid and search (from next to its own binary
+  when it isn't installed) and opens it from the gear in quick settings.
+- **Writing:** `config::ConfigFile` edits the file with `toml_edit`, so comments
+  and layout survive. Every change is parsed as a `Config` first; an invalid one
+  isn't written and the error shows in the window. Saves are a temp file renamed
+  over the original (a symlinked config is followed), so watchers never see half
+  a file. The compositor and shell apply it through their normal hot reload.
+- **Reading:** it watches the file too, so hand edits show up while it's open.
+- **Pages** are data (`settings/src/pages.rs`): rows of (config key, control,
+  current value, default), rebuilt from the config each paint. A row that
+  differs from its default gets a reset button that removes the key. Advanced
+  rows (tier 2 in §8.1) show when that page's "Advanced settings" switch is on.
 
 ### 8.1 Configurability: GNOME defaults, KDE depth
 
