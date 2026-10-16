@@ -68,7 +68,7 @@ use crate::{
 };
 
 /// The latest of everything the status threads report.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Status {
     pub battery: Option<status::Battery>,
     pub network: status::Network,
@@ -130,6 +130,8 @@ pub struct App {
     /// Where an overview dock goes (the overview's monitor).
     dock_output: Option<wl_output::WlOutput>,
     overview_open: bool,
+    /// Whether we last told the compositor the app grid is showing.
+    reported_grid: bool,
     /// When quick settings was last dismissed by the compositor (a click
     /// outside it). A click on the status icons right after is that same
     /// click, meant to close it, not to reopen it.
@@ -215,6 +217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         windows: Vec::new(),
         dock_output: None,
         overview_open: false,
+        reported_grid: false,
         quick_settings_dismissed: None,
         apps: Vec::new(),
         app_dirs: apps::application_dirs(),
@@ -316,6 +319,7 @@ impl App {
             cnde_ipc::Event::OverviewClosed => {
                 self.overview_open = false;
                 self.launcher = None;
+                self.reported_grid = false;
                 self.redraw_panels();
                 self.sync_dock();
             }
@@ -344,6 +348,16 @@ impl App {
     }
 
     fn draw_launcher(&mut self) {
+        // Keep the compositor up to date on the grid (Super's next step).
+        let grid = self
+            .launcher
+            .as_ref()
+            .is_some_and(|l| l.mode() == launcher::Mode::Grid);
+        if grid != self.reported_grid {
+            self.reported_grid = grid;
+            self.ipc
+                .send(&cnde_ipc::Request::AppGridShown { shown: grid });
+        }
         if let Some(launcher) = &mut self.launcher {
             launcher.draw(
                 &self.qh,
@@ -580,6 +594,17 @@ impl App {
             self.redraw_panels();
         } else {
             self.draw_quick_settings();
+            // Redraw once a pressed toggle's wait is over, so a refused
+            // change visibly snaps back.
+            if matches!(event.kind, PointerEventKind::Press { .. }) {
+                let wait = quick_settings::CONFIRM_WITHIN + Duration::from_millis(50);
+                let _ = self
+                    .loop_handle
+                    .insert_source(Timer::from_duration(wait), |_, _, app| {
+                        app.draw_quick_settings();
+                        TimeoutAction::Drop
+                    });
+            }
         }
     }
 

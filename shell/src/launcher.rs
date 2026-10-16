@@ -301,6 +301,10 @@ impl Launcher {
         self.dirty
     }
 
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
     /// Show every app, or go back to the search pill.
     pub fn toggle_grid(&mut self, theme: &Theme, apps: usize) {
         self.mode = match self.mode {

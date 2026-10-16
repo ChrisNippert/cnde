@@ -81,6 +81,8 @@ pub struct Overview {
     /// Chosen on close, for when the shell's search box lets go of the
     /// keyboard (see `layer_destroyed`).
     focus_after: Option<Window>,
+    /// The shell is showing its app grid (it tells us).
+    pub app_grid: bool,
 }
 
 struct Tile {
@@ -124,6 +126,7 @@ impl Overview {
             scroll: 0.0,
             prev_focus: None,
             focus_after: None,
+            app_grid: false,
         }
     }
 
@@ -181,6 +184,19 @@ impl State {
         }
     }
 
+    /// Tapping Super, GNOME style: the overview, then the app grid, then
+    /// back to the desktop.
+    pub fn super_tapped(&mut self) {
+        if !self.overview.is_open() {
+            self.set_overview(true);
+        } else if !self.overview.app_grid {
+            self.overview.app_grid = true;
+            self.ipc.broadcast(&cnde_ipc::Event::ToggleAppGrid);
+        } else {
+            self.set_overview(false);
+        }
+    }
+
     pub fn toggle_overview(&mut self) {
         let open = !self.overview.is_open();
         self.set_overview(open);
@@ -192,6 +208,7 @@ impl State {
         }
         debug!(open, "overview");
         self.overview.set_open(open);
+        self.overview.app_grid = false;
         let event = match open {
             true => {
                 let (outputs, main) = self.strip_outputs();

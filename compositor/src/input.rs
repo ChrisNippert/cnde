@@ -176,7 +176,7 @@ impl State {
             Action::Launcher => {
                 let command = self.config.launcher.command.clone();
                 if command.trim().is_empty() {
-                    self.toggle_overview();
+                    self.super_tapped();
                 } else {
                     spawn::spawn_command_line(&command, &self.client_env());
                 }

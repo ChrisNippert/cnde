@@ -144,6 +144,7 @@ impl State {
                 self.ipc.broadcast(&Event::ToggleAppGrid);
             }
             Request::ActivateWindow { id } => self.activate_window(id),
+            Request::AppGridShown { shown } => self.overview.app_grid = shown,
         }
     }
 

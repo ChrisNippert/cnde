@@ -291,6 +291,11 @@ pub struct QuickSettings {
     /// What the user just set, shown until the audio server reports it
     /// back (so the slider tracks the pointer with no lag).
     volume_override: Option<(u32, Instant)>,
+    /// Toggles show their new state as soon as they're pressed; if the
+    /// system hasn't confirmed it within `CONFIRM_WITHIN`, they snap back
+    /// (the change was refused or failed).
+    wifi_override: Option<(bool, Instant)>,
+    profile_override: Option<(crate::status::PowerProfile, Instant)>,
     /// Brightness has no change notification: what we set is what it is.
     brightness: Option<u32>,
     /// A frame callback is outstanding: draw when it fires, not before.
@@ -336,6 +341,8 @@ impl QuickSettings {
             features,
             dragging: None,
             volume_override: None,
+            wifi_override: None,
+            profile_override: None,
             brightness: status.backlight.as_ref().map(|b| b.percent()),
             frame_pending: false,
             dirty: false,
@@ -395,12 +402,15 @@ impl QuickSettings {
                     .as_ref()
                     .and_then(|p| p.available.get(i))
                 {
+                    self.profile_override = Some((*profile, Instant::now()));
                     actions.run(Action::SetPowerProfile(*profile));
                 }
             }
             Some(Hit::Mute) => actions.run(Action::ToggleMute),
             Some(Hit::Wifi) => {
-                if let Some(enabled) = status.wifi_enabled {
+                let shown = self.wifi_override.map(|(on, _)| on).or(status.wifi_enabled);
+                if let Some(enabled) = shown {
+                    self.wifi_override = Some((!enabled, Instant::now()));
                     actions.run(Action::SetWifi(!enabled));
                 }
             }
@@ -488,6 +498,28 @@ impl QuickSettings {
         {
             self.volume_override = None;
         }
+        // Pressed toggles, until the system confirms or the wait runs out.
+        let mut shown = status.clone();
+        let fresh = |since: Instant| since.elapsed() < CONFIRM_WITHIN;
+        self.wifi_override = self
+            .wifi_override
+            .filter(|&(on, since)| fresh(since) && status.wifi_enabled != Some(on));
+        if let Some((on, _)) = self.wifi_override {
+            shown.wifi_enabled = Some(on);
+        }
+        self.profile_override = self.profile_override.filter(|&(profile, since)| {
+            fresh(since)
+                && status
+                    .power_profiles
+                    .as_ref()
+                    .is_some_and(|p| p.active != profile)
+        });
+        if let (Some((profile, _)), Some(profiles)) =
+            (self.profile_override, &mut shown.power_profiles)
+        {
+            profiles.active = profile;
+        }
+        let status = &shown;
         let volume = match (self.volume_override, status.volume) {
             (Some((percent, _)), current) => (percent, current.is_some_and(|c| c.muted)),
             (None, Some(current)) => (current.percent, current.muted),
@@ -514,6 +546,9 @@ impl QuickSettings {
         }
     }
 }
+
+/// How long a pressed toggle waits for the system to confirm the change.
+pub const CONFIRM_WITHIN: Duration = Duration::from_secs(3);
 
 /// Draw the card. Separate from the Wayland plumbing so tests can render it.
 #[allow(clippy::too_many_arguments)]

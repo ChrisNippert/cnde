@@ -521,10 +521,14 @@ mod tests {
         };
         let theme = Theme::dark();
         let apps = crate::apps::load(&crate::apps::application_dirs());
-        let favorites: Vec<String> = ["firefox.desktop", "org.gnome.Nautilus.desktop", "Alacritty.desktop"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let favorites: Vec<String> = [
+            "firefox.desktop",
+            "org.gnome.Nautilus.desktop",
+            "Alacritty.desktop",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let windows = vec![window(1, "firefox", true), window(2, "discord", false)];
         let items = items(&favorites, &apps, &windows);
         let l = layout(&items, 48.0, false);
@@ -533,7 +537,16 @@ mod tests {
         {
             let mut canvas = Canvas::new(&mut pixels, w, h, 1.0).unwrap();
             let mut icons = Icons::new();
-            paint(&mut canvas, &l, &items, Some(1), false, &mut icons, &theme, 48.0);
+            paint(
+                &mut canvas,
+                &l,
+                &items,
+                Some(1),
+                false,
+                &mut icons,
+                &theme,
+                48.0,
+            );
         }
         let mut data = format!("{w}x{h}\n").into_bytes();
         data.extend_from_slice(&pixels);

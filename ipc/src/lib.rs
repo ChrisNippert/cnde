@@ -52,6 +52,10 @@ pub enum Request {
     ActivateWindow {
         id: u64,
     },
+    /// The app grid appeared or went away (so Super knows what's next).
+    AppGridShown {
+        shown: bool,
+    },
 }
 
 /// Where a compositor with process id `pid` listens.
