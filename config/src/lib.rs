@@ -294,6 +294,11 @@ pub struct Dock {
     /// On a screen edge: stretch across the whole edge instead of sitting
     /// in the middle, sized to its icons.
     pub extend: bool,
+    /// Where along its edge it sits (when not stretched).
+    pub align: DockAlign,
+    /// On a screen edge: maximized windows stop at it. Off, it floats over
+    /// them.
+    pub reserve: bool,
 }
 
 impl Default for Dock {
@@ -309,8 +314,21 @@ impl Default for Dock {
             icon_size: 48,
             background: DockBackground::Solid,
             extend: false,
+            align: DockAlign::Center,
+            reserve: true,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DockAlign {
+    /// Left (or top, on a side edge).
+    Start,
+    #[default]
+    Center,
+    /// Right (or bottom, on a side edge).
+    End,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

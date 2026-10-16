@@ -6,7 +6,7 @@
 //! one that isn't launches it, and a middle click always opens a new one.
 //! The window list and focusing go through the compositor (see `ipc`).
 
-use cnde_config::{DockBackground, DockPosition};
+use cnde_config::{DockAlign, DockBackground, DockPosition};
 use cnde_ipc::WindowInfo;
 use cnde_ui::{Canvas, Color, Icons, Theme};
 use smithay_client_toolkit::{
@@ -259,6 +259,9 @@ pub struct Dock {
     position: DockPosition,
     /// Stretched across its whole edge (`dock.extend`).
     extend: bool,
+    align: DockAlign,
+    /// On an edge, maximized windows stop at it (else it floats over them).
+    reserve: bool,
     /// Translucent: the compositor frosts the wallpaper behind it.
     pub frosted: bool,
     /// The size the compositor gave the surface (stretched docks).
@@ -282,6 +285,8 @@ impl Dock {
         output: WlOutput,
         position: DockPosition,
         extend: bool,
+        align: DockAlign,
+        reserve: bool,
         scale: i32,
     ) -> Self {
         let surface = compositor.create_surface(qh);
@@ -308,6 +313,15 @@ impl Dock {
             _ => (Anchor::BOTTOM, EDGE_MARGIN),
         };
         // Stretched: flush against the edge, from end to end.
+        // Off centre: pushed to one end of its edge.
+        let vertical = matches!(position, DockPosition::Left | DockPosition::Right);
+        let anchor = match (align, vertical) {
+            (DockAlign::Center, _) => anchor,
+            (DockAlign::Start, false) => anchor | Anchor::LEFT,
+            (DockAlign::End, false) => anchor | Anchor::RIGHT,
+            (DockAlign::Start, true) => anchor | Anchor::TOP,
+            (DockAlign::End, true) => anchor | Anchor::BOTTOM,
+        };
         let (anchor, margin) = match (extend, position) {
             (false, _) => (anchor, margin),
             (true, DockPosition::Left | DockPosition::Right) => {
@@ -324,6 +338,8 @@ impl Dock {
             layer,
             position,
             extend,
+            align,
+            reserve,
             frosted: false,
             surface_size: (0, 0),
             scale: scale.max(1),
@@ -341,8 +357,9 @@ impl Dock {
         self.position
     }
 
-    pub fn extend(&self) -> bool {
-        self.extend
+    /// The layout settings it was made with (a change remakes it).
+    pub fn placement(&self) -> (bool, DockAlign, bool) {
+        (self.extend, self.align, self.reserve)
     }
 
     fn layout(&self, icon: f32) -> Layout {
@@ -431,9 +448,15 @@ impl Dock {
                 (true, false) => self.layer.set_size(0, thickness),
             }
             if self.position != DockPosition::Overview {
-                // Maximized windows stop at the dock.
+                // Maximized windows stop at the dock, unless it floats over
+                // them (0: it still keeps clear of the panel).
                 let margin = if self.extend { 0 } else { EDGE_MARGIN };
-                self.layer.set_exclusive_zone(thickness as i32 + margin);
+                let zone = if self.reserve {
+                    thickness as i32 + margin
+                } else {
+                    0
+                };
+                self.layer.set_exclusive_zone(zone);
             }
             if !self.configured {
                 self.layer.commit();

@@ -66,6 +66,8 @@
 # icon_size = 48
 # background = "solid"     # "solid" or "frosted" (translucent over the blurred wallpaper)
 # extend = false           # on an edge: stretch across the whole edge
+# align = "center"         # "start" (left/top), "center", "end" (right/bottom)
+# reserve = true           # on an edge: maximized windows stop at it; false floats it over them
 
 [launcher]
 # Tapping Super opens the overview. Set a command to run that instead.

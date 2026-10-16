@@ -623,7 +623,12 @@ impl App {
         if self.dock.as_ref().is_some_and(|d| {
             Some(&d.output) != wanted.as_ref()
                 || d.position() != position
-                || d.extend() != (self.config.dock.extend && position != DockPosition::Overview)
+                || d.placement()
+                    != (
+                        self.config.dock.extend && position != DockPosition::Overview,
+                        self.config.dock.align,
+                        self.config.dock.reserve,
+                    )
         }) {
             self.dock = None;
         }
@@ -645,6 +650,8 @@ impl App {
                 output,
                 position,
                 self.config.dock.extend,
+                self.config.dock.align,
+                self.config.dock.reserve,
                 scale,
             ));
         }

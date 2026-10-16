@@ -298,6 +298,31 @@ impl App {
                 dock.extend,
                 Action::Config(vec![("dock.extend", Value::Bool(!dock.extend))]),
             ));
+            entries.push(Entry::check(
+                "Float Over Windows",
+                !dock.reserve,
+                Action::Config(vec![("dock.reserve", Value::Bool(!dock.reserve))]),
+            ));
+        }
+        if !(dock.extend && dock.position != DockPosition::Overview) {
+            entries.push(Entry::Section("Alignment".into()));
+            let side = matches!(dock.position, DockPosition::Left | DockPosition::Right);
+            let (start, end) = if side {
+                ("Top", "Bottom")
+            } else {
+                ("Left", "Right")
+            };
+            for (label, value, align) in [
+                (start, "start", cnde_config::DockAlign::Start),
+                ("Center", "center", cnde_config::DockAlign::Center),
+                (end, "end", cnde_config::DockAlign::End),
+            ] {
+                entries.push(Entry::check(
+                    label,
+                    dock.align == align,
+                    Action::Config(vec![("dock.align", Value::Str(value.into()))]),
+                ));
+            }
         }
         entries.push(Entry::Separator);
         let edit = if self.dock_editing {

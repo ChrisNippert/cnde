@@ -956,6 +956,42 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
             )
             .sub("Instead of sitting in the middle, sized to its icons"),
         );
+        rows.push(
+            Row::new(
+                "dock.reserve",
+                "Windows stop at the dock",
+                Control::switch(),
+                Value::Bool(c.dock.reserve),
+                Value::Bool(d.dock.reserve),
+            )
+            .sub("Off, the dock floats over maximized windows"),
+        );
+    }
+    if c.dock.position != DockPosition::Off && !(on_edge && c.dock.extend) {
+        let align = |v: cnde_config::DockAlign| {
+            s(match v {
+                cnde_config::DockAlign::Start => "start",
+                cnde_config::DockAlign::Center => "center",
+                cnde_config::DockAlign::End => "end",
+            })
+        };
+        let side = matches!(c.dock.position, DockPosition::Left | DockPosition::Right);
+        let (start, end) = if side {
+            ("Top", "Bottom")
+        } else {
+            ("Left", "Right")
+        };
+        rows.push(Row::new(
+            "dock.align",
+            "Alignment",
+            Control::Segmented(choices(&[
+                (start, s("start")),
+                ("Center", s("center")),
+                (end, s("end")),
+            ])),
+            align(c.dock.align),
+            align(d.dock.align),
+        ));
     }
     if c.dock.position != DockPosition::Off {
         rows.push(Row::new(
