@@ -112,6 +112,26 @@ pub enum Request {
     },
 }
 
+/// The overview while the app grid shows: workspace thumbnails in a row
+/// under the search box, the grid below them. Shared so the compositor's
+/// thumbnails and the shell's grid fit together.
+pub mod app_grid {
+    /// The thumbnails' top, logical px below the top of the area the panel
+    /// leaves free: under the search box (its margin, height and a gap).
+    pub const THUMBS_TOP: f64 = 20.0 + 48.0 + 18.0;
+    /// Thumbnail height as a fraction of the monitor's height.
+    pub const THUMB_SCALE: f64 = 0.11;
+    /// Between thumbnails.
+    pub const THUMB_GAP: f64 = 14.0;
+    /// Between the thumbnails and the grid.
+    const BELOW: f64 = 18.0;
+
+    /// Where the grid starts, below the free area's top.
+    pub fn grid_top(output_height: f64) -> f64 {
+        THUMBS_TOP + output_height * THUMB_SCALE + BELOW
+    }
+}
+
 /// Where a compositor with process id `pid` listens.
 pub fn socket_path(pid: u32) -> Option<PathBuf> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")?;

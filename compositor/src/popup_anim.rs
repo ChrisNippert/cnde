@@ -2,11 +2,15 @@
 //! quick settings, bar menus (ARCHITECTURE.md §4.3: clients never animate
 //! themselves). A popup fades in while growing slightly from its top edge,
 //! and fades out the reverse way from a snapshot of its last frame, since
-//! its buffers are gone by the time we learn it closed.
+//! its buffers are gone by the time we learn it closed. The snapshot is
+//! taken while drawing, whenever the popup's content changes: by the time
+//! the client destroys a popup its surface (and textures) may already be
+//! gone, and a snapshot taken then comes out empty.
 
 use std::{collections::HashMap, time::Instant};
 
 use smithay::{
+    backend::renderer::utils::{CommitCounter, with_renderer_surface_state},
     backend::renderer::{
         element::{
             Kind,
@@ -36,11 +40,10 @@ struct Opened(Instant);
 
 /// A popup's last drawn frame, for its close animation.
 struct LastPopup {
-    /// Drawn with the bounding box's top-left at the origin.
-    elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
+    snapshot: Option<Snapshot>,
+    /// The surface commit `snapshot` shows, and the scale it was taken at.
+    commit: CommitCounter,
     scale: Scale<f64>,
-    geometry: Rectangle<i32, Logical>,
-    bbox: Rectangle<i32, Logical>,
     /// Where its geometry was on screen (global).
     rect: Rectangle<f64, Logical>,
 }
@@ -121,27 +124,38 @@ impl PopupAnims {
                 ))
             }));
 
-            // Remember this frame in case the popup closes before the next.
-            let bbox = bbox_from_surface_tree(surface, (0, 0));
-            let last = render_elements_from_surface_tree(
-                renderer,
-                surface,
-                (Point::default() - bbox.loc).to_physical_precise_round(scale),
-                scale,
-                1.0,
-                Kind::Unspecified,
-            );
+            // Keep a snapshot of its current content for when it closes.
+            let commit =
+                with_renderer_surface_state(surface, |s| s.current_commit()).unwrap_or_default();
             let logical_loc = geometry_loc.to_f64().to_logical(scale) + output_loc;
-            self.last.insert(
-                surface.id(),
-                LastPopup {
-                    elements: last,
-                    scale,
-                    geometry,
-                    bbox,
-                    rect: Rectangle::new(logical_loc, geometry.size.to_f64()),
-                },
-            );
+            let rect = Rectangle::new(logical_loc, geometry.size.to_f64());
+            let stale = self.last.get(&surface.id()).is_none_or(|last| {
+                last.snapshot.is_none() || last.commit != commit || last.scale != scale
+            });
+            if stale {
+                let bbox = bbox_from_surface_tree(surface, (0, 0));
+                let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                    render_elements_from_surface_tree(
+                        renderer,
+                        surface,
+                        (Point::default() - bbox.loc).to_physical_precise_round(scale),
+                        scale,
+                        1.0,
+                        Kind::Unspecified,
+                    );
+                let snapshot = Snapshot::from_elements(renderer, elements, scale, geometry, bbox);
+                self.last.insert(
+                    surface.id(),
+                    LastPopup {
+                        snapshot,
+                        commit,
+                        scale,
+                        rect,
+                    },
+                );
+            } else if let Some(last) = self.last.get_mut(&surface.id()) {
+                last.rect = rect;
+            }
         }
         elements
     }
@@ -182,16 +196,7 @@ impl State {
         let Some(last) = self.popup_anims.last.remove(&surface.id()) else {
             return;
         };
-        let Some(renderer) = self.backend.renderer() else {
-            return;
-        };
-        if let Some(snapshot) = Snapshot::from_elements(
-            renderer,
-            last.elements,
-            last.scale,
-            last.geometry,
-            last.bbox,
-        ) {
+        if let Some(snapshot) = last.snapshot {
             self.popup_anims.closing.push(ClosingPopup {
                 snapshot,
                 rect: last.rect,

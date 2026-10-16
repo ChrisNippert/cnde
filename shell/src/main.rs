@@ -133,7 +133,7 @@ pub struct App {
     dock: Option<Dock>,
     /// The open right-click menu.
     menu: Option<menu::Menu>,
-    /// The desktop menu's 1x1 anchor, waiting to be configured, and the
+    /// The desktop menu's anchor surface, waiting to be configured, and the
     /// scale of its monitor.
     desktop_holder: Option<(smithay_client_toolkit::shell::wlr_layer::LayerSurface, i32)>,
     /// The dock is being edited in place (kept across it being recreated,
@@ -141,6 +141,8 @@ pub struct App {
     dock_editing: bool,
     /// Where the dock's move grip was pressed.
     dock_drag_start: Option<(f64, f64)>,
+    /// Where a dragged dock would land.
+    dock_preview: Option<edit_mode::DockPreview>,
     /// The latest input serial, for grabs the compositor started for us.
     last_serial: u32,
     /// The screenshot tool, while the screen is frozen for one.
@@ -240,6 +242,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_serial: 0,
         dock_editing: false,
         dock_drag_start: None,
+        dock_preview: None,
         windows: Vec::new(),
         dock_output: None,
         overview_open: false,
@@ -353,6 +356,12 @@ impl App {
                     &self.theme,
                     scale,
                 ));
+                // The app grid stops above an overview dock.
+                if let Some(launcher) = &mut self.launcher
+                    && self.config.dock.position == cnde_config::DockPosition::Overview
+                {
+                    launcher.bottom_reserve = self.config.dock.icon_size as f32 + 64.0;
+                }
             }
             cnde_ipc::Event::ToggleAppGrid => {
                 if let Some(launcher) = &mut self.launcher {
@@ -956,6 +965,13 @@ impl LayerShellHandler for App {
             .is_some_and(|(holder, _)| holder == layer)
         {
             self.desktop_holder_configured();
+        }
+        if self
+            .dock_preview
+            .as_ref()
+            .is_some_and(|p| &p.layer == layer)
+        {
+            self.dock_preview_configured();
         }
         if let Some(launcher) = &mut self.launcher
             && &launcher.layer == layer

@@ -25,9 +25,12 @@ entries when they're done.
   box is only on the main monitor; no app grid button yet; no hover
   highlight on windows.
 - **Right-click menus and edit mode** haven't been tried with a real mouse
-  yet (only rendered nested). Moving the dock by its grip gives no preview of
-  where it'll land beyond tinting the dock; it jumps on release. A clock dragged
-  in edit mode follows the pointer but only lands in thirds of the bar.
+  yet (only rendered nested). Moving the dock by its grip outlines where it'll
+  land, but the dock itself jumps there on release rather than sliding. A clock
+  dragged in edit mode follows the pointer but only lands in thirds of the bar.
+- **App grid:** fades in, but going back from it is instant (the shell's
+  surface shrinks to the search box at once); the workspace thumbnails do
+  animate both ways.
 - **Settings app:** no resize cursors at the window edges (the compositor
   lacks cursor-shape-v1); no keyboard navigation between controls (Tab) and
   no AccessKit yet; the light style isn't drawn (the switch only picks the

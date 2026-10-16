@@ -20,6 +20,9 @@ use crate::{
     menu::{Action, Entry, Menu, Placement, Value},
 };
 
+/// The desktop menu's invisible anchor surface, pixels square.
+const HOLDER: i32 = 9;
+
 /// Icon sizes the dock menu offers.
 const ICON_SIZES: [(&str, i64); 3] = [("Small", 32), ("Medium", 48), ("Large", 64)];
 
@@ -100,8 +103,11 @@ impl App {
             Some(&output),
         );
         holder.set_anchor(wlr_layer::Anchor::TOP | wlr_layer::Anchor::LEFT);
-        holder.set_margin(y, 0, 0, x);
-        holder.set_size(1, 1);
+        // A few pixels around the click, so the pointer is surely over it
+        // when the button comes up (else the grab takes the release for a
+        // click elsewhere and closes the menu at once).
+        holder.set_margin((y - HOLDER / 2).max(0), 0, 0, (x - HOLDER / 2).max(0));
+        holder.set_size(HOLDER as u32, HOLDER as u32);
         holder.set_exclusive_zone(-1);
         holder.set_keyboard_interactivity(KeyboardInteractivity::None);
         holder.wl_surface().set_buffer_scale(1);
@@ -115,7 +121,10 @@ impl App {
         let Some((holder, scale)) = self.desktop_holder.take() else {
             return;
         };
-        match self.pool.create_buffer(1, 1, 4, wl_shm::Format::Argb8888) {
+        match self
+            .pool
+            .create_buffer(HOLDER, HOLDER, HOLDER * 4, wl_shm::Format::Argb8888)
+        {
             Ok((buffer, pixels)) => {
                 pixels.fill(0);
                 if buffer.attach_to(holder.wl_surface()).is_err() {
@@ -138,7 +147,7 @@ impl App {
             &holder,
             self.last_serial,
             Placement {
-                rect: (0, 0, 1, 1),
+                rect: (HOLDER / 2, HOLDER / 2, 1, 1),
                 anchor: Anchor::BottomRight,
                 gravity: Gravity::BottomRight,
             },

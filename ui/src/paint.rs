@@ -132,6 +132,26 @@ impl<'a> Canvas<'a> {
         self.scale
     }
 
+    /// Size in device pixels.
+    pub fn pixel_size(&self) -> (u32, u32) {
+        (self.pixmap.width(), self.pixmap.height())
+    }
+
+    /// Composite `layer` (same pixel size as this canvas, drawn offscreen)
+    /// with `opacity`, zoomed by `zoom` about logical point (`cx`, `cy`):
+    /// for fading something in as a whole.
+    pub fn composite(&mut self, layer: PixmapRef<'_>, opacity: f32, zoom: f32, cx: f32, cy: f32) {
+        let (cx, cy) = (cx * self.scale, cy * self.scale);
+        let transform = Transform::from_row(zoom, 0.0, 0.0, zoom, cx - cx * zoom, cy - cy * zoom);
+        let paint = tiny_skia::PixmapPaint {
+            opacity: opacity.clamp(0.0, 1.0),
+            quality: FilterQuality::Bilinear,
+            ..Default::default()
+        };
+        self.pixmap
+            .draw_pixmap(0, 0, layer, &paint, transform, None);
+    }
+
     pub fn circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color) {
         self.rounded_rect(
             cx - radius,

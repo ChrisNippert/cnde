@@ -9,6 +9,7 @@
 
 use std::{collections::HashMap, time::Instant};
 
+use cnde_ipc::app_grid;
 use smithay::{
     backend::renderer::{
         element::{
@@ -18,7 +19,7 @@ use smithay::{
         gles::{GlesPixelProgram, GlesRenderer, element::PixelShaderElement},
         utils::CommitCounter,
     },
-    desktop::Window,
+    desktop::{Window, layer_map_for_output},
     output::Output,
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size},
 };
@@ -82,7 +83,9 @@ pub struct Overview {
     /// keyboard (see `layer_destroyed`).
     focus_after: Option<Window>,
     /// The shell is showing its app grid (it tells us).
-    pub app_grid: bool,
+    app_grid: bool,
+    /// Workspaces shrinking into thumbnails for the grid, or growing back.
+    grid_anim: Option<Animation>,
 }
 
 struct Tile {
@@ -127,6 +130,7 @@ impl Overview {
             prev_focus: None,
             focus_after: None,
             app_grid: false,
+            grid_anim: None,
         }
     }
 
@@ -153,6 +157,33 @@ impl Overview {
 
     pub fn is_animating(&self, now: Instant) -> bool {
         self.anim.as_ref().is_some_and(|a| !a.is_done(now))
+            || self.grid_anim.as_ref().is_some_and(|a| !a.is_done(now))
+    }
+
+    pub fn app_grid(&self) -> bool {
+        self.app_grid
+    }
+
+    /// 0 = workspace cards, 1 = thumbnails above the app grid.
+    pub fn grid_progress(&self, now: Instant) -> f64 {
+        match &self.grid_anim {
+            Some(anim) => anim.value_at(now),
+            None if self.app_grid => 1.0,
+            None => 0.0,
+        }
+    }
+
+    pub fn set_app_grid(&mut self, shown: bool) {
+        if shown == self.app_grid {
+            return;
+        }
+        let from = self.grid_progress(Instant::now());
+        self.app_grid = shown;
+        self.grid_anim = Some(Animation::new(
+            from,
+            if shown { 1.0 } else { 0.0 },
+            presets::OVERVIEW,
+        ));
     }
 
     fn set_open(&mut self, open: bool) {
@@ -189,8 +220,8 @@ impl State {
     pub fn super_tapped(&mut self) {
         if !self.overview.is_open() {
             self.set_overview(true);
-        } else if !self.overview.app_grid {
-            self.overview.app_grid = true;
+        } else if !self.overview.app_grid() {
+            self.overview.set_app_grid(true);
             self.ipc.broadcast(&cnde_ipc::Event::ToggleAppGrid);
         } else {
             self.set_overview(false);
@@ -208,7 +239,9 @@ impl State {
         }
         debug!(open, "overview");
         self.overview.set_open(open);
+        // Closing from the grid: the thumbnails zoom back with the rest.
         self.overview.app_grid = false;
+        self.overview.grid_anim = None;
         let event = match open {
             true => {
                 let (outputs, main) = self.strip_outputs();
@@ -257,6 +290,14 @@ impl State {
         if self.overview.anim.as_ref().is_some_and(|a| a.is_done(now)) {
             self.overview.anim = None;
         }
+        if self
+            .overview
+            .grid_anim
+            .as_ref()
+            .is_some_and(|a| a.is_done(now))
+        {
+            self.overview.grid_anim = None;
+        }
     }
 
     /// The windows (and, in the overview, workspace cards) `output` shows
@@ -279,12 +320,22 @@ impl State {
         let (outputs, main) = self.strip_outputs();
         let k = outputs.iter().position(|o| o == output)? as f64;
         let geo = self.space.output_geometry(output)?.to_f64();
-        let scale = 1.0 + (ZOOM - 1.0) * progress;
+        // With the app grid up, the cards shrink into a row of thumbnails
+        // under the search box (see `cnde_ipc::app_grid`).
+        let grid = self.overview.grid_progress(now);
+        let lerp = |a: f64, b: f64| a + (b - a) * grid;
+        let scale = lerp(1.0 + (ZOOM - 1.0) * progress, app_grid::THUMB_SCALE);
+        let gap = lerp(GAP * progress, app_grid::THUMB_GAP);
         let card_size = Size::from((geo.size.w * scale, geo.size.h * scale));
         let centre = geo.loc + Point::from((geo.size.w / 2.0, geo.size.h / 2.0));
+        let free_top = layer_map_for_output(output).non_exclusive_zone().loc.y as f64;
+        let thumbs_centre_y = geo.loc.y + free_top + app_grid::THUMBS_TOP + card_size.h / 2.0;
         let card_at = |slot: f64| {
-            let cx = centre.x + (slot - k) * (card_size.w + GAP * progress);
-            let cy = centre.y + geo.size.h * SHIFT_DOWN * progress;
+            let cx = centre.x + (slot - k) * (card_size.w + gap);
+            let cy = lerp(
+                centre.y + geo.size.h * SHIFT_DOWN * progress,
+                thumbs_centre_y,
+            );
             Rectangle::new(
                 Point::from((cx - card_size.w / 2.0, cy - card_size.h / 2.0)),
                 card_size,

@@ -4,7 +4,7 @@
 //!
 //! The wallpaper isn't one of our surfaces, so for the desktop menu the
 //! compositor tells us where the click was (`Event::DesktopMenu`) and we
-//! hang the menu off a 1x1 transparent layer surface placed there.
+//! hang the menu off a small transparent layer surface placed there.
 
 use std::time::{Duration, Instant};
 

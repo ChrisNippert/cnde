@@ -8,7 +8,16 @@
 //! the centre or the right. Both: Done to finish.
 
 use cnde_config::{ClockPosition, DockPosition};
-use smithay_client_toolkit::seat::pointer::{BTN_LEFT, PointerEvent, PointerEventKind};
+use cnde_ui::{Canvas, Color};
+use smithay_client_toolkit::{
+    reexports::client::protocol::wl_shm,
+    seat::pointer::{BTN_LEFT, PointerEvent, PointerEventKind},
+    shell::{
+        WaylandSurface,
+        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerSurface},
+    },
+};
+use tracing::warn;
 
 use crate::{
     App,
@@ -27,6 +36,14 @@ const MOVE_THRESHOLD: f64 = 40.0;
 const EDGE_MARGIN: f64 = 8.0;
 const OVERVIEW_MARGIN: f64 = 20.0;
 
+/// Where a dragged dock would land: an outline on that screen edge.
+pub struct DockPreview {
+    pub layer: LayerSurface,
+    edge: DockPosition,
+    size: (u32, u32),
+    configured: bool,
+}
+
 impl App {
     pub fn start_dock_edit(&mut self) {
         self.dock_editing = true;
@@ -35,6 +52,7 @@ impl App {
 
     pub fn finish_dock_edit(&mut self) {
         self.dock_editing = false;
+        self.dock_preview = None;
         self.apply_dock_edit();
     }
 
@@ -155,7 +173,10 @@ impl App {
         };
         match step {
             DockStep::Nothing => {}
-            DockStep::Redraw => self.draw_dock(),
+            DockStep::Redraw => {
+                self.draw_dock();
+                self.update_dock_preview();
+            }
             DockStep::Unpin(index) => {
                 let id = self
                     .dock
@@ -173,6 +194,7 @@ impl App {
                 self.draw_dock();
             }
             DockStep::Move(at) => {
+                self.dock_preview = None;
                 let start = self.dock_drag_start.take().unwrap_or(at);
                 let moved = (at.0 - start.0).hypot(at.1 - start.1);
                 if moved > MOVE_THRESHOLD
@@ -190,6 +212,103 @@ impl App {
             }
             DockStep::Size(step) => self.step_icon_size(step),
             DockStep::Done => self.finish_dock_edit(),
+        }
+    }
+
+    /// While the grip is dragged: show where the dock would land.
+    fn update_dock_preview(&mut self) {
+        let Some(dock) = &self.dock else {
+            return;
+        };
+        let Some(DockDrag::Move { at }) = dock.edit.as_ref().and_then(|e| e.drag) else {
+            self.dock_preview = None;
+            return;
+        };
+        let start = self.dock_drag_start.unwrap_or(at);
+        let edge = ((at.0 - start.0).hypot(at.1 - start.1) > MOVE_THRESHOLD)
+            .then(|| self.dock_edge_at(at))
+            .flatten()
+            .filter(|edge| *edge != self.config.dock.position);
+        let Some(edge) = edge else {
+            self.dock_preview = None;
+            return;
+        };
+        if self.dock_preview.as_ref().is_some_and(|p| p.edge == edge) {
+            return;
+        }
+        let Some(dock) = &self.dock else {
+            return;
+        };
+        // The dock's length and thickness, turned to fit the new edge.
+        let (w, h) = dock.size();
+        let (long, thick) = if w >= h { (w, h) } else { (h, w) };
+        let (anchor, size) = match edge {
+            DockPosition::Left => (Anchor::LEFT, (thick, long)),
+            DockPosition::Right => (Anchor::RIGHT, (thick, long)),
+            _ => (Anchor::BOTTOM, (long, thick)),
+        };
+        let surface = self.compositor.create_surface(&self.qh);
+        let layer = self.layer_shell.create_layer_surface(
+            &self.qh,
+            surface,
+            Layer::Overlay,
+            Some("cnde-dock-preview"),
+            Some(&dock.output),
+        );
+        layer.set_anchor(anchor);
+        let margin = EDGE_MARGIN as i32;
+        layer.set_margin(margin, margin, margin, margin);
+        layer.set_size(size.0, size.1);
+        layer.set_exclusive_zone(-1);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        if let Ok(region) = smithay_client_toolkit::compositor::Region::new(&self.compositor) {
+            // Never in the way of the pointer.
+            layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
+        }
+        layer.commit();
+        self.dock_preview = Some(DockPreview {
+            layer,
+            edge,
+            size,
+            configured: false,
+        });
+    }
+
+    /// The preview's layer surface was configured: draw it.
+    pub fn dock_preview_configured(&mut self) {
+        let Some(preview) = &mut self.dock_preview else {
+            return;
+        };
+        preview.configured = true;
+        let scale = self.dock.as_ref().map_or(1, |d| d.scale());
+        let (w, h) = (preview.size.0 as i32 * scale, preview.size.1 as i32 * scale);
+        let (buffer, pixels) = match self.pool.create_buffer(w, h, w * 4, self.shm_format) {
+            Ok(created) => created,
+            Err(err) => {
+                warn!(?err, "can't allocate dock preview");
+                return;
+            }
+        };
+        if let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) {
+            let (lw, lh) = (preview.size.0 as f32, preview.size.1 as f32);
+            let accent = self.theme.accent;
+            let radius = self.theme.search_results_radius;
+            canvas.clear(Color::rgba(0, 0, 0, 0.0));
+            canvas.rounded_rect(0.0, 0.0, lw, lh, radius, accent.with_alpha(0.22));
+            canvas.stroke_rounded_rect(0.0, 0.0, lw, lh, radius, 2.0, accent);
+        }
+        if self.shm_format == wl_shm::Format::Argb8888 {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+        }
+        let surface = preview.layer.wl_surface();
+        surface.set_buffer_scale(scale);
+        surface.damage_buffer(0, 0, w, h);
+        if buffer.attach_to(surface).is_ok() {
+            surface.commit();
         }
     }
 

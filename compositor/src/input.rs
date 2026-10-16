@@ -310,8 +310,8 @@ impl State {
                 let local = location - geometry.loc.to_f64();
                 self.ipc.broadcast(&cnde_ipc::Event::DesktopMenu {
                     output: output.name(),
-                    x: local.x.round() as i32,
-                    y: local.y.round() as i32,
+                    x: local.x.floor() as i32,
+                    y: local.y.floor() as i32,
                 });
             }
 

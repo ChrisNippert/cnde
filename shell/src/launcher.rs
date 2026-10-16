@@ -29,6 +29,9 @@ use crate::{
     apps::{self, App as AppEntry},
 };
 
+/// How long the app grid takes to fade in.
+const GRID_APPEAR: std::time::Duration = std::time::Duration::from_millis(220);
+
 /// Gap between the panel and the search pill.
 const TOP_MARGIN: i32 = 20;
 /// Space kept free below the grid card.
@@ -93,6 +96,8 @@ pub struct LayoutInput {
     pub output: (f32, f32),
     pub apps: usize,
     pub page: usize,
+    /// Kept free at the bottom of the monitor (for an overview dock).
+    pub bottom_reserve: f32,
 }
 
 pub fn layout(theme: &Theme, input: &LayoutInput) -> Layout {
@@ -111,8 +116,10 @@ pub fn layout(theme: &Theme, input: &LayoutInput) -> Layout {
                 .floor()
                 .max(1.0);
             let width = columns * theme.grid_cell_width + 2.0 * theme.grid_padding;
-            let height =
-                input.output.1 - theme.panel_height as f32 - TOP_MARGIN as f32 - BOTTOM_MARGIN;
+            let height = input.output.1
+                - theme.panel_height as f32
+                - TOP_MARGIN as f32
+                - input.bottom_reserve.max(BOTTOM_MARGIN);
             (width.max(theme.search_width), height.max(search_height))
         }
     };
@@ -141,11 +148,14 @@ pub fn layout(theme: &Theme, input: &LayoutInput) -> Layout {
     };
 
     if input.mode == Mode::Grid {
+        // Below the row of workspace thumbnails the compositor draws.
+        let top = (cnde_ipc::app_grid::grid_top(input.output.1 as f64) as f32 - TOP_MARGIN as f32)
+            .max(below);
         let card = Rect {
             x: 0.0,
-            y: below,
+            y: top,
             w: width,
-            h: height - below,
+            h: (height - top).max(theme.grid_cell_height + 2.0 * theme.grid_padding),
         };
         let inner_w = card.w - 2.0 * theme.grid_padding;
         // Room at the bottom for the page dots.
@@ -233,6 +243,10 @@ pub struct Launcher {
     page: usize,
     /// Scroll-wheel travel not yet turned into page flips.
     scroll: f64,
+    /// Kept free at the bottom (an overview dock), logical px.
+    pub bottom_reserve: f32,
+    /// When the grid was opened, for its fade-in.
+    grid_opened: Option<std::time::Instant>,
 }
 
 impl Launcher {
@@ -280,6 +294,8 @@ impl Launcher {
             grid_selected: 0,
             page: 0,
             scroll: 0.0,
+            bottom_reserve: 0.0,
+            grid_opened: None,
         };
         launcher.request_size(theme, 0);
         launcher.layer.commit();
@@ -311,6 +327,7 @@ impl Launcher {
             Mode::Search => Mode::Grid,
             Mode::Grid => Mode::Search,
         };
+        self.grid_opened = (self.mode == Mode::Grid).then(std::time::Instant::now);
         self.query.clear();
         self.results.clear();
         self.grid_selected = 0;
@@ -328,6 +345,7 @@ impl Launcher {
                 output: self.output_size,
                 apps,
                 page: self.page,
+                bottom_reserve: self.bottom_reserve,
             },
         )
     }
@@ -561,12 +579,24 @@ impl Launcher {
             let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) else {
                 return;
             };
+            // The grid fades and zooms in when it opens.
+            let appear = self.grid_opened.map_or(1.0, |at| {
+                let t = (at.elapsed().as_secs_f32() / GRID_APPEAR.as_secs_f32()).min(1.0);
+                1.0 - (1.0 - t).powi(3)
+            });
+            if appear >= 1.0 {
+                self.grid_opened = None;
+            } else {
+                // Draw again next frame.
+                self.dirty = true;
+            }
             let state = PaintState {
                 query: &self.query,
                 results: &results,
                 selected: self.selected,
                 apps,
                 grid_selected: self.grid_selected,
+                appear,
             };
             paint(
                 &mut canvas,
@@ -610,6 +640,8 @@ struct PaintState<'a> {
     /// All apps, for the grid.
     apps: &'a [AppEntry],
     grid_selected: usize,
+    /// The grid's fade-in, 0-1.
+    appear: f32,
 }
 
 /// Draw everything. Separate from Wayland so tests can render it.
@@ -626,7 +658,24 @@ fn paint(
     let fg = theme.popup_text;
     paint_pill(canvas, layout, fonts, icons, theme, state.query, scale);
     if let Some(grid) = &layout.grid {
-        paint_grid(canvas, grid, fonts, icons, theme, state, scale);
+        if state.appear >= 1.0 {
+            paint_grid(canvas, grid, fonts, icons, theme, state, scale);
+        } else {
+            // Drawn offscreen, then blended in as a whole.
+            let (w, h) = canvas.pixel_size();
+            let Some(mut pixmap) = cnde_ui::tiny_skia::Pixmap::new(w, h) else {
+                return;
+            };
+            if let Some(mut layer) = Canvas::new(pixmap.data_mut(), w, h, scale) {
+                paint_grid(&mut layer, grid, fonts, icons, theme, state, scale);
+            }
+            let zoom = 0.94 + 0.06 * state.appear;
+            let (cx, cy) = (
+                grid.card.x + grid.card.w / 2.0,
+                grid.card.y + grid.card.h / 2.0,
+            );
+            canvas.composite(pixmap.as_ref(), state.appear, zoom, cx, cy);
+        }
         return;
     }
 
@@ -783,15 +832,11 @@ fn paint_grid(
     state: &PaintState<'_>,
     scale: f32,
 ) {
+    // Straight on the overview's blurred, dimmed wallpaper, as in GNOME:
+    // light text with a shadow, in either style.
     let card = grid.card;
-    canvas.rounded_rect(
-        card.x,
-        card.y,
-        card.w,
-        card.h,
-        theme.search_results_radius,
-        theme.search_background,
-    );
+    let text = Color::rgb(0xff, 0xff, 0xff);
+    let shadow = Color::rgba(0, 0, 0, 0.55);
     let first = grid.page * grid.per_page;
     for (i, cell) in grid.cells.iter().enumerate() {
         let Some(app) = state.apps.get(first + i) else {
@@ -804,7 +849,7 @@ fn paint_grid(
                 cell.w - 12.0,
                 cell.h - 8.0,
                 theme.search_row_radius,
-                theme.search_selected,
+                Color::rgba(0xff, 0xff, 0xff, 0.16),
             );
         }
         let size = theme.grid_icon_size;
@@ -813,7 +858,9 @@ fn paint_grid(
         app_icon(canvas, icons, theme, &app.icon, icon_x, icon_y, size);
         let mut name = fit(fonts, &app.name, 13.0, Weight::Normal, scale, cell.w - 16.0);
         let x = (cell.x + (cell.w - name.width) / 2.0).round();
-        canvas.text(fonts, &mut name, x, icon_y + size + 10.0, theme.popup_text);
+        let y = icon_y + size + 10.0;
+        canvas.text(fonts, &mut name, x + 1.0, y + 1.0, shadow);
+        canvas.text(fonts, &mut name, x, y, text);
     }
     // Page dots.
     if grid.pages > 1 {
@@ -824,9 +871,9 @@ fn paint_grid(
         let y = card.y + card.h - theme.grid_padding / 2.0 - dot;
         for page in 0..grid.pages {
             let color = if page == grid.page {
-                theme.workspace_active
+                text
             } else {
-                theme.workspace_dot
+                text.with_alpha(0.4)
             };
             canvas.circle(x + dot / 2.0, y + dot / 2.0, dot / 2.0, color);
             x += dot + gap;
@@ -900,6 +947,7 @@ mod tests {
             output: (2560.0, 1440.0),
             apps,
             page: 0,
+            bottom_reserve: 0.0,
         }
     }
 
@@ -957,8 +1005,10 @@ mod tests {
     }
 
     /// `CNDE_SEARCH_PREVIEW=/path cargo test -p cnde-shell search_preview -- --ignored`
-    /// renders the search at 1x as raw RGBA with a "WxH" header line.
-    /// `CNDE_SEARCH_QUERY` sets the query; `CNDE_SEARCH_GRID` shows the grid.
+    /// renders the search at 1x as a PNG, over a dark grey like the
+    /// overview's dimmed wallpaper. `CNDE_SEARCH_QUERY` sets the query;
+    /// `CNDE_SEARCH_GRID` shows the grid, `CNDE_SEARCH_APPEAR` (0-1) partway
+    /// through fading in.
     #[test]
     #[ignore]
     fn search_preview() {
@@ -988,8 +1038,13 @@ mod tests {
                 output: (1920.0, 1080.0),
                 apps: all.len(),
                 page: 0,
+                bottom_reserve: 112.0,
             },
         );
+        let appear = std::env::var("CNDE_SEARCH_APPEAR")
+            .ok()
+            .and_then(|a| a.parse().ok())
+            .unwrap_or(1.0);
         let scale = 1.0;
         let (w, h) = (
             (layout.width * scale) as u32,
@@ -1004,6 +1059,7 @@ mod tests {
                 selected: 0,
                 apps: &all,
                 grid_selected: 0,
+                appear,
             };
             paint(
                 &mut canvas,
@@ -1015,8 +1071,21 @@ mod tests {
                 scale,
             );
         }
-        let mut data = format!("{w}x{h}\n").into_bytes();
-        data.extend_from_slice(&pixels);
-        std::fs::write(path, data).unwrap();
+        let mut out = cnde_ui::tiny_skia::Pixmap::new(w, h).unwrap();
+        out.fill(cnde_ui::tiny_skia::Color::from_rgba8(40, 42, 54, 255));
+        let drawn = cnde_ui::tiny_skia::Pixmap::from_vec(
+            pixels,
+            cnde_ui::tiny_skia::IntSize::from_wh(w, h).unwrap(),
+        )
+        .unwrap();
+        out.draw_pixmap(
+            0,
+            0,
+            drawn.as_ref(),
+            &Default::default(),
+            Default::default(),
+            None,
+        );
+        out.save_png(path).unwrap();
     }
 }

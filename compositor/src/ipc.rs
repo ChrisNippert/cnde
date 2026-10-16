@@ -150,7 +150,10 @@ impl State {
                 self.ipc.broadcast(&Event::ToggleAppGrid);
             }
             Request::ActivateWindow { id } => self.activate_window(id),
-            Request::AppGridShown { shown } => self.overview.app_grid = shown,
+            Request::AppGridShown { shown } => {
+                self.overview.set_app_grid(shown);
+                self.queue_redraw();
+            }
             Request::Screenshot { target } => {
                 if self.screenshot.active {
                     self.take_screenshot(target);
