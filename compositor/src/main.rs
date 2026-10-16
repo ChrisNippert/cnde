@@ -111,6 +111,11 @@ fn set_session_environment() {
         ("XDG_CURRENT_DESKTOP", "cnde"),
         ("XCURSOR_THEME", cursor::DEFAULT_THEME),
         ("XCURSOR_SIZE", "24"),
+        // No XWayland yet (Milestone 4): run Electron/Chromium apps (VS Code,
+        // Discord, ...) and Qt apps natively on Wayland, with X11 as Qt's
+        // fallback once it exists.
+        ("ELECTRON_OZONE_PLATFORM_HINT", "auto"),
+        ("QT_QPA_PLATFORM", "wayland;xcb"),
     ];
     for (key, value) in defaults {
         if std::env::var_os(key).is_none() {
