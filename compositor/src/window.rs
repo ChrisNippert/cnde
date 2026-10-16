@@ -396,6 +396,12 @@ impl State {
     /// Keep maximized/snapped/fullscreen windows filling their area after the
     /// output is resized.
     pub fn relayout_after_output_change(&mut self) {
+        // Panels and docks first: they stretch to the new size (sending
+        // their clients a configure), and maximized windows fit around
+        // their new exclusive zones.
+        for output in self.space.outputs() {
+            smithay::desktop::layer_map_for_output(output).arrange();
+        }
         let windows: Vec<Window> = self.space.elements().cloned().collect();
         for window in windows {
             let placement = Self::placement_of(&window);

@@ -218,7 +218,8 @@ impl Default for Animations {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Panel {
-    /// Run cnde-shell. Off: bring your own bar (waybar etc.) via autostart.
+    /// Show the top bar. Off: bring your own (waybar etc.) via autostart;
+    /// the overview, dock and screenshot tool keep working.
     pub enabled: bool,
     /// Show the panel on every monitor instead of only the main one.
     pub all_monitors: bool,

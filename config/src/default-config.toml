@@ -47,7 +47,7 @@
 # speed = 1.0              # 0.5 = twice as fast, 0.0 = no animations
 
 [panel]
-# enabled = true           # false: no cnde-shell; use your own bar via autostart
+# enabled = true           # false: hide the top bar (e.g. to use waybar via autostart)
 # all_monitors = false     # true: a panel on every monitor, not just the main one
 # height = 32
 # background = "#000000"   # "#rrggbb" or "#rrggbbaa" (translucent)

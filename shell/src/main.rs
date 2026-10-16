@@ -491,7 +491,8 @@ impl App {
     }
 
     /// Which monitors get a panel: the main one (configured, else the
-    /// leftmost), or every one with `panel.all_monitors`.
+    /// leftmost), every one with `panel.all_monitors`, or none with
+    /// `panel.enabled = false`.
     pub fn sync_panels(&mut self) {
         let outputs: Vec<(wl_output::WlOutput, String, i32)> = self
             .outputs
@@ -513,12 +514,19 @@ impl App {
         if self.config.dock.position != cnde_config::DockPosition::Overview {
             self.dock_output = main.clone();
         }
-        let wanted: Vec<wl_output::WlOutput> = if self.config.panel.all_monitors {
+        let wanted: Vec<wl_output::WlOutput> = if !self.config.panel.enabled {
+            // Only the bar goes: the overview, dock and screenshot tool stay.
+            Vec::new()
+        } else if self.config.panel.all_monitors {
             outputs.into_iter().map(|(o, _, _)| o).collect()
         } else {
             main.into_iter().collect()
         };
 
+        if self.panels.iter().any(|p| !wanted.contains(&p.output)) {
+            // Quick settings hangs from a panel; it can't outlive it.
+            self.quick_settings = None;
+        }
         self.panels.retain(|p| wanted.contains(&p.output));
         for output in wanted {
             if !self.panels.iter().any(|p| p.output == output) {
