@@ -21,6 +21,7 @@ mod window;
 mod workspaces;
 mod xwayland;
 
+use smithay::backend::renderer::ImportMemWl;
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
 use tracing::info;
 
@@ -71,6 +72,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.config = config;
         state.config_path = config_path;
         state.space.map_output(&output, (0, 0));
+        // Offer every shm format the renderer can import, not just the two
+        // mandatory ones (the udev backend does the same per GPU).
+        if let Backend::Winit(winit) = &mut state.backend {
+            let formats = winit.renderer().shm_formats();
+            state.shm_state.update_formats(formats);
+        }
         backend::winit::insert_event_source(&event_loop.handle(), events)?;
         state
     } else {

@@ -2,7 +2,7 @@
 //! (ARCHITECTURE.md §5.3). Status icons and quick settings come next.
 
 use chrono::Local;
-use cnde_ui::{Canvas, Fonts, Theme, Weight};
+use cnde_ui::{Canvas, Fonts, Icons, Theme, Weight};
 use smithay_client_toolkit::{
     compositor::CompositorState,
     reexports::client::{
@@ -18,7 +18,21 @@ use smithay_client_toolkit::{
 use tracing::warn;
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtWorkspaceHandleV1;
 
-use crate::{App, workspaces::Workspace};
+use crate::{
+    App, Status,
+    status::{Battery, Network, Volume},
+    workspaces::Workspace,
+};
+
+/// Everything a panel draws from.
+pub struct Draw<'a> {
+    pub fonts: &'a mut Fonts,
+    pub icons: &'a mut Icons,
+    pub theme: &'a Theme,
+    pub clock_format: &'a str,
+    pub workspaces: &'a [Workspace],
+    pub status: &'a Status,
+}
 
 pub struct Panel {
     pub output: WlOutput,
@@ -93,20 +107,21 @@ impl Panel {
             .map(|(_, _, handle)| handle.clone())
     }
 
-    pub fn draw(
-        &mut self,
-        pool: &mut SlotPool,
-        fonts: &mut Fonts,
-        theme: &Theme,
-        clock_format: &str,
-        workspaces: &[Workspace],
-    ) {
+    pub fn draw(&mut self, pool: &mut SlotPool, format: wl_shm::Format, ctx: Draw<'_>) {
+        let Draw {
+            fonts,
+            icons,
+            theme,
+            clock_format,
+            workspaces,
+            status,
+        } = ctx;
         if self.width == 0 {
             return; // not configured yet
         }
         let scale = self.scale;
         let (w, h) = (self.width as i32 * scale, self.height as i32 * scale);
-        let (buffer, pixels) = match pool.create_buffer(w, h, w * 4, wl_shm::Format::Abgr8888) {
+        let (buffer, pixels) = match pool.create_buffer(w, h, w * 4, format) {
             Ok(created) => created,
             Err(err) => {
                 warn!(?err, "can't allocate panel buffer");
@@ -147,8 +162,63 @@ impl Panel {
         let clock_y = ((height - clock.height) / 2.0).round();
         canvas.text(fonts, &mut clock, clock_x, clock_y, theme.panel_foreground);
 
+        // Status, right-aligned: network, volume, battery (+ percentage).
+        let icon = theme.status_icon_size;
+        let icon_y = ((height - icon) / 2.0).round();
+        let mut right = width - theme.padding;
+        if let Some(battery) = status.battery {
+            let mut text = fonts.layout(
+                &format!("{:.0}%", battery.percent),
+                theme.font_size,
+                Weight::Normal,
+                scale as f32,
+            );
+            right -= text.width;
+            let text_y = ((height - text.height) / 2.0).round();
+            canvas.text(
+                fonts,
+                &mut text,
+                right.round(),
+                text_y,
+                theme.panel_foreground,
+            );
+            right -= icon + theme.status_icon_text_gap;
+            canvas.icon(
+                icons,
+                &battery_icon(battery),
+                right,
+                icon_y,
+                icon,
+                theme.panel_foreground,
+            );
+            right -= theme.status_spacing;
+        }
+        if let Some(volume) = status.volume {
+            right -= icon;
+            canvas.icon(
+                icons,
+                volume_icon(volume),
+                right,
+                icon_y,
+                icon,
+                theme.panel_foreground,
+            );
+            right -= theme.status_spacing;
+        }
+        if let Some(name) = network_icon(&status.network) {
+            right -= icon;
+            canvas.icon(icons, name, right, icon_y, icon, theme.panel_foreground);
+        }
+
         // Debug aid: CNDE_SHELL_DUMP=path writes each frame's raw RGBA
         // pixels (with a "WxH\n" header) for inspecting the look offline.
+
+        // ARGB8888 is BGRA in memory; we drew RGBA.
+        if format == wl_shm::Format::Argb8888 {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+        }
 
         if let Some(path) = std::env::var_os("CNDE_SHELL_DUMP") {
             let mut data = format!("{w}x{h}\n").into_bytes();
@@ -166,6 +236,44 @@ impl Panel {
     }
 }
 
+fn volume_icon(volume: Volume) -> &'static str {
+    match (volume.muted, volume.percent) {
+        (true, _) | (_, 0) => "audio-volume-muted-symbolic",
+        (_, 1..=33) => "audio-volume-low-symbolic",
+        (_, 34..=66) => "audio-volume-medium-symbolic",
+        _ => "audio-volume-high-symbolic",
+    }
+}
+
+/// Adwaita has an icon per 10% (battery-level-40-charging-symbolic, ...).
+fn battery_icon(battery: Battery) -> String {
+    if battery.full {
+        return "battery-level-100-charged-symbolic".into();
+    }
+    let level = ((battery.percent / 10.0).floor() as u32 * 10).min(100);
+    if battery.charging {
+        format!("battery-level-{level}-charging-symbolic")
+    } else {
+        format!("battery-level-{level}-symbolic")
+    }
+}
+
+fn network_icon(network: &Network) -> Option<&'static str> {
+    Some(match network {
+        Network::Unavailable => return None,
+        Network::Disconnected => "network-wireless-offline-symbolic",
+        Network::Connecting => "network-wireless-acquiring-symbolic",
+        Network::Wired => "network-wired-symbolic",
+        Network::Wifi { strength, .. } => match strength {
+            0..=19 => "network-wireless-signal-none-symbolic",
+            20..=39 => "network-wireless-signal-weak-symbolic",
+            40..=59 => "network-wireless-signal-ok-symbolic",
+            60..=79 => "network-wireless-signal-good-symbolic",
+            _ => "network-wireless-signal-excellent-symbolic",
+        },
+    })
+}
+
 /// The clock text. An invalid format (e.g. "%Q") makes chrono's formatter
 /// fail, which would panic in `to_string`; fall back to the default.
 fn format_clock(format: &str) -> String {
@@ -181,6 +289,27 @@ fn format_clock(format: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn battery_icons_exist_in_adwaita_naming() {
+        let b = |percent, charging, full| Battery {
+            percent,
+            charging,
+            full,
+        };
+        assert_eq!(
+            battery_icon(b(87.0, false, false)),
+            "battery-level-80-symbolic"
+        );
+        assert_eq!(
+            battery_icon(b(5.0, true, false)),
+            "battery-level-0-charging-symbolic"
+        );
+        assert_eq!(
+            battery_icon(b(100.0, false, true)),
+            "battery-level-100-charged-symbolic"
+        );
+    }
 
     #[test]
     fn invalid_clock_format_falls_back() {

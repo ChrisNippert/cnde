@@ -3,6 +3,7 @@
 use tiny_skia::{FillRule, Paint, PathBuilder, PixmapMut, Rect, Transform};
 
 use crate::{
+    icons::Icons,
     text::{Fonts, TextLayout},
     theme::Color,
 };
@@ -76,6 +77,46 @@ impl<'a> Canvas<'a> {
             let i = ((py * width + px) * 4) as usize;
             blend_premultiplied(&mut data[i..i + 4], rgb, glyph_alpha);
         });
+    }
+}
+
+impl Canvas<'_> {
+    /// A symbolic icon tinted `color`, `size` logical px square, top-left at
+    /// (`x`, `y`). Returns false if the theme doesn't have it.
+    pub fn icon(
+        &mut self,
+        icons: &mut Icons,
+        name: &str,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: Color,
+    ) -> bool {
+        let s = self.scale;
+        let px = (size * s).round().max(1.0) as u32;
+        let Some(mask) = icons.get(name, px) else {
+            return false;
+        };
+        let (ox, oy) = ((x * s).round() as i32, (y * s).round() as i32);
+        let (width, height) = (self.pixmap.width() as i32, self.pixmap.height() as i32);
+        let rgb = [
+            (color.r * 255.0).round() as u8,
+            (color.g * 255.0).round() as u8,
+            (color.b * 255.0).round() as u8,
+        ];
+        let data = self.pixmap.data_mut();
+        for my in 0..mask.size as i32 {
+            for mx in 0..mask.size as i32 {
+                let coverage = mask.alpha[(my * mask.size as i32 + mx) as usize] as f32 * color.a;
+                let (px, py) = (ox + mx, oy + my);
+                if coverage <= 0.0 || px < 0 || py < 0 || px >= width || py >= height {
+                    continue;
+                }
+                let i = ((py * width + px) * 4) as usize;
+                blend_premultiplied(&mut data[i..i + 4], rgb, coverage.round() as u8);
+            }
+        }
+        true
     }
 }
 

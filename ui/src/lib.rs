@@ -6,10 +6,12 @@
 //! cosmic-text, and every visual value a theme token. Motion is the
 //! compositor's job, so clients here mostly draw still frames.
 
+pub mod icons;
 pub mod paint;
 pub mod text;
 pub mod theme;
 
+pub use icons::Icons;
 pub use paint::Canvas;
 pub use text::{Fonts, TextLayout, Weight};
 pub use theme::{Color, Theme};

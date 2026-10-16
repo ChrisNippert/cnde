@@ -14,3 +14,5 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # inotify for live config reload (same major version smithay uses).
 rustix = { version = "1", features = ["fs"] }
+# System services (UPower, NetworkManager, iwd).
+zbus = "5"

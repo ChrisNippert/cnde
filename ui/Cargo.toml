@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 tiny-skia = "0.12"
+# Symbolic icons from the Adwaita theme; no text/font support needed.
+resvg = { version = "0.48", default-features = false }
 # No fontconfig: fonts are found by scanning the standard font directories,
 # which keeps libfontconfig (and its cache) out of the process.
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }

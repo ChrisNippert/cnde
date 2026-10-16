@@ -45,6 +45,11 @@ pub struct Theme {
     pub workspace_active_width: f32,
     pub workspace_spacing: f32,
 
+    // Status icons (right side of the panel)
+    pub status_icon_size: f32,
+    pub status_spacing: f32,
+    pub status_icon_text_gap: f32,
+
     // Text
     pub font_size: f32,
     pub font_families: &'static [&'static str],
@@ -66,6 +71,10 @@ impl Theme {
             workspace_dot_size: 7.0,
             workspace_active_width: 28.0,
             workspace_spacing: 6.0,
+
+            status_icon_size: 16.0,
+            status_spacing: 12.0,
+            status_icon_text_gap: 4.0,
 
             font_size: 14.0,
             // First one installed wins. Adwaita Sans is GNOME's UI font.

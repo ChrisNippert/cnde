@@ -5,13 +5,14 @@
 
 mod config;
 mod panel;
+mod status;
 mod workspaces;
 
 use std::time::Duration;
 
 use chrono::{Local, Timelike};
 use cnde_config::Config;
-use cnde_ui::{Fonts, Theme};
+use cnde_ui::{Fonts, Icons, Theme};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_dispatch2, delegate_registry,
@@ -19,13 +20,14 @@ use smithay_client_toolkit::{
     reexports::{
         calloop::{
             EventLoop,
+            channel::{self, Event},
             timer::{TimeoutAction, Timer},
         },
         calloop_wayland_source::WaylandSource,
         client::{
             Connection, QueueHandle,
             globals::registry_queue_init,
-            protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
+            protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
         },
     },
     registry::{ProvidesRegistryState, RegistryState},
@@ -43,7 +45,25 @@ use smithay_client_toolkit::{
 use tracing::{info, warn};
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::ExtWorkspaceManagerV1;
 
-use crate::{panel::Panel, workspaces::Workspaces};
+use crate::{panel::Panel, status::Update, workspaces::Workspaces};
+
+/// The latest of everything the status threads report.
+#[derive(Debug, Default)]
+pub struct Status {
+    pub battery: Option<status::Battery>,
+    pub network: status::Network,
+    pub volume: Option<status::Volume>,
+}
+
+impl Status {
+    fn apply(&mut self, update: Update) {
+        match update {
+            Update::Battery(battery) => self.battery = battery,
+            Update::Network(network) => self.network = network,
+            Update::Volume(volume) => self.volume = volume,
+        }
+    }
+}
 
 pub struct App {
     registry: RegistryState,
@@ -54,10 +74,15 @@ pub struct App {
     shm: Shm,
     pool: SlotPool,
     qh: QueueHandle<App>,
+    /// ABGR8888 if the compositor offers it (we draw RGBA, zero-copy), else
+    /// the always-available ARGB8888 with a channel swap.
+    shm_format: wl_shm::Format,
 
     config: Config,
     theme: Theme,
     fonts: Fonts,
+    icons: Icons,
+    status: Status,
     panels: Vec<Panel>,
     pub workspaces: Workspaces,
     pointer: Option<wl_pointer::WlPointer>,
@@ -69,10 +94,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let conn = Connection::connect_to_env()?;
-    let (globals, queue) = registry_queue_init(&conn)?;
+    let (globals, mut queue) = registry_queue_init(&conn)?;
     let qh = queue.handle();
     let mut event_loop: EventLoop<App> = EventLoop::try_new()?;
-    WaylandSource::new(conn, queue).insert(event_loop.handle())?;
 
     let config = config::load();
     let theme = config::theme_from(&config);
@@ -87,11 +111,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         compositor: CompositorState::bind(&globals, &qh)?,
         layer_shell: LayerShell::bind(&globals, &qh)?,
         pool: SlotPool::new(4 * 1024 * 1024, &shm)?,
+        shm_format: wl_shm::Format::Argb8888,
         shm,
         qh: qh.clone(),
         config,
         theme,
         fonts,
+        icons: Icons::new(),
+        status: Status::default(),
         panels: Vec::new(),
         workspaces: Workspaces::default(),
         pointer: None,
@@ -101,7 +128,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|err| warn!(?err, "no ext-workspace; the indicator stays empty"))
         .ok();
 
+    // One roundtrip so wl_shm has listed its formats before we draw.
+    queue.roundtrip(&mut app)?;
+    app.choose_shm_format();
+    WaylandSource::new(conn, queue).insert(event_loop.handle())?;
+
     config::watch(&event_loop.handle());
+
+    // Battery, network and volume, each from its own background thread.
+    let (status_tx, status_rx) = channel::channel();
+    event_loop
+        .handle()
+        .insert_source(status_rx, |event, _, app| {
+            if let Event::Msg(update) = event {
+                app.status.apply(update);
+                app.redraw_all();
+            }
+        })?;
+    status::start(status_tx);
 
     // The clock: wake exactly when the minute changes, not every second.
     event_loop
@@ -178,10 +222,15 @@ impl App {
         };
         panel.draw(
             &mut self.pool,
-            &mut self.fonts,
-            &self.theme,
-            &self.config.panel.clock_format,
-            &self.workspaces.list,
+            self.shm_format,
+            panel::Draw {
+                fonts: &mut self.fonts,
+                icons: &mut self.icons,
+                theme: &self.theme,
+                clock_format: &self.config.panel.clock_format,
+                workspaces: &self.workspaces.list,
+                status: &self.status,
+            },
         );
     }
 }
@@ -330,6 +379,17 @@ impl PointerHandler for App {
 impl ShmHandler for App {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
+    }
+}
+
+impl App {
+    /// Pick the buffer format once the compositor has listed its formats.
+    fn choose_shm_format(&mut self) {
+        self.shm_format = if self.shm.formats().contains(&wl_shm::Format::Abgr8888) {
+            wl_shm::Format::Abgr8888
+        } else {
+            wl_shm::Format::Argb8888
+        };
     }
 }
 
