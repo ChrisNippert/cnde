@@ -11,7 +11,7 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
         wayland_server::protocol::wl_surface::WlSurface,
     },
-    utils::{Logical, Rectangle, SERIAL_COUNTER, Scale, Size},
+    utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Scale, Size},
 };
 use tracing::debug;
 
@@ -40,6 +40,9 @@ pub struct WindowState {
     pub open_anim: Option<Animation>,
     pub resize_anim: Option<ResizeAnim>,
     pub pending_size: Option<PendingSize>,
+    /// Position relative to its monitor's origin; kept for hidden windows
+    /// and used while the workspace strip moves (see workspaces.rs).
+    pub local: Point<i32, Logical>,
     /// What we last drew, for close animations of killed clients.
     pub last_frame: Option<LastFrame>,
     /// Geometry size at the last commit, to notice client-driven resizes.
@@ -180,6 +183,7 @@ impl State {
             s.open_anim = Some(Animation::new(0.0, 1.0, presets::WINDOW_OPEN));
         });
         self.space.map_element(window.clone(), location, true);
+        self.add_window_to_workspace(&window);
         self.focus_window(Some(&window));
         self.queue_redraw();
         self.queue_pointer_refresh();
@@ -188,6 +192,7 @@ impl State {
     /// Called when a mapped toplevel attaches a null buffer or is destroyed.
     pub fn unmap_window(&mut self, window: &Window) {
         self.space.unmap_elem(window);
+        self.remove_window_from_workspaces(window);
         let topmost = self.space.elements().last().cloned();
         self.focus_window(topmost.as_ref());
         self.queue_redraw();
@@ -214,6 +219,7 @@ impl State {
         };
         if let Some(window) = window {
             self.space.raise_element(window, true);
+            self.workspaces.raise(window);
         }
         for other in self.space.elements() {
             if Some(other) != window {

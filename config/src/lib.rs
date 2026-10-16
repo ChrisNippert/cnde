@@ -111,6 +111,10 @@ pub struct OutputConfig {
     pub position: Option<Position>,
     /// 1.0 = no scaling; 2.0 for most HiDPI laptops.
     pub scale: Option<f64>,
+    /// The monitor the workspace strip is anchored to (its workspace is
+    /// "the current one"). Default: the leftmost monitor.
+    #[serde(default)]
+    pub main: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

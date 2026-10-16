@@ -406,6 +406,7 @@ impl State {
             }
         }
         self.fixup_window_positions();
+        self.workspaces_after_output_change();
     }
 
     fn udev_device_removed(&mut self, device_id: u64) {
@@ -578,6 +579,7 @@ impl State {
         }
         self.relayout_after_output_change();
         self.fixup_window_positions();
+        self.workspaces_after_output_change();
         self.queue_pointer_refresh();
     }
 
@@ -665,6 +667,14 @@ impl State {
         let now = std::time::Instant::now();
         let elapsed = self.start_time.elapsed();
         let pointer = self.seat.get_pointer().map(|p| p.current_location());
+        let moving = match &self.backend {
+            Backend::Udev(udev) => udev
+                .gpu
+                .as_ref()
+                .and_then(|gpu| gpu.surfaces.get(&crtc))
+                .and_then(|surface| self.moving_layout(&surface.output, now)),
+            Backend::Winit(_) => None,
+        };
         let Backend::Udev(udev) = &mut self.backend else {
             return;
         };
@@ -697,6 +707,7 @@ impl State {
             &self.space,
             &self.closing,
             self.snap_preview.as_mut(),
+            moving,
             &output,
             now,
         ));
@@ -732,7 +743,13 @@ impl State {
         }
 
         self.closing.retain(|c| !c.is_done(now));
-        if render::animations_running(&self.space, &self.closing, self.snap_preview.as_ref(), now) {
+        if render::animations_running(
+            &self.space,
+            &self.closing,
+            self.snap_preview.as_ref(),
+            self.workspaces.is_moving(),
+            now,
+        ) {
             self.queue_redraw();
         }
     }

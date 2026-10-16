@@ -26,6 +26,12 @@ pub enum Action {
     SwitchVt(i32),
     /// Tapping the mod key alone.
     Launcher,
+    /// Slide the workspace strip: +1 = next (content moves left).
+    /// `carry` brings the focused window along.
+    Workspace {
+        step: isize,
+        carry: bool,
+    },
 }
 
 /// Whether `sym` is the mod key itself (left or right).
@@ -54,6 +60,26 @@ pub fn action_for(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> Option
     }
     if mods.alt && !mods.ctrl && !mods.logo && sym == keysyms::KEY_F4 {
         return Some(Action::CloseWindow);
+    }
+
+    // Workspaces: Super+Alt+Left/Right (+Shift carries the window). Nested,
+    // the mod is Alt, so Alt+Ctrl stands in for Super+Alt.
+    let workspace_mods = match mod_key {
+        ModKey::Super => mods.logo && mods.alt && !mods.ctrl,
+        ModKey::Alt => mods.alt && mods.ctrl && !mods.logo,
+    };
+    if workspace_mods {
+        // Direction = content motion (ARCHITECTURE.md §5.2): Left reveals
+        // the next workspace.
+        let step = match sym {
+            keysyms::KEY_Left => 1,
+            keysyms::KEY_Right => -1,
+            _ => return None,
+        };
+        return Some(Action::Workspace {
+            step,
+            carry: mods.shift,
+        });
     }
 
     // Super+Alt+… is reserved for workspaces, so the window bindings require
@@ -109,10 +135,26 @@ mod tests {
     }
 
     #[test]
-    fn super_alt_is_reserved_for_workspaces() {
+    fn super_alt_arrows_slide_workspaces() {
         let m = mods(true, true, false, false);
         assert_eq!(
             action_for(ModKey::Super, &m, Keysym::from(keysyms::KEY_Left)),
+            Some(Action::Workspace {
+                step: 1,
+                carry: false
+            })
+        );
+        let carry = mods(true, true, false, true);
+        assert_eq!(
+            action_for(ModKey::Super, &carry, Keysym::from(keysyms::KEY_Right)),
+            Some(Action::Workspace {
+                step: -1,
+                carry: true
+            })
+        );
+        // Other keys with Super+Alt don't fall through to window bindings.
+        assert_eq!(
+            action_for(ModKey::Super, &m, Keysym::from(keysyms::KEY_q)),
             None
         );
     }

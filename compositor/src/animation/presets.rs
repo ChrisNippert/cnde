@@ -32,6 +32,17 @@ pub const WINDOW_CLOSE: Params = Params {
 /// Closing windows shrink to this scale while fading out.
 pub const WINDOW_CLOSE_END_SCALE: f64 = 0.9;
 
+/// Sliding the workspace strip by one (keys, or settling after a swipe).
+pub const WORKSPACE_SWITCH: Params = Params {
+    duration: Duration::from_millis(300),
+    curve: Curve::EaseOutCubic,
+};
+/// Finger travel (touchpad units) that moves the strip one workspace.
+pub const SWIPE_DISTANCE: f64 = 400.0;
+/// How far ahead release velocity is projected when picking where a swipe
+/// settles: a quick flick goes to the next workspace even if short.
+pub const SWIPE_FLICK_SECONDS: f64 = 0.15;
+
 /// Drag-to-edge snap preview growing out of the dragged window.
 pub const SNAP_PREVIEW: Params = Params {
     duration: Duration::from_millis(150),

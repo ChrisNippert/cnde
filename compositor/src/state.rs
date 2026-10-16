@@ -64,6 +64,9 @@ pub struct State {
     pub pointer_focus_dirty: bool,
 
     pub space: Space<Window>,
+    pub workspaces: crate::workspaces::Workspaces,
+    /// A three-finger swipe is driving the workspace strip.
+    pub swipe_active: bool,
     /// Toplevels that exist but haven't attached a buffer yet. They are mapped
     /// (placed + animated in) on their first buffer commit.
     pub unmapped: Vec<Window>,
@@ -145,6 +148,8 @@ impl State {
             pointer_focus_dirty: false,
 
             space: Space::default(),
+            workspaces: crate::workspaces::Workspaces::new(),
+            swipe_active: false,
             unmapped: Vec::new(),
             closing: Vec::new(),
             snap_preview: None,
@@ -204,8 +209,11 @@ impl State {
     pub fn on_loop_iteration(&mut self) {
         self.space.refresh();
         self.popups.cleanup();
+        self.finish_workspace_motion(Instant::now());
         if self.pointer_focus_dirty {
             self.pointer_focus_dirty = false;
+            // Windows dragged to another monitor join its workspace.
+            self.sync_workspace_membership();
             self.refresh_pointer_focus();
         }
         if self.redraw_queued {

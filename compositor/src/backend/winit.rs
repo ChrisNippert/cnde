@@ -157,6 +157,10 @@ impl State {
     fn render_winit(&mut self) {
         let now = Instant::now();
         self.space.refresh();
+        let moving = match &self.backend {
+            Backend::Winit(winit) => self.moving_layout(&winit.output, now),
+            Backend::Udev(_) => None,
+        };
 
         // Why age 0 (full redraw): smithay 0.7's winit `buffer_age()` needs the EGL
         // surface current, which it often isn't between frames, so it fails with
@@ -180,6 +184,7 @@ impl State {
                 &self.space,
                 &self.closing,
                 self.snap_preview.as_mut(),
+                moving,
                 &backend.output,
                 now,
             );
@@ -211,7 +216,13 @@ impl State {
         self.closing.retain(|c| !c.is_done(now));
 
         // Keep frames coming while anything is animating; otherwise go idle.
-        if render::animations_running(&self.space, &self.closing, self.snap_preview.as_ref(), now) {
+        if render::animations_running(
+            &self.space,
+            &self.closing,
+            self.snap_preview.as_ref(),
+            self.workspaces.is_moving(),
+            now,
+        ) {
             self.queue_redraw();
         }
     }

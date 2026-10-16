@@ -111,6 +111,9 @@ pub fn output_elements(
     space: &Space<Window>,
     closing: &[ClosingWindow],
     snap_preview: Option<&mut SnapPreview>,
+    // While the workspace strip moves: windows to draw and where (see
+    // `State::moving_layout`). Otherwise the space's windows as they are.
+    moving: Option<Vec<(Window, Rectangle<f64, Logical>)>>,
     output: &Output,
     now: Instant,
 ) -> Vec<OutputElement> {
@@ -122,16 +125,22 @@ pub fn output_elements(
 
     // Build bottom to top, so closing windows can slot back into the stacking
     // position they had; then flip, since the renderer wants top first.
-    let windows: Vec<&Window> = space.elements_for_output(output).collect();
+    let windows: Vec<(Window, Rectangle<f64, Logical>)> = match moving {
+        Some(layout) => layout,
+        None => space
+            .elements_for_output(output)
+            .filter_map(|w| Some((w.clone(), space.element_geometry(w)?.to_f64())))
+            .collect(),
+    };
     let mut layers: Vec<Vec<OutputElement>> = Vec::with_capacity(windows.len() + closing.len());
     let mut top_window_layer = None;
-    for (index, win) in windows.iter().enumerate() {
+    for (index, (win, live)) in windows.iter().enumerate() {
         for closed in closing.iter().filter(|c| c.below == index) {
             layers.push(closing_elements(closed, output_loc, scale, now));
         }
         top_window_layer = Some(layers.len());
         layers.push(window_elements(
-            renderer, space, win, output_loc, scale, now,
+            renderer, win, *live, output_loc, scale, now,
         ));
     }
     for closed in closing.iter().filter(|c| c.below >= windows.len()) {
@@ -152,7 +161,7 @@ pub fn output_elements(
     // Layer-shell stacking (see layers.rs); a fullscreen window covers the panel.
     let fullscreen = windows
         .last()
-        .is_some_and(|w| with_state(w, |s| s.placement == Placement::Fullscreen));
+        .is_some_and(|(w, _)| with_state(w, |s| s.placement == Placement::Fullscreen));
     let mut elements = layer_elements(renderer, output, Layer::Overlay, scale);
     if !fullscreen {
         elements.extend(layer_elements(renderer, output, Layer::Top, scale));
@@ -191,17 +200,15 @@ fn layer_elements(
 /// resize is running) above the window's own surfaces.
 fn window_elements(
     renderer: &mut GlesRenderer,
-    space: &Space<Window>,
     win: &Window,
+    // Where the window geometry is laid out (space coordinates).
+    live: Rectangle<f64, Logical>,
     output_loc: smithay::utils::Point<f64, Logical>,
     scale: Scale<f64>,
     now: Instant,
 ) -> Vec<OutputElement> {
-    let Some(live) = space.element_geometry(win) else {
-        return Vec::new();
-    };
     with_state(win, |state| {
-        let frame = effects::window_frame(state, live.to_f64(), now);
+        let frame = effects::window_frame(state, live, now);
         if !win.geometry().is_empty() {
             state.last_frame = Some(LastFrame::record(renderer, win, scale, frame.rect));
         }
@@ -261,9 +268,11 @@ pub fn animations_running(
     space: &Space<Window>,
     closing: &[ClosingWindow],
     snap_preview: Option<&SnapPreview>,
+    workspaces_moving: bool,
     now: Instant,
 ) -> bool {
-    !closing.is_empty()
+    workspaces_moving
+        || !closing.is_empty()
         || snap_preview.is_some_and(|p| p.is_animating(now))
         || space
             .elements()

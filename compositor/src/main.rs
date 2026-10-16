@@ -17,6 +17,7 @@ mod snapshot;
 mod spawn;
 mod state;
 mod window;
+mod workspaces;
 mod xwayland;
 
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};

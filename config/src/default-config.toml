@@ -31,6 +31,7 @@
 # name = "DP-2"
 # position = { x = 0, y = 0 }
 # scale = 1.0
+# main = true              # anchor for workspaces; default is the leftmost
 
 [animations]
 # speed = 1.0              # 0.5 = twice as fast, 0.0 = no animations

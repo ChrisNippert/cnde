@@ -2,8 +2,9 @@
 
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-        KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, GestureBeginEvent,
+        GestureEndEvent, GestureSwipeUpdateEvent, InputBackend, InputEvent, KeyState,
+        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     desktop::Window,
     input::{
@@ -69,6 +70,23 @@ impl State {
                 self.on_pointer_button(event.button_code(), event.state(), event.time_msec());
             }
             InputEvent::PointerAxis { event, .. } => self.on_pointer_axis::<I>(event),
+            // Three-finger horizontal swipes drive the workspace strip.
+            // TODO: forward other gestures to clients (pointer-gestures).
+            InputEvent::GestureSwipeBegin { event, .. } => {
+                if event.fingers() == 3 {
+                    self.swipe_active = true;
+                    self.swipe_begin();
+                }
+            }
+            InputEvent::GestureSwipeUpdate { event, .. } => {
+                if self.swipe_active {
+                    self.swipe_update(event.delta_x());
+                }
+            }
+            InputEvent::GestureSwipeEnd { event, .. } if self.swipe_active => {
+                self.swipe_active = false;
+                self.swipe_end(event.cancelled());
+            }
             _ => {}
         }
     }
@@ -144,6 +162,7 @@ impl State {
             Action::SnapRight => self.set_focused_placement(Placement::SnappedRight),
             Action::ToggleFullscreen => self.toggle_focused_fullscreen(),
             Action::SwitchVt(vt) => self.switch_vt(vt),
+            Action::Workspace { step, carry } => self.step_workspace(step, carry),
             Action::Launcher => {
                 let command = self.config.launcher.command.clone();
                 if !command.trim().is_empty() {
