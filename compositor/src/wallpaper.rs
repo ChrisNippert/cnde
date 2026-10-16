@@ -252,6 +252,13 @@ impl Wallpapers {
         Some((element, crop))
     }
 
+    /// Whether `output` shows the wallpaper the config asks for.
+    pub fn ready(&self, output: &Output) -> bool {
+        self.entries.get(&output.name()).is_some_and(|e| {
+            e.generation == self.generation && e.upload.is_none() && e.texture.is_some()
+        })
+    }
+
     /// A monitor is gone: free its texture.
     pub fn forget(&mut self, output: &str) {
         self.entries.remove(output);

@@ -269,8 +269,7 @@ impl Theme {
 }
 
 impl Theme {
-    /// libadwaita's light palette. The top bar keeps its own colours (it's
-    /// black in both styles, as in GNOME); everything else follows.
+    /// libadwaita's light palette, the top bar included.
     pub fn light() -> Self {
         let ink = |a: f32| Color::rgba(0x00, 0x00, 0x06, a);
         let paper = Color::rgba(0xfa, 0xfa, 0xfb, 0.96);
@@ -285,6 +284,10 @@ impl Theme {
             qs_dim: ink(0.55),
             search_background: paper,
             search_selected: ink(0.08),
+            panel_background: Color::rgb(0xfa, 0xfa, 0xfb),
+            panel_foreground: Color::rgb(0x24, 0x24, 0x28),
+            panel_button_hover: ink(0.08),
+            panel_button_active: ink(0.14),
             popup_text: Color::rgb(0x24, 0x24, 0x28),
 
             window_background: Color::rgb(0xfa, 0xfa, 0xfb),

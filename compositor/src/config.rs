@@ -116,6 +116,13 @@ impl State {
     /// startup, when everything is applied.
     pub fn apply_config(&mut self, old: Option<&Config>) {
         animation::set_speed(self.config.animations.speed);
+        // A new style or wallpaper fades in over the old one.
+        if old.is_some_and(|old| {
+            old.appearance != self.config.appearance || old.wallpaper != self.config.wallpaper
+        }) {
+            let outputs: Vec<_> = self.space.outputs().cloned().collect();
+            self.crossfade.start(outputs.iter());
+        }
         self.wallpapers.update_config(&self.config);
         self.queue_redraw();
 
@@ -144,7 +151,9 @@ impl State {
         if old.is_none_or(|old| old.outputs != self.config.outputs) {
             self.apply_output_layout();
         }
-        if old.is_none_or(|old| old.appearance != self.config.appearance) {
+        // Nested in another desktop, gsettings belongs to that desktop.
+        let nested = matches!(self.backend, crate::backend::Backend::Winit(_));
+        if !nested && old.is_none_or(|old| old.appearance != self.config.appearance) {
             publish_color_scheme(self.config.appearance.color_scheme);
         }
     }

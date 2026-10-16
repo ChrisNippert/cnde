@@ -225,7 +225,7 @@ pub struct Panel {
     pub all_monitors: bool,
     /// Logical pixels.
     pub height: u32,
-    /// "#rrggbb" or "#rrggbbaa".
+    /// "#rrggbb" or "#rrggbbaa"; empty follows the light/dark style.
     pub background: String,
     pub foreground: String,
     pub font_size: f32,
@@ -243,8 +243,8 @@ impl Default for Panel {
             enabled: true,
             all_monitors: false,
             height: 32,
-            background: "#000000".into(),
-            foreground: "#ffffff".into(),
+            background: String::new(),
+            foreground: String::new(),
             font_size: 14.0,
             clock_format: "%a %b %-d  %H:%M".into(),
             clock_position: ClockPosition::Center,
@@ -440,7 +440,7 @@ impl Config {
             ("panel.background", &panel.background),
             ("panel.foreground", &panel.foreground),
         ] {
-            if parse_color(color).is_none() {
+            if !color.is_empty() && parse_color(color).is_none() {
                 return Err(Error::Invalid(format!(
                     "{name} must be \"#rrggbb\" or \"#rrggbbaa\", got \"{color}\""
                 )));

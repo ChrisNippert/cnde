@@ -323,7 +323,7 @@ impl State {
 }
 
 /// Draw `elements` into a new texture of `size`.
-fn render_to_texture<E: RenderElement<GlesRenderer>>(
+pub(crate) fn render_to_texture<E: RenderElement<GlesRenderer>>(
     renderer: &mut GlesRenderer,
     elements: &[E],
     size: Size<i32, Physical>,

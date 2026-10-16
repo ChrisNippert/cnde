@@ -50,8 +50,8 @@
 # enabled = true           # false: hide the top bar (e.g. to use waybar via autostart)
 # all_monitors = false     # true: a panel on every monitor, not just the main one
 # height = 32
-# background = "#000000"   # "#rrggbb" or "#rrggbbaa" (translucent)
-# foreground = "#ffffff"
+# background = ""          # "#rrggbb" or "#rrggbbaa" (translucent); empty follows the style
+# foreground = ""
 # font_size = 14
 # clock_format = "%a %b %-d  %H:%M"   # e.g. "%I:%M %p" for 12-hour
 # clock_position = "center"   # or "left", "right"

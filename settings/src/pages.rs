@@ -798,16 +798,16 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                 Row::new(
                     "panel.background",
                     "Background colour",
-                    Control::text("#000000"),
+                    Control::text("From the style"),
                     s(&p.background),
                     s(&dp.background),
                 )
-                .sub("#rrggbb, or #rrggbbaa to see through it")
+                .sub("#rrggbb, or #rrggbbaa to see through it; empty follows the style")
                 .advanced(),
                 Row::new(
                     "panel.foreground",
                     "Text colour",
-                    Control::text("#ffffff"),
+                    Control::text("From the style"),
                     s(&p.foreground),
                     s(&dp.foreground),
                 )

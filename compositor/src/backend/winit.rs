@@ -233,6 +233,14 @@ impl State {
                     self.screenshot.freeze(renderer, &backend.output, &elements);
                 }
             }
+            // A style or wallpaper change: the old look, fading out on top.
+            if self.crossfade.wants_capture(&backend.output) {
+                self.crossfade.capture(renderer, &backend.output, &elements);
+            }
+            let ready = self.wallpapers.ready(&backend.output);
+            if let Some(fade) = self.crossfade.element(&backend.output, ready, now) {
+                elements.insert(0, render::OutputElement::Wallpaper(fade));
+            }
             let damage = match backend.damage_tracker.render_output(
                 renderer,
                 &mut framebuffer,
@@ -277,7 +285,8 @@ impl State {
             self.snap_preview.as_ref(),
             self.workspaces.is_moving()
                 || self.overview.is_animating(now)
-                || self.popup_anims.is_animating(now),
+                || self.popup_anims.is_animating(now)
+                || self.crossfade.is_animating(),
             now,
         ) {
             self.queue_redraw();

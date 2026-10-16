@@ -531,6 +531,7 @@ impl State {
         }
         self.space.unmap_output(&surface.output);
         self.wallpapers.forget(&surface.output.name());
+        self.crossfade.forget(&surface.output.name());
         self.capture.output_removed(&surface.output);
         self.display_handle.remove_global::<State>(surface.global);
     }
@@ -761,6 +762,17 @@ impl State {
             }
         }
 
+        // A style or wallpaper change: the old look, fading out on top
+        // (under the pointer).
+        if self.crossfade.wants_capture(&output) {
+            self.crossfade
+                .capture(&mut gpu.renderer, &output, &elements[cursor_count..]);
+        }
+        let ready = self.wallpapers.ready(&output);
+        if let Some(fade) = self.crossfade.element(&output, ready, now) {
+            elements.insert(cursor_count, render::OutputElement::Wallpaper(fade));
+        }
+
         let rendered = match surface.drm_output.render_frame(
             &mut gpu.renderer,
             &elements,
@@ -807,7 +819,8 @@ impl State {
             self.snap_preview.as_ref(),
             self.workspaces.is_moving()
                 || self.overview.is_animating(now)
-                || self.popup_anims.is_animating(now),
+                || self.popup_anims.is_animating(now)
+                || self.crossfade.is_animating(),
             now,
         ) {
             self.queue_redraw();

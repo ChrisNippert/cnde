@@ -5,6 +5,7 @@ mod animation;
 mod backend;
 mod capture;
 mod config;
+mod crossfade;
 mod cursor;
 mod effects;
 mod ext_workspace;
