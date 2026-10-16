@@ -86,3 +86,6 @@
 # The shell: top bar, dock, overview search, quick settings. Kept running
 # and restarted if it crashes. "" runs none (e.g. with waybar above).
 # shell = "cnde-shell"
+# Start PipeWire (sound) when nothing else does, e.g. on Alpine without
+# systemd. Skipped if PipeWire is already running.
+# audio = true

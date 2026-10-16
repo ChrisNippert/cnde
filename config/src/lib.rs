@@ -449,6 +449,8 @@ pub struct Autostart {
     /// whole session and restarted if it crashes. Another program can take
     /// its place, or "" for none.
     pub shell: String,
+    /// Start PipeWire if the system doesn't (no systemd, e.g. Alpine).
+    pub audio: bool,
 }
 
 impl Default for Autostart {
@@ -456,6 +458,7 @@ impl Default for Autostart {
         Self {
             commands: Vec::new(),
             shell: "cnde-shell".into(),
+            audio: true,
         }
     }
 }

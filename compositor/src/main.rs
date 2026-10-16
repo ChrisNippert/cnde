@@ -2,6 +2,7 @@
 //! See ARCHITECTURE.md §4.
 
 mod animation;
+mod audio;
 mod backend;
 mod capture;
 mod config;
@@ -116,6 +117,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     xwayland::setup(&mut state, &event_loop.handle());
     if !nested {
         portals::setup(&state.client_env());
+        if state.config.autostart.audio {
+            audio::ensure_running();
+        }
     }
     if state.config.panel.enabled {
         spawn::supervise_shell(&state.client_env(), &state.config.autostart.shell);
