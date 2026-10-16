@@ -12,3 +12,5 @@ tracing-subscriber.workspace = true
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# inotify for live config reload (same major version smithay uses).
+rustix = { version = "1", features = ["fs"] }

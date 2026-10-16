@@ -150,6 +150,17 @@ pub struct Panel {
     pub enabled: bool,
     /// Show the panel on every monitor instead of only the main one.
     pub all_monitors: bool,
+    /// Logical pixels.
+    pub height: u32,
+    /// "#rrggbb" or "#rrggbbaa".
+    pub background: String,
+    pub foreground: String,
+    pub font_size: f32,
+    /// strftime-style, e.g. "%H:%M" or "%a %b %-d  %I:%M %p".
+    pub clock_format: String,
+    pub workspace_dot_size: f32,
+    /// Width of the pill marking active workspaces.
+    pub workspace_active_width: f32,
 }
 
 impl Default for Panel {
@@ -157,7 +168,25 @@ impl Default for Panel {
         Self {
             enabled: true,
             all_monitors: false,
+            height: 32,
+            background: "#000000".into(),
+            foreground: "#ffffff".into(),
+            font_size: 14.0,
+            clock_format: "%a %b %-d  %H:%M".into(),
+            workspace_dot_size: 7.0,
+            workspace_active_width: 28.0,
         }
+    }
+}
+
+/// Parse "#rrggbb" or "#rrggbbaa" into (r, g, b, a).
+pub fn parse_color(text: &str) -> Option<(u8, u8, u8, u8)> {
+    let hex = text.strip_prefix('#')?;
+    let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+    match hex.len() {
+        6 => Some((byte(0)?, byte(2)?, byte(4)?, 255)),
+        8 => Some((byte(0)?, byte(2)?, byte(4)?, byte(6)?)),
+        _ => None,
     }
 }
 
@@ -258,6 +287,36 @@ impl Config {
                 "keyboard repeat values can't be negative".into(),
             ));
         }
+        let panel = &self.panel;
+        for (name, color) in [
+            ("panel.background", &panel.background),
+            ("panel.foreground", &panel.foreground),
+        ] {
+            if parse_color(color).is_none() {
+                return Err(Error::Invalid(format!(
+                    "{name} must be \"#rrggbb\" or \"#rrggbbaa\", got \"{color}\""
+                )));
+            }
+        }
+        if !(16..=96).contains(&panel.height) {
+            return Err(Error::Invalid(format!(
+                "panel.height must be 16 to 96, got {}",
+                panel.height
+            )));
+        }
+        in_range("panel.font_size", panel.font_size as f64, 6.0, 48.0)?;
+        in_range(
+            "panel.workspace_dot_size",
+            panel.workspace_dot_size as f64,
+            2.0,
+            32.0,
+        )?;
+        in_range(
+            "panel.workspace_active_width",
+            panel.workspace_active_width as f64,
+            2.0,
+            96.0,
+        )?;
         for output in &self.outputs {
             if let Some(scale) = output.scale {
                 in_range(
@@ -299,6 +358,14 @@ mod tests {
     #[test]
     fn out_of_range_is_an_error() {
         assert!(Config::parse("[input.mouse]\nspeed = 3.0\n").is_err());
+    }
+
+    #[test]
+    fn colors_parse() {
+        assert_eq!(parse_color("#ff8000"), Some((255, 128, 0, 255)));
+        assert_eq!(parse_color("#00000080"), Some((0, 0, 0, 128)));
+        assert_eq!(parse_color("ff8000"), None);
+        assert!(Config::parse("[panel]\nbackground = \"black\"\n").is_err());
     }
 
     #[test]

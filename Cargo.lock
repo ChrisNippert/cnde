@@ -301,6 +301,7 @@ dependencies = [
  "chrono",
  "cnde-config",
  "cnde-ui",
+ "rustix 1.1.5",
  "smithay-client-toolkit 0.21.1",
  "tracing",
  "tracing-subscriber",

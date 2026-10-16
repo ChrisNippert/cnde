@@ -64,6 +64,16 @@ impl Panel {
         }
     }
 
+    /// A new theme may change the bar's height (and the space it reserves).
+    pub fn apply_theme(&mut self, theme: &Theme) {
+        if self.height != theme.panel_height {
+            self.height = theme.panel_height;
+            self.layer.set_size(0, theme.panel_height);
+            self.layer.set_exclusive_zone(theme.panel_height as i32);
+            self.layer.commit();
+        }
+    }
+
     pub fn configure(&mut self, (width, height): (u32, u32)) {
         self.width = width;
         if height > 0 {
@@ -88,6 +98,7 @@ impl Panel {
         pool: &mut SlotPool,
         fonts: &mut Fonts,
         theme: &Theme,
+        clock_format: &str,
         workspaces: &[Workspace],
     ) {
         if self.width == 0 {
@@ -130,7 +141,7 @@ impl Panel {
         }
 
         // Clock, centred.
-        let text = Local::now().format("%a %b %-d  %H:%M").to_string();
+        let text = format_clock(clock_format);
         let mut clock = fonts.layout(&text, theme.font_size, Weight::Bold, scale as f32);
         let clock_x = ((width - clock.width) / 2.0).round();
         let clock_y = ((height - clock.height) / 2.0).round();
@@ -152,5 +163,28 @@ impl Panel {
             return;
         }
         self.layer.commit();
+    }
+}
+
+/// The clock text. An invalid format (e.g. "%Q") makes chrono's formatter
+/// fail, which would panic in `to_string`; fall back to the default.
+fn format_clock(format: &str) -> String {
+    use std::fmt::Write;
+    let now = Local::now();
+    let mut text = String::new();
+    if write!(text, "{}", now.format(format)).is_ok() {
+        return text;
+    }
+    now.format("%a %b %-d  %H:%M").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_clock_format_falls_back() {
+        assert!(!format_clock("%Q").is_empty());
+        assert_eq!(format_clock("x%%y"), "x%y");
     }
 }

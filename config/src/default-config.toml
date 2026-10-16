@@ -40,6 +40,13 @@
 [panel]
 # enabled = true           # false: no cnde-shell; use your own bar via autostart
 # all_monitors = false     # true: a panel on every monitor, not just the main one
+# height = 32
+# background = "#000000"   # "#rrggbb" or "#rrggbbaa" (translucent)
+# foreground = "#ffffff"
+# font_size = 14
+# clock_format = "%a %b %-d  %H:%M"   # e.g. "%I:%M %p" for 12-hour
+# workspace_dot_size = 7
+# workspace_active_width = 28
 
 [launcher]
 # Runs when Super is tapped on its own (temporary, until the cnde shell).

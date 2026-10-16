@@ -3,6 +3,7 @@
 //! (ARCHITECTURE.md §5). It only redraws when something changes: the
 //! minute ticks, workspaces change, or a monitor comes or goes.
 
+mod config;
 mod panel;
 mod workspaces;
 
@@ -73,14 +74,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop: EventLoop<App> = EventLoop::try_new()?;
     WaylandSource::new(conn, queue).insert(event_loop.handle())?;
 
-    let config = cnde_config::default_path()
-        .and_then(|path| {
-            Config::load_or_create(&path)
-                .map_err(|err| warn!(%err, "config error; using defaults"))
-                .ok()
-        })
-        .unwrap_or_default();
-    let theme = Theme::dark();
+    let config = config::load();
+    let theme = config::theme_from(&config);
     let fonts = Fonts::new(theme.font_families);
     info!(font = fonts.family(), "cnde-shell starting");
 
@@ -106,6 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|err| warn!(?err, "no ext-workspace; the indicator stays empty"))
         .ok();
 
+    config::watch(&event_loop.handle());
+
     // The clock: wake exactly when the minute changes, not every second.
     event_loop
         .handle()
@@ -130,7 +127,7 @@ fn until_next_minute() -> Duration {
 impl App {
     /// Which monitors get a panel: the main one (configured, else the
     /// leftmost), or every one with `panel.all_monitors`.
-    fn sync_panels(&mut self) {
+    pub fn sync_panels(&mut self) {
         let outputs: Vec<(wl_output::WlOutput, String, i32)> = self
             .outputs
             .outputs()
@@ -183,6 +180,7 @@ impl App {
             &mut self.pool,
             &mut self.fonts,
             &self.theme,
+            &self.config.panel.clock_format,
             &self.workspaces.list,
         );
     }
