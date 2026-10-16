@@ -17,6 +17,7 @@ mod snapshot;
 mod spawn;
 mod state;
 mod window;
+mod xwayland;
 
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
 use tracing::info;
@@ -89,8 +90,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = state.config_path.clone() {
         config::watch(&event_loop.handle(), path);
     }
+    // Before autostart, so launched apps get DISPLAY.
+    xwayland::setup(&mut state, &event_loop.handle());
     for command in &state.config.autostart.commands {
-        spawn::spawn_command_line(command, &state.socket_name);
+        spawn::spawn_command_line(command, &state.client_env());
     }
 
     info!(
@@ -106,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if matches!(arg.as_str(), "-c" | "--command")
             && let Some(command) = args.next()
         {
-            spawn::spawn_command_line(&command, &state.socket_name);
+            spawn::spawn_command_line(&command, &state.client_env());
         }
     }
 

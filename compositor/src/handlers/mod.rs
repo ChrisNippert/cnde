@@ -5,7 +5,8 @@ mod xdg_shell;
 
 use smithay::{
     backend::allocator::dmabuf::Dmabuf,
-    delegate_data_device, delegate_dmabuf, delegate_output, delegate_seat, delegate_xdg_decoration,
+    delegate_data_device, delegate_dmabuf, delegate_output, delegate_seat, delegate_viewporter,
+    delegate_xdg_decoration,
     input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
     reexports::{
         wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
@@ -87,6 +88,10 @@ impl DmabufHandler for State {
     }
 }
 delegate_dmabuf!(State);
+
+// Surface cropping/scaling. Required by xwayland-satellite, and the basis
+// for fractional scaling later.
+delegate_viewporter!(State);
 
 /// We don't draw server-side titlebars yet (ARCHITECTURE.md §4.4), so every
 /// client is told to decorate itself.

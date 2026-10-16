@@ -3,7 +3,7 @@
 //! thread must never block (ARCHITECTURE.md §4.2).
 
 use std::{
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     io::ErrorKind,
     path::PathBuf,
     process::{Command, Stdio},
@@ -24,37 +24,45 @@ const TERMINAL_FALLBACKS: &[&str] = &[
 ];
 const BROWSER_FALLBACKS: &[&str] = &["firefox", "chromium", "google-chrome-stable"];
 
-pub fn spawn_terminal(socket: &OsStr) {
-    let socket = socket.to_os_string();
+/// The displays launched apps connect to.
+#[derive(Debug, Clone)]
+pub struct ClientEnv {
+    pub wayland_display: OsString,
+    /// `:N` once XWayland is set up; X11 apps start it on first connect.
+    pub x11_display: Option<String>,
+}
+
+pub fn spawn_terminal(env: &ClientEnv) {
+    let env = env.clone();
     thread::spawn(move || {
         let mut candidates: Vec<Vec<String>> = Vec::new();
         if let Ok(term) = std::env::var("TERMINAL") {
             candidates.push(split_command_line(&term));
         }
         candidates.extend(TERMINAL_FALLBACKS.iter().map(|t| vec![t.to_string()]));
-        run_first_available(candidates, &socket);
+        run_first_available(candidates, &env);
     });
 }
 
-pub fn spawn_browser(socket: &OsStr) {
-    let socket = socket.to_os_string();
+pub fn spawn_browser(env: &ClientEnv) {
+    let env = env.clone();
     thread::spawn(move || {
         let mut candidates: Vec<Vec<String>> = Vec::new();
         if let Some(exec) = default_browser_exec() {
             candidates.push(exec);
         }
         candidates.extend(BROWSER_FALLBACKS.iter().map(|b| vec![b.to_string()]));
-        run_first_available(candidates, &socket);
+        run_first_available(candidates, &env);
     });
 }
 
-pub fn spawn_command_line(command: &str, socket: &OsStr) {
-    let socket = socket.to_os_string();
+pub fn spawn_command_line(command: &str, env: &ClientEnv) {
+    let env = env.clone();
     let argv = split_command_line(command);
-    thread::spawn(move || run_first_available(vec![argv], &socket));
+    thread::spawn(move || run_first_available(vec![argv], &env));
 }
 
-fn run_first_available(candidates: Vec<Vec<String>>, socket: &OsString) {
+fn run_first_available(candidates: Vec<Vec<String>>, env: &ClientEnv) {
     for argv in candidates {
         let Some((program, args)) = argv.split_first() else {
             continue;
@@ -62,11 +70,15 @@ fn run_first_available(candidates: Vec<Vec<String>>, socket: &OsString) {
         let mut command = Command::new(program);
         command
             .args(args)
-            .env("WAYLAND_DISPLAY", socket)
-            // No XWayland yet: keep X11-capable apps from opening on the host instead.
-            .env_remove("DISPLAY")
+            .env("WAYLAND_DISPLAY", &env.wayland_display)
             .env_remove("WAYLAND_SOCKET")
             .stdin(Stdio::null());
+        // Our X server, or none: never the host's (nested), or X11-capable
+        // apps would open on the host desktop instead.
+        match &env.x11_display {
+            Some(display) => command.env("DISPLAY", display),
+            None => command.env_remove("DISPLAY"),
+        };
         match command.spawn() {
             Ok(mut child) => {
                 info!(%program, "launched");

@@ -35,6 +35,7 @@ use smithay::{
         },
         shm::ShmState,
         socket::ListeningSocketSource,
+        viewporter::ViewporterState,
     },
 };
 use tracing::warn;
@@ -53,6 +54,7 @@ pub struct State {
     pub loop_handle: LoopHandle<'static, State>,
 
     pub backend: Backend,
+    pub xwayland: Option<crate::xwayland::Xwayland>,
     pub config: Config,
     /// Where `config` came from; `None` if there's no home directory.
     pub config_path: Option<PathBuf>,
@@ -94,6 +96,8 @@ pub struct State {
     #[allow(dead_code)] // owns the global; dropping it removes the protocol
     pub output_manager_state: OutputManagerState,
     pub seat_state: SeatState<Self>,
+    #[allow(dead_code)] // owns the global; dropping it removes the protocol
+    pub viewporter_state: ViewporterState,
     pub data_device_state: DataDeviceState,
 }
 
@@ -114,6 +118,7 @@ impl State {
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let data_device_state = DataDeviceState::new::<Self>(&dh);
+        let viewporter_state = ViewporterState::new::<Self>(&dh);
         let mut seat_state = SeatState::new();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, seat_name);
@@ -133,6 +138,7 @@ impl State {
             loop_handle: event_loop.handle(),
 
             backend,
+            xwayland: None,
             config: Config::default(),
             config_path: None,
             redraw_queued: true,
@@ -158,6 +164,7 @@ impl State {
             shm_state,
             output_manager_state,
             seat_state,
+            viewporter_state,
             data_device_state,
         })
     }
@@ -233,6 +240,13 @@ impl State {
             send_frames_surface_tree(surface, output, elapsed, Some(Duration::ZERO), |_, _| {
                 Some(output.clone())
             });
+        }
+    }
+
+    pub fn client_env(&self) -> crate::spawn::ClientEnv {
+        crate::spawn::ClientEnv {
+            wayland_display: self.socket_name.clone(),
+            x11_display: self.xwayland.as_ref().map(|x| x.display_name()),
         }
     }
 

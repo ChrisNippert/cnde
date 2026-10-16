@@ -135,8 +135,8 @@ impl State {
     fn run_action(&mut self, action: Action) {
         match action {
             Action::Quit => self.loop_signal.stop(),
-            Action::SpawnTerminal => spawn::spawn_terminal(&self.socket_name),
-            Action::SpawnBrowser => spawn::spawn_browser(&self.socket_name),
+            Action::SpawnTerminal => spawn::spawn_terminal(&self.client_env()),
+            Action::SpawnBrowser => spawn::spawn_browser(&self.client_env()),
             Action::CloseWindow => self.close_focused(),
             Action::Maximize => self.set_focused_placement(Placement::Maximized),
             Action::Restore => self.set_focused_placement(Placement::Floating),
@@ -147,7 +147,7 @@ impl State {
             Action::Launcher => {
                 let command = self.config.launcher.command.clone();
                 if !command.trim().is_empty() {
-                    spawn::spawn_command_line(&command, &self.socket_name);
+                    spawn::spawn_command_line(&command, &self.client_env());
                 }
             }
         }
