@@ -420,6 +420,14 @@ impl App {
                 }
             }
             Target::Close => self.exit.stop(),
+            Target::Minimize => self.window.set_minimized(),
+            Target::Maximize => {
+                if self.maximized {
+                    self.window.unset_maximized();
+                } else {
+                    self.window.set_maximized();
+                }
+            }
             Target::Header => {
                 let now = Instant::now();
                 if self

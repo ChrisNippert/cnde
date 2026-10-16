@@ -20,6 +20,8 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Target {
     Page(Page),
+    Minimize,
+    Maximize,
     Close,
     /// Empty header bar space: drag to move the window.
     Header,
@@ -123,9 +125,9 @@ pub struct Res {
     pub anim: Anim,
 }
 
-const CORNER: f32 = 12.0;
+const CORNER: f32 = 14.0;
 const MAX_COLUMN: f32 = 680.0;
-const GROUP_GAP: f32 = 28.0;
+const GROUP_GAP: f32 = 20.0;
 const SLIDER_WIDTH: f32 = 200.0;
 const ENTRY_WIDTH: f32 = 240.0;
 
@@ -184,30 +186,50 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     );
     out.hits
         .push((Rect::new(sw, 0.0, w - sw, hh), Target::Header));
-    let title_w = p.measure(ui.page.title(), t.window_title_size, Weight::Bold);
+    // The page's title on the left, the window buttons on the right.
     p.label_v(
         ui.page.title(),
-        sw + (w - sw - title_w) / 2.0,
+        sw + 20.0,
         hh / 2.0,
-        w - sw - 100.0,
+        w - sw - 140.0,
         t.window_title_size,
         Weight::Bold,
         t.window_text,
     );
-    let close = Rect::new(w - 12.0 - 24.0, (hh - 24.0) / 2.0, 24.0, 24.0);
-    let close_bg = t
-        .button_background
-        .mix(t.button_hover, hover(a, ui, Target::Close));
-    p.canvas
-        .circle(close.x + 12.0, close.y + 12.0, 12.0, close_bg);
-    p.icon(
-        "window-close-symbolic",
-        close.x + 12.0,
-        close.y + 12.0,
-        16.0,
-        t.window_text,
-    );
-    out.hits.push((close, Target::Close));
+    let size = 22.0;
+    let maximize_icon = if ui.rounded {
+        "window-maximize-symbolic"
+    } else {
+        "window-restore-symbolic"
+    };
+    for (i, (target, icon)) in [
+        (Target::Close, "window-close-symbolic"),
+        (Target::Maximize, maximize_icon),
+        (Target::Minimize, "window-minimize-symbolic"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let x = w - 10.0 - size - i as f32 * (size + 8.0);
+        let button = Rect::new(x, (hh - size) / 2.0, size, size);
+        let fill = t
+            .button_background
+            .mix(t.button_hover, hover(a, ui, target));
+        p.canvas.circle(
+            button.x + size / 2.0,
+            button.y + size / 2.0,
+            size / 2.0,
+            fill,
+        );
+        p.icon(
+            icon,
+            button.x + size / 2.0,
+            button.y + size / 2.0,
+            14.0,
+            t.window_text,
+        );
+        out.hits.push((button, target));
+    }
     if ui.scroll > 0.5 {
         p.canvas
             .rounded_rect(sw, hh - 1.0, w - sw, 1.0, 0.0, t.card_separator);
@@ -245,10 +267,9 @@ fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h:
     let hh = t.window_header_height;
     out.hits.push((Rect::new(0.0, 0.0, sw, hh), Target::Header));
     let title = "Settings";
-    let title_w = p.measure(title, t.window_title_size, Weight::Bold);
     p.label_v(
         title,
-        (sw - title_w) / 2.0,
+        18.0,
         hh / 2.0,
         sw,
         t.window_title_size,
@@ -267,15 +288,18 @@ fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h:
             SHORT,
         );
         let hovered = hover(a, ui, Target::Page(page)) * (1.0 - selected);
-        for (color, amount) in [(t.hover, hovered), (t.sidebar_selected, selected)] {
+        // The current page: tinted with the accent, its icon in the accent.
+        let chosen = t.accent.with_alpha(0.22);
+        for (color, amount) in [(t.hover, hovered), (chosen, selected)] {
             if amount > 0.0 {
                 let fill = color.with_alpha(color.a * amount);
                 p.canvas
-                    .rounded_rect(rect.x, rect.y, rect.w, rect.h, 8.0, fill);
+                    .rounded_rect(rect.x, rect.y, rect.w, rect.h, 10.0, fill);
             }
         }
         let cy = rect.y + rect.h / 2.0;
-        p.icon(page.icon(), rect.x + 20.0, cy, 16.0, t.window_text);
+        let icon_color = t.window_text.mix(t.accent, selected);
+        p.icon(page.icon(), rect.x + 20.0, cy, 16.0, icon_color);
         p.label_v(
             page.title(),
             rect.x + 40.0,
@@ -304,7 +328,7 @@ fn page(
     let has_advanced = groups.iter().flat_map(|g| &g.rows).any(|r| r.advanced);
     let col_w = (area.w - 48.0).min(MAX_COLUMN);
     let x = area.x + (area.w - col_w) / 2.0;
-    let top = area.y + 24.0;
+    let top = area.y + 16.0;
     let mut y = top - ui.scroll + offset;
 
     for group in groups {
@@ -325,7 +349,7 @@ fn page(
                 Weight::Bold,
                 t.window_text,
             );
-            y += 26.0;
+            y += 24.0;
         }
         if !group.description.is_empty() {
             p.label_v(
