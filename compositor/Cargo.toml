@@ -17,6 +17,7 @@ rustix = { version = "1", features = ["fs"] }
 # wants an older libdisplay-info than Arch ships, so it's off for now.
 smithay-drm-extras = { version = "0.1", default-features = false }
 # Wallpaper decoding and scaling (pure Rust codecs).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 [dependencies.smithay]

@@ -29,6 +29,8 @@ pub enum Action {
     CloseOverview,
     /// Super+A: the overview's app grid.
     AppGrid,
+    /// Super+Shift+S or Print Screen.
+    Screenshot,
     /// Slide the workspace strip: +1 = next (content moves left).
     /// `carry` brings the focused window along.
     Workspace {
@@ -63,6 +65,9 @@ pub fn action_for(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> Option
     }
     if mods.alt && !mods.ctrl && !mods.logo && sym == keysyms::KEY_F4 {
         return Some(Action::CloseWindow);
+    }
+    if sym == keysyms::KEY_Print && !mods.ctrl && !mods.alt {
+        return Some(Action::Screenshot);
     }
 
     // Workspaces: Super+Alt+Left/Right (+Shift carries the window). Nested,
@@ -105,6 +110,7 @@ pub fn action_for(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> Option
         (false, keysyms::KEY_Left) => Action::SnapLeft,
         (false, keysyms::KEY_Right) => Action::SnapRight,
         (true, keysyms::KEY_f) => Action::ToggleFullscreen,
+        (true, keysyms::KEY_s) => Action::Screenshot,
         _ => return None,
     };
     Some(action)

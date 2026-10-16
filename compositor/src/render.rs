@@ -265,6 +265,26 @@ pub fn output_elements(
     closing
 }
 
+/// The overlay layer only (the screenshot tool, over a frozen screen).
+pub fn overlay_elements(
+    renderer: &mut GlesRenderer,
+    popups: &mut PopupAnims,
+    output: &Output,
+    output_loc: Point<f64, Logical>,
+    now: Instant,
+) -> Vec<OutputElement> {
+    let scale = Scale::from(output.current_scale().fractional_scale());
+    layer_elements(
+        renderer,
+        popups,
+        output,
+        output_loc,
+        Layer::Overlay,
+        scale,
+        now,
+    )
+}
+
 /// Every layer surface of one kind on `output`, top first, each with its
 /// popups (animated, see `popup_anim`) above it.
 fn layer_elements(

@@ -18,6 +18,7 @@ mod overview;
 mod popup_anim;
 mod portals;
 mod render;
+mod screenshot;
 mod shaders;
 mod snap;
 mod snapshot;

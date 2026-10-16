@@ -427,6 +427,7 @@ name = "cnde-compositor"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "chrono",
  "cnde-config",
  "cnde-ipc",
  "image",

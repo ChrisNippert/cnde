@@ -240,7 +240,7 @@ fn upload(
 }
 
 /// `texture` (`w` x `h` pixels) stretched over the whole output.
-fn full_screen(
+pub(crate) fn full_screen(
     texture: &TextureBuffer<GlesTexture>,
     w: i32,
     h: i32,

@@ -11,6 +11,7 @@ mod ipc;
 mod launcher;
 mod panel;
 mod quick_settings;
+mod screenshot;
 mod status;
 mod workspaces;
 
@@ -125,6 +126,8 @@ pub struct App {
     /// The overview's search box, while the overview is open.
     launcher: Option<Launcher>,
     dock: Option<Dock>,
+    /// The screenshot tool, while the screen is frozen for one.
+    screenshot: Option<screenshot::ScreenshotUi>,
     /// Every open window, from the compositor.
     windows: Vec<cnde_ipc::WindowInfo>,
     /// Where an overview dock goes (the overview's monitor).
@@ -214,6 +217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ipc: ipc::Ipc::connect(ipc_tx),
         launcher: None,
         dock: None,
+        screenshot: None,
         windows: Vec::new(),
         dock_output: None,
         overview_open: false,
@@ -327,7 +331,90 @@ impl App {
                 self.windows = windows;
                 self.sync_dock();
             }
+            cnde_ipc::Event::ScreenshotUi { windows } => self.open_screenshot_ui(windows),
+            cnde_ipc::Event::ScreenshotDone { path } => {
+                self.screenshot = None;
+                if let Some(path) = path {
+                    info!(%path, "screenshot saved");
+                }
+            }
         }
+    }
+
+    fn open_screenshot_ui(&mut self, windows: Vec<cnde_ipc::ScreenshotWindow>) {
+        self.quick_settings = None;
+        let main = self.main_output();
+        let monitors = self
+            .outputs
+            .outputs()
+            .filter_map(|o| {
+                let info = self.outputs.info(&o)?;
+                Some(screenshot::Monitor {
+                    main: main.as_ref() == Some(&o),
+                    name: info.name.clone().unwrap_or_default(),
+                    origin: info.logical_position.unwrap_or((0, 0)),
+                    size: info.logical_size.unwrap_or((1920, 1080)),
+                    scale: info.scale_factor,
+                    output: o,
+                })
+            })
+            .collect();
+        self.screenshot = Some(screenshot::ScreenshotUi::open(
+            &self.compositor,
+            &self.layer_shell,
+            &self.shm,
+            &self.qh,
+            monitors,
+            windows,
+        ));
+    }
+
+    fn screenshot_outcome(&mut self, outcome: screenshot::Outcome) {
+        match outcome {
+            screenshot::Outcome::Nothing => {}
+            screenshot::Outcome::Redraw => {
+                if let Some(ui) = &mut self.screenshot {
+                    ui.draw_all(
+                        &self.qh,
+                        self.shm_format,
+                        &mut self.fonts,
+                        &mut self.icons,
+                        &self.theme,
+                    );
+                }
+            }
+            screenshot::Outcome::Cancel => {
+                self.screenshot = None;
+                self.ipc.send(&cnde_ipc::Request::CancelScreenshot);
+            }
+            screenshot::Outcome::Take(target) => {
+                // Gone at once: the shot is cut from the frozen screen,
+                // which never had this tool on it.
+                self.screenshot = None;
+                self.ipc.send(&cnde_ipc::Request::Screenshot { target });
+            }
+        }
+    }
+
+    /// The main monitor: configured, else the leftmost.
+    fn main_output(&self) -> Option<wl_output::WlOutput> {
+        let outputs: Vec<(wl_output::WlOutput, String, i32)> = self
+            .outputs
+            .outputs()
+            .filter_map(|o| {
+                let info = self.outputs.info(&o)?;
+                Some((
+                    o,
+                    info.name.clone().unwrap_or_default(),
+                    info.logical_position.unwrap_or((0, 0)).0,
+                ))
+            })
+            .collect();
+        outputs
+            .iter()
+            .find(|(_, name, _)| self.config.output(name).is_some_and(|c| c.main))
+            .or_else(|| outputs.iter().min_by_key(|(_, _, x)| *x))
+            .map(|(o, _, _)| o.clone())
     }
 
     /// Rescan the installed apps in the background if anything changed.
@@ -663,6 +750,18 @@ impl CompositorHandler for App {
             dock.set_scale(factor);
             self.draw_dock();
         }
+        if let Some(ui) = &mut self.screenshot
+            && ui.set_scale(surface, factor)
+        {
+            ui.draw_surface(
+                surface,
+                &self.qh,
+                self.shm_format,
+                &mut self.fonts,
+                &mut self.icons,
+                &self.theme,
+            );
+        }
     }
     fn transform_changed(
         &mut self,
@@ -696,6 +795,18 @@ impl CompositorHandler for App {
             && dock.frame_done()
         {
             self.draw_dock();
+        }
+        if let Some(ui) = &mut self.screenshot
+            && ui.frame_done(surface)
+        {
+            ui.draw_surface(
+                surface,
+                &self.qh,
+                self.shm_format,
+                &mut self.fonts,
+                &mut self.icons,
+                &self.theme,
+            );
         }
     }
     fn surface_enter(
@@ -741,6 +852,14 @@ impl LayerShellHandler for App {
         if self.dock.as_ref().is_some_and(|d| &d.layer == layer) {
             self.dock = None;
         }
+        if self
+            .screenshot
+            .as_ref()
+            .is_some_and(|ui| ui.owns(layer.wl_surface()))
+        {
+            self.screenshot = None;
+            self.ipc.send(&cnde_ipc::Request::CancelScreenshot);
+        }
     }
 
     fn configure(
@@ -766,6 +885,18 @@ impl LayerShellHandler for App {
         {
             dock.configured();
             self.draw_dock();
+        }
+        if let Some(ui) = &mut self.screenshot
+            && ui.configured(layer.wl_surface(), configure.new_size)
+        {
+            ui.draw_surface(
+                layer.wl_surface(),
+                &self.qh,
+                self.shm_format,
+                &mut self.fonts,
+                &mut self.icons,
+                &self.theme,
+            );
         }
     }
 }
@@ -825,6 +956,24 @@ impl PointerHandler for App {
         events: &[PointerEvent],
     ) {
         for event in events {
+            if let Some(ui) = &mut self.screenshot
+                && ui.owns(&event.surface)
+            {
+                let outcome = match event.kind {
+                    PointerEventKind::Motion { .. } | PointerEventKind::Enter { .. } => {
+                        ui.motion(&event.surface, event.position)
+                    }
+                    PointerEventKind::Press {
+                        button: BTN_LEFT, ..
+                    } => ui.press(&event.surface, event.position),
+                    PointerEventKind::Release {
+                        button: BTN_LEFT, ..
+                    } => ui.release(),
+                    _ => screenshot::Outcome::Nothing,
+                };
+                self.screenshot_outcome(outcome);
+                continue;
+            }
             if let Some(dock) = &mut self.dock
                 && dock.layer.wl_surface() == &event.surface
             {
@@ -1009,7 +1158,10 @@ impl KeyboardHandler for App {
         _: u32,
         event: KeyEvent,
     ) {
-        if self.launcher.is_some() {
+        if let Some(ui) = &mut self.screenshot {
+            let outcome = ui.key(&event);
+            self.screenshot_outcome(outcome);
+        } else if self.launcher.is_some() {
             self.launcher_key(event);
         } else if event.keysym == Keysym::Escape && self.quick_settings.take().is_some() {
             self.redraw_panels();

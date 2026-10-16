@@ -24,6 +24,10 @@ entries when they're done.
   unzoomed spot; windows on hidden workspaces don't update live; the search
   box is only on the main monitor; no app grid button yet; no hover
   highlight on windows.
+- **Screenshots:** no "saved" notification yet (notifications don't exist);
+  a region can't span two monitors (it's cut to the one holding its
+  centre); no option to include the pointer; pasting from the clipboard
+  hasn't been tested with a real app yet.
 - **Dock:** no name tooltips yet, no right-click menu (pin/unpin, quit),
   no drag to reorder; favorites are edited in the config. The intellihide
   and autohide options are accepted but act as "always". Edge docks are on

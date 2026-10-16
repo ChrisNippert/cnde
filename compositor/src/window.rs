@@ -100,7 +100,7 @@ impl State {
             .cloned()
     }
 
-    fn output_under_pointer(&self) -> Option<Output> {
+    pub(crate) fn output_under_pointer(&self) -> Option<Output> {
         let location = self.seat.get_pointer()?.current_location();
         self.space
             .output_under(location)

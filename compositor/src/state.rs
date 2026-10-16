@@ -78,6 +78,9 @@ pub struct State {
     pub ipc: crate::ipc::IpcClients,
     pub popup_anims: crate::popup_anim::PopupAnims,
     pub capture: crate::capture::CaptureState,
+    pub screenshot: crate::screenshot::Screenshot,
+    /// Super+Shift+S without a shell: capture this monitor once frozen.
+    pub pending_quick_shot: Option<String>,
     /// Drag-to-edge preview while a window is being moved.
     pub snap_preview: Option<SnapPreview>,
     pub popups: PopupManager,
@@ -166,6 +169,8 @@ impl State {
             ipc: Default::default(),
             popup_anims: Default::default(),
             capture,
+            screenshot: Default::default(),
+            pending_quick_shot: None,
             snap_preview: None,
             popups: PopupManager::default(),
 
@@ -254,6 +259,7 @@ impl State {
         }
         self.refresh_ext_workspaces();
         self.sync_ipc_windows();
+        self.screenshot_ready_check();
         // Last, so frame callbacks sent while rendering go out now.
         if let Err(err) = self.display_handle.flush_clients() {
             warn!(?err, "failed to flush clients");
@@ -335,7 +341,8 @@ impl State {
             return Some((surface, loc));
         }
         // In the overview, windows are pictures: the compositor handles clicks.
-        if self.overview.is_open() {
+        // While a screenshot is being framed, only its tool takes input.
+        if self.overview.is_open() || self.screenshot.active {
             return None;
         }
         let window = self
@@ -355,6 +362,9 @@ impl State {
     /// Layers drawn above windows at `pos`: the panel (top layer) hides
     /// behind a fullscreen window.
     pub fn layers_above_windows(&self, pos: Point<f64, Logical>) -> &'static [Layer] {
+        if self.screenshot.active {
+            return &[Layer::Overlay];
+        }
         let fullscreen = !self.overview.is_open()
             && self
                 .space

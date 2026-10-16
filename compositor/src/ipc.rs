@@ -22,6 +22,12 @@ pub struct IpcClients {
 }
 
 impl IpcClients {
+    pub fn has_clients(&self) -> bool {
+        !self.clients.is_empty()
+    }
+}
+
+impl IpcClients {
     /// Send `event` to every client, dropping any that can't keep up.
     pub fn broadcast(&mut self, event: &Event) {
         let line = cnde_ipc::encode(event);
@@ -145,6 +151,17 @@ impl State {
             }
             Request::ActivateWindow { id } => self.activate_window(id),
             Request::AppGridShown { shown } => self.overview.app_grid = shown,
+            Request::Screenshot { target } => {
+                if self.screenshot.active {
+                    self.take_screenshot(target);
+                }
+            }
+            Request::OpenScreenshot => self.start_screenshot(),
+            Request::CancelScreenshot => {
+                if self.screenshot.active {
+                    self.cancel_screenshot();
+                }
+            }
         }
     }
 

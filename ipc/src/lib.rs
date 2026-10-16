@@ -28,6 +28,43 @@ pub enum Event {
     Windows {
         windows: Vec<WindowInfo>,
     },
+    /// The screen is frozen for a screenshot: show the selection tool.
+    /// `windows`: what window mode can pick, top first, global logical px.
+    ScreenshotUi {
+        windows: Vec<ScreenshotWindow>,
+    },
+    /// Saved (and copied), or `None` if cancelled or failed.
+    ScreenshotDone {
+        path: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScreenshotWindow {
+    pub id: u64,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+/// What to capture.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScreenshotTarget {
+    /// Global logical pixels.
+    Region {
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    },
+    Output {
+        name: String,
+    },
+    Window {
+        id: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -56,6 +93,12 @@ pub enum Request {
     AppGridShown {
         shown: bool,
     },
+    Screenshot {
+        target: ScreenshotTarget,
+    },
+    CancelScreenshot,
+    /// Open the screenshot tool, as Super+Shift+S does.
+    OpenScreenshot,
 }
 
 /// Where a compositor with process id `pid` listens.

@@ -194,19 +194,37 @@ impl State {
                 ),
                 None => Vec::new(),
             };
-            let mut elements = render::output_elements(
-                renderer,
-                &self.space,
-                &self.closing,
-                self.snap_preview.as_mut(),
-                scene.map(|s| s.windows),
-                backdrop,
-                &mut self.popup_anims,
-                &backend.output,
-                now,
-            );
-            if let Some(wallpaper) = self.wallpapers.element(renderer, &backend.output) {
-                elements.push(render::OutputElement::Wallpaper(wallpaper));
+            let frozen = self.screenshot.frozen_element(&backend.output);
+            let mut elements = if let (Some(frozen), Some(geo)) = (frozen, output_geo) {
+                let mut elements = render::overlay_elements(
+                    renderer,
+                    &mut self.popup_anims,
+                    &backend.output,
+                    geo.loc.to_f64(),
+                    now,
+                );
+                elements.push(render::OutputElement::Wallpaper(frozen));
+                elements
+            } else {
+                render::output_elements(
+                    renderer,
+                    &self.space,
+                    &self.closing,
+                    self.snap_preview.as_mut(),
+                    scene.map(|s| s.windows),
+                    backdrop,
+                    &mut self.popup_anims,
+                    &backend.output,
+                    now,
+                )
+            };
+            if self.screenshot.frozen_element(&backend.output).is_none() {
+                if let Some(wallpaper) = self.wallpapers.element(renderer, &backend.output) {
+                    elements.push(render::OutputElement::Wallpaper(wallpaper));
+                }
+                if self.screenshot.wants_freeze(&backend.output) {
+                    self.screenshot.freeze(renderer, &backend.output, &elements);
+                }
             }
             let damage = match backend.damage_tracker.render_output(
                 renderer,

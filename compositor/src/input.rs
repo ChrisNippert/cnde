@@ -173,6 +173,8 @@ impl State {
             Action::ToggleFullscreen => self.toggle_focused_fullscreen(),
             Action::SwitchVt(vt) => self.switch_vt(vt),
             Action::Workspace { step, carry } => self.step_workspace(step, carry),
+            Action::Screenshot => self.start_screenshot(),
+            Action::Launcher if self.screenshot.active => {}
             Action::Launcher => {
                 let command = self.config.launcher.command.clone();
                 if command.trim().is_empty() {

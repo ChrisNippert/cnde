@@ -711,30 +711,47 @@ impl State {
             ));
         }
         let cursor_count = elements.len();
-        let backdrop = match self.space.output_geometry(&output) {
-            Some(geo) => crate::overview::backdrop(
-                &mut self.overview,
-                &self.wallpapers,
+        // A screenshot being framed: the frozen screen, the tool on top.
+        let frozen = self.screenshot.frozen_element(&output);
+        if let (Some(frozen), Some(geo)) = (frozen, self.space.output_geometry(&output)) {
+            elements.extend(render::overlay_elements(
                 &mut gpu.renderer,
+                &mut self.popup_anims,
                 &output,
-                geo,
-                scene.as_ref(),
-            ),
-            None => Vec::new(),
-        };
-        elements.extend(render::output_elements(
-            &mut gpu.renderer,
-            &self.space,
-            &self.closing,
-            self.snap_preview.as_mut(),
-            scene.map(|s| s.windows),
-            backdrop,
-            &mut self.popup_anims,
-            &output,
-            now,
-        ));
-        if let Some(wallpaper) = self.wallpapers.element(&mut gpu.renderer, &output) {
-            elements.push(render::OutputElement::Wallpaper(wallpaper));
+                geo.loc.to_f64(),
+                now,
+            ));
+            elements.push(render::OutputElement::Wallpaper(frozen));
+        } else {
+            let backdrop = match self.space.output_geometry(&output) {
+                Some(geo) => crate::overview::backdrop(
+                    &mut self.overview,
+                    &self.wallpapers,
+                    &mut gpu.renderer,
+                    &output,
+                    geo,
+                    scene.as_ref(),
+                ),
+                None => Vec::new(),
+            };
+            elements.extend(render::output_elements(
+                &mut gpu.renderer,
+                &self.space,
+                &self.closing,
+                self.snap_preview.as_mut(),
+                scene.map(|s| s.windows),
+                backdrop,
+                &mut self.popup_anims,
+                &output,
+                now,
+            ));
+            if let Some(wallpaper) = self.wallpapers.element(&mut gpu.renderer, &output) {
+                elements.push(render::OutputElement::Wallpaper(wallpaper));
+            }
+            if self.screenshot.wants_freeze(&output) {
+                self.screenshot
+                    .freeze(&mut gpu.renderer, &output, &elements[cursor_count..]);
+            }
         }
 
         let rendered = match surface.drm_output.render_frame(

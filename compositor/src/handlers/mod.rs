@@ -54,6 +54,18 @@ delegate_seat!(State);
 
 impl SelectionHandler for State {
     type SelectionUserData = ();
+
+    /// Only called for selections we own: the last screenshot.
+    fn send_selection(
+        &mut self,
+        _target: smithay::wayland::selection::SelectionTarget,
+        mime_type: String,
+        fd: std::os::fd::OwnedFd,
+        _seat: smithay::input::Seat<Self>,
+        _user_data: &(),
+    ) {
+        self.send_clipboard(&mime_type, fd);
+    }
 }
 
 impl DataDeviceHandler for State {
