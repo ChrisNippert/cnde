@@ -69,7 +69,7 @@ impl CompositorHandler for State {
                     }
                     if s.pending_size
                         .as_ref()
-                        .is_some_and(|p| p.is_resolved(acked))
+                        .is_some_and(|p| p.is_resolved(acked, size))
                     {
                         s.pending_size = None;
                     }

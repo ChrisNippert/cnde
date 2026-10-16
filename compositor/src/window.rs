@@ -345,9 +345,13 @@ impl State {
                 s.resize_anim = Some(ResizeAnim::new(from, snapshot, serial));
             });
         } else if let (Some(rect), Some(serial), Some(_)) = (rect, serial, mapped_location) {
-            with_state(window, |s| {
-                s.pending_size = Some(PendingSize::new(rect.size, serial))
-            });
+            // The client's committed size; map_element above doesn't change it.
+            let old_size = window.geometry().size;
+            if rect.size != old_size {
+                with_state(window, |s| {
+                    s.pending_size = Some(PendingSize::new(rect.size, old_size, serial));
+                });
+            }
         }
         self.queue_redraw();
         self.queue_pointer_refresh();

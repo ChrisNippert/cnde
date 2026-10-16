@@ -70,22 +70,28 @@ impl ResizeAnim {
 /// full-screen buffer never spills onto other monitors.
 pub struct PendingSize {
     size: Size<i32, Logical>,
+    /// The client's size when we asked for `size`.
+    old_size: Size<i32, Logical>,
     serial: Serial,
     since: Instant,
 }
 
 impl PendingSize {
-    pub fn new(size: Size<i32, Logical>, serial: Serial) -> Self {
+    pub fn new(size: Size<i32, Logical>, old_size: Size<i32, Logical>, serial: Serial) -> Self {
         Self {
             size,
+            old_size,
             serial,
             since: Instant::now(),
         }
     }
 
-    /// Whether the client has caught up (acked the configure and drawn).
-    pub fn is_resolved(&self, acked: Option<Serial>) -> bool {
-        acked.is_some_and(|acked| acked.is_no_older_than(&self.serial))
+    /// Whether the client has caught up. Acking isn't enough: Chromium and
+    /// Electron ack at once but redraw at the new size a few frames later.
+    /// The size must also have moved off the old one (not necessarily to
+    /// exactly `size`; terminals round to whole cells).
+    pub fn is_resolved(&self, acked: Option<Serial>, current: Size<i32, Logical>) -> bool {
+        acked.is_some_and(|acked| acked.is_no_older_than(&self.serial)) && current != self.old_size
     }
 }
 
@@ -166,7 +172,7 @@ pub fn window_frame(
     }
 
     if let Some(pending) = &state.pending_size {
-        if now.saturating_duration_since(pending.since) > presets::RESIZE_COMMIT_TIMEOUT {
+        if now.saturating_duration_since(pending.since) > presets::PENDING_SIZE_TIMEOUT {
             state.pending_size = None;
         } else if state.resize_anim.is_none() {
             frame.rect = Rectangle::new(frame.rect.loc, pending.size.to_f64());
@@ -224,6 +230,18 @@ mod tests {
         let b = Rectangle::new(Point::from((10.0, 20.0)), Size::from((300.0, 150.0)));
         assert_eq!(lerp_rect(a, b, 0.0), a);
         assert_eq!(lerp_rect(a, b, 1.0), b);
+    }
+
+    #[test]
+    fn pending_size_needs_ack_and_a_new_size() {
+        let full = Size::from((2560, 1440));
+        let pending = PendingSize::new(Size::from((1536, 864)), full, Serial::from(10));
+        // Acked, but still drawing at the old size (Chromium/Electron).
+        assert!(!pending.is_resolved(Some(Serial::from(10)), full));
+        // New size, but not acked yet.
+        assert!(!pending.is_resolved(Some(Serial::from(9)), Size::from((1536, 864))));
+        // Acked and resized, even if not to the exact size (terminal cells).
+        assert!(pending.is_resolved(Some(Serial::from(11)), Size::from((1530, 860))));
     }
 
     #[test]

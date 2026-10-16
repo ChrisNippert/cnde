@@ -20,6 +20,10 @@ pub const WINDOW_RESIZE: Params = Params {
 /// How long a resize waits for the client to redraw at its new size before
 /// animating anyway (with the old buffer stretched).
 pub const RESIZE_COMMIT_TIMEOUT: Duration = Duration::from_millis(150);
+/// How long a window dragged off fullscreen/maximized is shown squeezed to
+/// its new size while the client catches up. Longer than the animation
+/// timeout: nothing waits on it, the window already follows the pointer.
+pub const PENDING_SIZE_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub const WINDOW_CLOSE: Params = Params {
     duration: Duration::from_millis(180),
