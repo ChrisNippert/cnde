@@ -36,6 +36,7 @@
 
 [appearance]
 # color_scheme = "dark"    # or "light"; picks the wallpaper variant
+# titlebars = "cnde"       # "cnde" draws title bars for apps that allow it; "app" leaves them to the app
 
 [wallpaper]
 # light = ""               # image path (PNG, JPEG, WebP), e.g. "~/Pictures/day.jpg"

@@ -17,6 +17,7 @@ use tracing::debug;
 
 use crate::{
     animation::{Animation, presets},
+    decorations::{content_rect, titlebar_height},
     effects::{self, ClosingWindow, PendingSize, ResizeAnim},
     snapshot::{LastFrame, Snapshot},
     state::State,
@@ -49,6 +50,9 @@ pub struct WindowState {
     pub last_frame: Option<LastFrame>,
     /// Geometry size at the last commit, to notice client-driven resizes.
     pub last_size: Size<i32, Logical>,
+    /// The title bar cnde draws for it, if it's one that lets us.
+    pub titlebar: Option<crate::decorations::Titlebar>,
+    pub titlebar_hover: Option<crate::decorations::Part>,
 }
 
 pub fn with_state<T>(window: &Window, f: impl FnOnce(&mut WindowState) -> T) -> T {
@@ -176,14 +180,16 @@ impl State {
             return;
         };
 
+        let bar = titlebar_height(&window);
         let location = match placement {
             Placement::Floating => {
                 let size = window.geometry().size;
                 let x = area.loc.x + ((area.size.w - size.w) / 2).max(0);
-                let y = area.loc.y + ((area.size.h - size.h) / 2).max(0);
+                // Centred with its title bar, which stays on screen.
+                let y = area.loc.y + bar + ((area.size.h - size.h - bar) / 2).max(0);
                 (x, y).into()
             }
-            other => placement_rect(other, area).loc,
+            other => content_rect(placement_rect(other, area), bar).loc,
         };
 
         debug!(size = ?window.geometry().size, ?location, ?placement, "mapping window");
@@ -247,6 +253,8 @@ impl State {
                 .map(|t| t.wl_surface().clone()),
         };
         keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
+        // Title bars show which window has focus.
+        self.queue_redraw();
     }
 
     pub fn close_focused(&mut self) {
@@ -312,7 +320,10 @@ impl State {
 
         let rect = match target {
             Placement::Floating => restore,
-            other => Some(placement_rect(other, area)),
+            other => Some(content_rect(
+                placement_rect(other, area),
+                titlebar_height(window),
+            )),
         };
 
         toplevel.with_pending_state(|s| {
@@ -413,7 +424,7 @@ impl State {
             else {
                 continue;
             };
-            let rect = placement_rect(placement, area);
+            let rect = content_rect(placement_rect(placement, area), titlebar_height(&window));
             toplevel.with_pending_state(|s| s.size = Some(rect.size));
             toplevel.send_pending_configure();
             self.space.map_element(window.clone(), rect.loc, false);

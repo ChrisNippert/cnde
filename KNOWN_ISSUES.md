@@ -24,6 +24,12 @@ entries when they're done.
   unzoomed spot; windows on hidden workspaces don't update live; the search
   box is only on the main monitor; no app grid button yet; no hover
   highlight on windows.
+- **cnde's title bars** (`appearance.titlebars = "cnde"`) are new: the bar
+  vanishes at once when a window closes instead of fading with it; the
+  window's bottom corners stay square; X11 apps get no bar yet; there's no
+  minimize button (nothing to minimize to). Apps that ask to draw their own
+  (GNOME apps' header bars) keep theirs.
+- **Frosted dock** frosts the wallpaper only, not windows behind it.
 - **Right-click menus and edit mode** haven't been tried with a real mouse
   yet (only rendered nested). Moving the dock by its grip outlines where it'll
   land, but the dock itself jumps there on release rather than sliding. A clock

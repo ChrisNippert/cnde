@@ -7,6 +7,7 @@ mod capture;
 mod config;
 mod crossfade;
 mod cursor;
+mod decorations;
 mod effects;
 mod ext_workspace;
 mod frost;

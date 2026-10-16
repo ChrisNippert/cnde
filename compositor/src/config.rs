@@ -116,6 +116,11 @@ impl State {
     /// startup, when everything is applied.
     pub fn apply_config(&mut self, old: Option<&Config>) {
         animation::set_speed(self.config.animations.speed);
+        self.decorations.dark =
+            self.config.appearance.color_scheme == cnde_config::ColorScheme::Dark;
+        if old.is_some_and(|old| old.appearance.titlebars != self.config.appearance.titlebars) {
+            self.apply_titlebars_config();
+        }
         // A new style or wallpaper fades in over the old one.
         if old.is_some_and(|old| {
             old.appearance != self.config.appearance || old.wallpaper != self.config.wallpaper

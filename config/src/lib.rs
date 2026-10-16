@@ -141,6 +141,19 @@ pub struct Position {
 #[serde(default, deny_unknown_fields)]
 pub struct Appearance {
     pub color_scheme: ColorScheme,
+    /// Who draws window title bars, for apps that let the desktop do it.
+    pub titlebars: Titlebars,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Titlebars {
+    /// cnde draws them, in its own style, for every app that allows it.
+    /// Apps with their own header bars (GNOME apps) keep those.
+    #[default]
+    Cnde,
+    /// Apps draw their own, whatever they look like.
+    App,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

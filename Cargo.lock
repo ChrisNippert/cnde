@@ -430,6 +430,7 @@ dependencies = [
  "chrono",
  "cnde-config",
  "cnde-ipc",
+ "cnde-ui",
  "image",
  "rustix 1.1.5",
  "smithay",

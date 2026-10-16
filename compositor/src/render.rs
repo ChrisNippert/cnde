@@ -95,6 +95,7 @@ render_elements! {
     Wallpaper = TextureRenderElement<GlesTexture>,
     Shader = PixelShaderElement,
     Frost = crate::frost::Frost,
+    Titlebar = RescaleRenderElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
 }
 
 /// The pointer, if it's on this output: a themed image, or the surface a
@@ -176,6 +177,7 @@ pub fn output_elements(
     // Frosted glass under the dock (see `frost`): just below the layers
     // above the windows.
     frost: Vec<OutputElement>,
+    decorations: &mut crate::decorations::Decorations,
     popups: &mut PopupAnims,
     output: &Output,
     now: Instant,
@@ -211,6 +213,7 @@ pub fn output_elements(
         top_window_layer = Some(layers.len());
         layers.push(window_elements(
             renderer,
+            decorations,
             &placed.window,
             placed.rect,
             placed.zoom,
@@ -332,8 +335,10 @@ fn layer_elements(
 
 /// One live window, top element first: the crossfading snapshot (if a
 /// resize is running) above the window's own surfaces.
+#[allow(clippy::too_many_arguments)]
 fn window_elements(
     renderer: &mut GlesRenderer,
+    decorations: &mut crate::decorations::Decorations,
     win: &Window,
     // Where the window geometry is laid out (space coordinates).
     live: Rectangle<f64, Logical>,
@@ -342,6 +347,7 @@ fn window_elements(
     scale: Scale<f64>,
     now: Instant,
 ) -> Vec<OutputElement> {
+    let bar = crate::decorations::titlebar_height(win) as f64;
     with_state(win, |state| {
         let frame = effects::window_frame(state, live, now);
         if !win.geometry().is_empty() {
@@ -374,6 +380,29 @@ fn window_elements(
         elements.extend(surfaces.into_iter().map(|surface| {
             OutputElement::Window(RescaleRenderElement::from_element(surface, origin, stretch))
         }));
+
+        // cnde's title bar, just above the geometry. It grows with the
+        // window as it opens; otherwise it keeps its height.
+        if bar > 0.0 {
+            let grow = if state.open_anim.is_some() {
+                frame.rect.size.w / live.size.w.max(1.0)
+            } else {
+                1.0
+            };
+            let height = bar * grow;
+            let unzoomed = Rectangle::new(
+                Point::from((frame.rect.loc.x, frame.rect.loc.y - height)),
+                Size::from((frame.rect.size.w, height)),
+            );
+            let zoomed = zoom.apply(unzoomed);
+            let rect = Rectangle::new(zoomed.loc - output_loc, zoomed.size);
+            let width = live.size.w.round() as i32;
+            if let Some(element) =
+                decorations.element(renderer, win, state, rect, width, scale, frame.alpha)
+            {
+                elements.push(element);
+            }
+        }
         elements
     })
 }

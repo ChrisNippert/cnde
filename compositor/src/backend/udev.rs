@@ -749,6 +749,7 @@ impl State {
                 scene.map(|s| s.windows),
                 backdrop,
                 frost,
+                &mut self.decorations,
                 &mut self.popup_anims,
                 &output,
                 now,

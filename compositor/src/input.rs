@@ -27,7 +27,7 @@ use crate::{
     window::{Placement, with_state},
 };
 
-const BTN_LEFT: u32 = 0x110;
+pub(crate) const BTN_LEFT: u32 = 0x110;
 /// Size of a restored window that never had a floating size, as a fraction
 /// of the usable area.
 const DEFAULT_FLOATING_FRACTION: f64 = 0.6;
@@ -247,6 +247,7 @@ impl State {
             },
         );
         pointer.frame(self);
+        self.bar_motion(location);
         self.check_hot_corner(location);
         // We draw the cursor ourselves on real hardware.
         if self.backend.draws_cursor() {
@@ -263,6 +264,12 @@ impl State {
         self.mod_tap_armed = false;
         debug!(button, ?button_state, location = ?pointer.current_location(), "pointer button");
 
+        if button_state == ButtonState::Released
+            && !pointer.is_grabbed()
+            && self.bar_release(pointer.current_location())
+        {
+            return;
+        }
         if button_state == ButtonState::Pressed && !pointer.is_grabbed() {
             let location = pointer.current_location();
             // Clicking a panel/launcher above the windows focuses it if it
@@ -292,6 +299,10 @@ impl State {
                 if button == BTN_LEFT {
                     self.overview_click(location);
                 }
+                return;
+            }
+            // cnde's title bars and resize borders.
+            if !self.mod_held() && self.bar_press(button, location) {
                 return;
             }
             let window = self.space.element_under(location).map(|(w, _)| w.clone());
@@ -425,14 +436,18 @@ impl State {
             };
             // Keep the pointer at the same relative spot on the window, in
             // both directions, so the restored window lands under it.
+            // A title bar cnde draws counts as part of the window here.
+            let bar = crate::decorations::titlebar_height(&window) as f64;
             let fraction_x = (pointer_pos.x - geo.loc.x as f64) / geo.size.w.max(1) as f64;
-            let fraction_y = (pointer_pos.y - geo.loc.y as f64) / geo.size.h.max(1) as f64;
+            let fraction_y =
+                (pointer_pos.y - (geo.loc.y as f64 - bar)) / (geo.size.h as f64 + bar).max(1.0);
             // No animation: the window must stick to the pointer.
             self.set_placement(&window, Placement::Floating, false);
             let new_loc = Point::<f64, Logical>::from((
                 pointer_pos.x - fraction_x * restore_size.w as f64,
                 // Never above the usable area, so the titlebar stays reachable.
-                (pointer_pos.y - fraction_y * restore_size.h as f64).max(area.loc.y as f64),
+                (pointer_pos.y - fraction_y * (restore_size.h as f64 + bar) + bar)
+                    .max(area.loc.y as f64 + bar),
             ));
             self.space
                 .map_element(window.clone(), new_loc.to_i32_round(), true);

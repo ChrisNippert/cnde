@@ -76,6 +76,8 @@ pub struct State {
     pub wallpapers: crate::wallpaper::Wallpapers,
     pub dock_frost: crate::frost::DockFrost,
     pub crossfade: crate::crossfade::Crossfade,
+    pub decorations: crate::decorations::Decorations,
+    pub bar_input: crate::decorations::BarInput,
     pub overview: crate::overview::Overview,
     pub ipc: crate::ipc::IpcClients,
     pub popup_anims: crate::popup_anim::PopupAnims,
@@ -172,6 +174,8 @@ impl State {
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
             dock_frost: Default::default(),
             crossfade: Default::default(),
+            decorations: Default::default(),
+            bar_input: Default::default(),
             overview: crate::overview::Overview::new(),
             ipc: Default::default(),
             popup_anims: Default::default(),
@@ -351,6 +355,10 @@ impl State {
         // In the overview, windows are pictures: the compositor handles clicks.
         // While a screenshot is being framed, only its tool takes input.
         if self.overview.is_open() || self.screenshot.active {
+            return None;
+        }
+        // A title bar or resize border cnde draws: the compositor's.
+        if self.decoration_under(pos).is_some() {
             return None;
         }
         let window = self

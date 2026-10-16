@@ -105,26 +105,18 @@ delegate_dmabuf!(State);
 // for fractional scaling later.
 delegate_viewporter!(State);
 
-/// We don't draw server-side titlebars yet (ARCHITECTURE.md §4.4), so every
-/// client is told to decorate itself.
+/// Who draws title bars: see `decorations`.
 impl XdgDecorationHandler for State {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
-        set_client_side(&toplevel);
+        self.choose_decoration(&toplevel, None);
     }
 
-    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: DecorationMode) {
-        set_client_side(&toplevel);
+    fn request_mode(&mut self, toplevel: ToplevelSurface, mode: DecorationMode) {
+        self.choose_decoration(&toplevel, Some(mode));
     }
 
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
-        set_client_side(&toplevel);
+        self.choose_decoration(&toplevel, None);
     }
 }
 delegate_xdg_decoration!(State);
-
-fn set_client_side(toplevel: &ToplevelSurface) {
-    toplevel.with_pending_state(|state| state.decoration_mode = Some(DecorationMode::ClientSide));
-    if toplevel.is_initial_configure_sent() {
-        toplevel.send_pending_configure();
-    }
-}

@@ -335,6 +335,23 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     scheme(d.appearance.color_scheme),
                 )
                 .sub("Menus, quick settings and this window; also picks the wallpaper"),
+                Row::new(
+                    "appearance.titlebars",
+                    "Matching title bars",
+                    Control::Switch {
+                        on: s("cnde"),
+                        off: s("app"),
+                    },
+                    s(match c.appearance.titlebars {
+                        cnde_config::Titlebars::Cnde => "cnde",
+                        cnde_config::Titlebars::App => "app",
+                    }),
+                    s(match d.appearance.titlebars {
+                        cnde_config::Titlebars::Cnde => "cnde",
+                        cnde_config::Titlebars::App => "app",
+                    }),
+                )
+                .sub("Draw title bars for apps that would otherwise use their toolkit's plain one"),
             ],
         ),
         group(
