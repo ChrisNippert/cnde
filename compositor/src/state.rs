@@ -28,6 +28,8 @@ use smithay::{
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
+        pointer_constraints::PointerConstraintsState,
+        relative_pointer::RelativePointerManagerState,
         selection::data_device::DataDeviceState,
         shell::{
             wlr_layer::{Layer, WlrLayerShellState},
@@ -98,6 +100,10 @@ pub struct State {
     pub seat_state: SeatState<Self>,
     #[allow(dead_code)] // owns the global; dropping it removes the protocol
     pub viewporter_state: ViewporterState,
+    #[allow(dead_code)] // owns the global; dropping it removes the protocol
+    pub relative_pointer_state: RelativePointerManagerState,
+    #[allow(dead_code)] // owns the global; dropping it removes the protocol
+    pub pointer_constraints_state: PointerConstraintsState,
     pub data_device_state: DataDeviceState,
 }
 
@@ -119,6 +125,8 @@ impl State {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let relative_pointer_state = RelativePointerManagerState::new::<Self>(&dh);
+        let pointer_constraints_state = PointerConstraintsState::new::<Self>(&dh);
         let mut seat_state = SeatState::new();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, seat_name);
@@ -165,6 +173,8 @@ impl State {
             output_manager_state,
             seat_state,
             viewporter_state,
+            relative_pointer_state,
+            pointer_constraints_state,
             data_device_state,
         })
     }

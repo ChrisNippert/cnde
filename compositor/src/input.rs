@@ -12,6 +12,7 @@ use smithay::{
     },
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial, Size},
+    wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint},
 };
 
 use tracing::debug;
@@ -45,26 +46,7 @@ impl State {
                     event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
                 self.on_pointer_motion(location, event.time_msec());
             }
-            InputEvent::PointerMotion { event, .. } => {
-                let Some(pointer) = self.seat.get_pointer() else {
-                    return;
-                };
-                let current = pointer.current_location();
-                let location = self.clamp_to_outputs(current, current + event.delta());
-                self.on_pointer_motion(location, event.time_msec());
-                // Unaccelerated deltas for games and 3D apps (relative-pointer).
-                let under = self.surface_under(location);
-                pointer.relative_motion(
-                    self,
-                    under,
-                    &RelativeMotionEvent {
-                        delta: event.delta(),
-                        delta_unaccel: event.delta_unaccel(),
-                        utime: event.time(),
-                    },
-                );
-                pointer.frame(self);
-            }
+            InputEvent::PointerMotion { event, .. } => self.on_relative_motion::<I>(event),
             InputEvent::PointerButton { event, .. } => {
                 self.on_pointer_button(event.button_code(), event.state(), event.time_msec());
             }
@@ -193,6 +175,73 @@ impl State {
         }
     }
 
+    // Constraint handling adapted from smithay: anvil/src/input_handler.rs
+    /// Mouse movement from libinput. Games get raw deltas (relative-pointer)
+    /// whatever happens; a pointer lock keeps the cursor still, a confinement
+    /// keeps it inside the window or its region.
+    fn on_relative_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        let current = pointer.current_location();
+        let under = self.surface_under(current);
+
+        let mut locked = false;
+        let mut confined = false;
+        let mut confine_region = None;
+        if let Some((surface, surface_loc)) = &under {
+            with_pointer_constraint(surface, &pointer, |constraint| {
+                let Some(constraint) = constraint.filter(|c| c.is_active()) else {
+                    return;
+                };
+                // A constraint only applies inside its region.
+                let point = (current - *surface_loc).to_i32_round();
+                if !constraint
+                    .region()
+                    .is_none_or(|region| region.contains(point))
+                {
+                    return;
+                }
+                match &*constraint {
+                    PointerConstraint::Locked(_) => locked = true,
+                    PointerConstraint::Confined(confine) => {
+                        confined = true;
+                        confine_region = confine.region().cloned();
+                    }
+                }
+            });
+        }
+
+        pointer.relative_motion(
+            self,
+            under.clone(),
+            &RelativeMotionEvent {
+                delta: event.delta(),
+                delta_unaccel: event.delta_unaccel(),
+                utime: event.time(),
+            },
+        );
+        if locked {
+            pointer.frame(self);
+            return;
+        }
+
+        let target = self.clamp_to_outputs(current, current + event.delta());
+        if confined && let Some((surface, surface_loc)) = &under {
+            let stays_on_surface = self
+                .surface_under(target)
+                .is_some_and(|(new_surface, _)| &new_surface == surface);
+            let stays_in_region = confine_region
+                .as_ref()
+                .is_none_or(|region| region.contains((target - *surface_loc).to_i32_round()));
+            if !stays_on_surface || !stays_in_region {
+                pointer.frame(self);
+                return;
+            }
+        }
+        self.on_pointer_motion(target, event.time_msec());
+    }
+
     fn on_pointer_motion(&mut self, location: Point<f64, Logical>, time: u32) {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
@@ -200,7 +249,7 @@ impl State {
         let under = self.surface_under(location);
         pointer.motion(
             self,
-            under,
+            under.clone(),
             &MotionEvent {
                 location,
                 serial: SERIAL_COUNTER.next_serial(),
@@ -208,6 +257,23 @@ impl State {
             },
         );
         pointer.frame(self);
+
+        // Entering a surface (or its region) with a pending constraint
+        // activates it: games lock the pointer once it's over their window.
+        if let Some((surface, surface_loc)) = under {
+            with_pointer_constraint(&surface, &pointer, |constraint| {
+                if let Some(constraint) = constraint.filter(|c| !c.is_active()) {
+                    let point = (location - surface_loc).to_i32_round();
+                    if constraint
+                        .region()
+                        .is_none_or(|region| region.contains(point))
+                    {
+                        constraint.activate();
+                    }
+                }
+            });
+        }
+
         // We draw the cursor ourselves on real hardware.
         if self.backend.draws_cursor() {
             self.queue_redraw();

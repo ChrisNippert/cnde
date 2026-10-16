@@ -5,16 +5,21 @@ mod xdg_shell;
 
 use smithay::{
     backend::allocator::dmabuf::Dmabuf,
-    delegate_data_device, delegate_dmabuf, delegate_output, delegate_seat, delegate_viewporter,
-    delegate_xdg_decoration,
-    input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
+    delegate_data_device, delegate_dmabuf, delegate_output, delegate_pointer_constraints,
+    delegate_relative_pointer, delegate_seat, delegate_viewporter, delegate_xdg_decoration,
+    input::{
+        Seat, SeatHandler, SeatState,
+        pointer::{CursorImageStatus, PointerHandle},
+    },
     reexports::{
         wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
         wayland_server::{Resource, protocol::wl_surface::WlSurface},
     },
+    utils::{Logical, Point},
     wayland::{
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         output::OutputHandler,
+        pointer_constraints::{PointerConstraintsHandler, with_pointer_constraint},
         selection::{
             SelectionHandler,
             data_device::{
@@ -92,6 +97,46 @@ delegate_dmabuf!(State);
 // Surface cropping/scaling. Required by xwayland-satellite, and the basis
 // for fractional scaling later.
 delegate_viewporter!(State);
+
+// Raw mouse deltas for games and 3D apps; events are sent from input.rs.
+delegate_relative_pointer!(State);
+
+/// Pointer lock (mouse-look) and confinement; enforced in input.rs.
+impl PointerConstraintsHandler for State {
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+        // Activate right away if the pointer is already over that surface;
+        // otherwise on_pointer_motion does it when the pointer gets there.
+        if pointer.current_focus().as_ref() == Some(surface) {
+            with_pointer_constraint(surface, pointer, |constraint| {
+                if let Some(constraint) = constraint {
+                    constraint.activate();
+                }
+            });
+        }
+    }
+
+    /// Where a game wants the cursor when it releases a lock (e.g. back
+    /// where the crosshair was), relative to its surface.
+    fn cursor_position_hint(
+        &mut self,
+        surface: &WlSurface,
+        pointer: &PointerHandle<Self>,
+        location: Point<f64, Logical>,
+    ) {
+        let active =
+            with_pointer_constraint(surface, pointer, |c| c.is_some_and(|c| c.is_active()));
+        let Some(window) = self.window_for_surface(surface).filter(|_| active) else {
+            return;
+        };
+        let Some(window_loc) = self.space.element_location(&window) else {
+            return;
+        };
+        // The surface origin, not the window geometry (CSD shadows).
+        let origin = (window_loc - window.geometry().loc).to_f64();
+        pointer.set_location(origin + location);
+    }
+}
+delegate_pointer_constraints!(State);
 
 /// We don't draw server-side titlebars yet (ARCHITECTURE.md §4.4), so every
 /// client is told to decorate itself.
