@@ -23,6 +23,7 @@ pub struct Config {
     pub wallpaper: Wallpaper,
     pub animations: Animations,
     pub panel: Panel,
+    pub dock: Dock,
     pub launcher: Launcher,
     pub autostart: Autostart,
 }
@@ -245,6 +246,59 @@ impl Default for Panel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Dock {
+    pub position: DockPosition,
+    /// For a dock on a screen edge.
+    pub visibility: DockVisibility,
+    /// Desktop file IDs, e.g. "firefox.desktop". Ones not installed are
+    /// skipped.
+    pub favorites: Vec<String>,
+    /// Logical pixels.
+    pub icon_size: u32,
+}
+
+impl Default for Dock {
+    fn default() -> Self {
+        Self {
+            position: DockPosition::Overview,
+            visibility: DockVisibility::Always,
+            favorites: vec![
+                "firefox.desktop".into(),
+                "org.gnome.Nautilus.desktop".into(),
+                "Alacritty.desktop".into(),
+            ],
+            icon_size: 48,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DockPosition {
+    /// Only in the overview (GNOME).
+    #[default]
+    Overview,
+    Bottom,
+    Left,
+    Right,
+    /// No dock.
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DockVisibility {
+    /// Always shown; maximized windows stop at it.
+    #[default]
+    Always,
+    /// Hides when a window would cover it. (Not yet: behaves as "always".)
+    Intellihide,
+    /// Hidden until the pointer touches that edge. (Not yet: as "always".)
+    Autohide,
+}
+
 /// Parse "#rrggbb" or "#rrggbbaa" into (r, g, b, a).
 pub fn parse_color(text: &str) -> Option<(u8, u8, u8, u8)> {
     let hex = text.strip_prefix('#')?;
@@ -375,6 +429,12 @@ impl Config {
             2.0,
             96.0,
         )?;
+        if !(24..=128).contains(&self.dock.icon_size) {
+            return Err(Error::Invalid(format!(
+                "dock.icon_size must be 24 to 128, got {}",
+                self.dock.icon_size
+            )));
+        }
         for output in &self.outputs {
             if let Some(scale) = output.scale {
                 in_range(

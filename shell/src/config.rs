@@ -111,9 +111,13 @@ impl App {
         }
         info!("config reloaded");
         self.theme = theme_from(&config);
+        let dock_moved = config.dock.position != self.config.dock.position;
         self.config = config;
         for panel in &mut self.panels {
             panel.apply_theme(&self.theme);
+        }
+        if dock_moved {
+            self.dock = None;
         }
         self.sync_panels();
         self.redraw_all();

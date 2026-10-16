@@ -34,6 +34,8 @@ pub enum Placement {
 
 #[derive(Default)]
 pub struct WindowState {
+    /// Stable identity for IPC clients (the dock), never reused.
+    pub id: u64,
     pub placement: Placement,
     /// Floating geometry to return to when leaving maximize/snap/fullscreen.
     pub restore: Option<Rectangle<i32, Logical>>,
@@ -51,7 +53,13 @@ pub struct WindowState {
 
 pub fn with_state<T>(window: &Window, f: impl FnOnce(&mut WindowState) -> T) -> T {
     let data = window.user_data();
-    data.insert_if_missing(|| RefCell::new(WindowState::default()));
+    data.insert_if_missing(|| {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        RefCell::new(WindowState {
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ..WindowState::default()
+        })
+    });
     let cell = data
         .get::<RefCell<WindowState>>()
         .expect("WindowState was inserted above");

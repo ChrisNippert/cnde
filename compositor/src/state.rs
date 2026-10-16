@@ -253,6 +253,7 @@ impl State {
             crate::capture::capture_toplevels(&mut self.capture, renderer, &self.space);
         }
         self.refresh_ext_workspaces();
+        self.sync_ipc_windows();
         // Last, so frame callbacks sent while rendering go out now.
         if let Err(err) = self.display_handle.flush_clients() {
             warn!(?err, "failed to flush clients");

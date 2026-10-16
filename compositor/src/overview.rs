@@ -127,6 +127,10 @@ impl Overview {
         }
     }
 
+    pub fn set_focus_after(&mut self, window: Window) {
+        self.focus_after = Some(window);
+    }
+
     pub fn take_focus_after(&mut self) -> Option<Window> {
         self.focus_after.take()
     }

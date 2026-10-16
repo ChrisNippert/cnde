@@ -24,6 +24,10 @@ entries when they're done.
   unzoomed spot; windows on hidden workspaces don't update live; the search
   box is only on the main monitor; no app grid button yet; no hover
   highlight on windows.
+- **Dock:** no name tooltips yet, no right-click menu (pin/unpin, quit),
+  no drag to reorder; favorites are edited in the config. The intellihide
+  and autohide options are accepted but act as "always". Edge docks are on
+  the main monitor only.
 - **Wallpaper changes** swap instantly instead of crossfading.
 
 - **Screen capture:**

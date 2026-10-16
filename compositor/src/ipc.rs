@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
 };
 
-use cnde_ipc::{Event, Request};
+use cnde_ipc::{Event, Request, WindowInfo};
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, generic::Generic};
 use tracing::{debug, info, warn};
 
@@ -17,6 +17,8 @@ use crate::state::State;
 pub struct IpcClients {
     next_id: u64,
     clients: Vec<(u64, UnixStream)>,
+    /// The window list as last sent; `None` forces a resend.
+    windows: Option<Vec<WindowInfo>>,
 }
 
 impl IpcClients {
@@ -87,6 +89,8 @@ impl State {
         let id = self.ipc.next_id;
         self.ipc.next_id += 1;
         self.ipc.clients.push((id, writer));
+        // Everyone gets the window list again; the newcomer needs it.
+        self.ipc.windows = None;
         debug!(id, "IPC client connected");
 
         let mut pending = Vec::new();
@@ -135,6 +139,68 @@ impl State {
         match request {
             Request::SetOverview { open } => self.set_overview(open),
             Request::ToggleOverview => self.activities_clicked(),
+            Request::ShowAppGrid => {
+                self.set_overview(true);
+                self.ipc.broadcast(&Event::ToggleAppGrid);
+            }
+            Request::ActivateWindow { id } => self.activate_window(id),
+        }
+    }
+
+    /// Send the window list if it changed. Runs every loop iteration; cheap
+    /// with a handful of windows, and free with no clients.
+    pub fn sync_ipc_windows(&mut self) {
+        if self.ipc.clients.is_empty() {
+            return;
+        }
+        let focused = self.focused_window();
+        let windows: Vec<WindowInfo> = self
+            .workspaces
+            .list
+            .iter()
+            .flat_map(|ws| &ws.windows)
+            .map(|window| {
+                let (title, app_id) = crate::capture::title_and_app_id(window);
+                WindowInfo {
+                    id: crate::window::with_state(window, |s| s.id),
+                    app_id,
+                    title,
+                    focused: focused.as_ref() == Some(window),
+                }
+            })
+            .collect();
+        if self.ipc.windows.as_ref() != Some(&windows) {
+            self.ipc.broadcast(&Event::Windows {
+                windows: windows.clone(),
+            });
+            self.ipc.windows = Some(windows);
+        }
+    }
+
+    /// The dock picked a window: show its workspace (on the main monitor,
+    /// unless it's already on screen) and focus it.
+    fn activate_window(&mut self, id: u64) {
+        let Some((index, window)) = self.workspaces.list.iter().enumerate().find_map(|(i, ws)| {
+            ws.windows
+                .iter()
+                .find(|w| crate::window::with_state(w, |s| s.id) == id)
+                .map(|w| (i, w.clone()))
+        }) else {
+            return;
+        };
+        let visible = self.space.elements().any(|w| w == &window);
+        if !visible {
+            let current = self
+                .workspaces
+                .motion
+                .as_ref()
+                .map_or(self.workspaces.active, |m| m.to) as isize;
+            self.step_workspace(index as isize - current, false);
+        }
+        self.focus_window(Some(&window));
+        if self.overview.is_open() {
+            self.overview.set_focus_after(window);
+            self.set_overview(false);
         }
     }
 }

@@ -291,7 +291,7 @@ impl CaptureState {
     }
 }
 
-fn title_and_app_id(window: &Window) -> (String, String) {
+pub fn title_and_app_id(window: &Window) -> (String, String) {
     let Some(toplevel) = window.toplevel() else {
         return Default::default();
     };

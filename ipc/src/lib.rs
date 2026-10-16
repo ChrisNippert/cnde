@@ -23,14 +23,35 @@ pub enum Event {
     OverviewClosed,
     /// Super+A: show the app grid (or hide it, if it's showing).
     ToggleAppGrid,
+    /// Every open window, sent whenever the list, a title or the focus
+    /// changes (and right after connecting).
+    Windows {
+        windows: Vec<WindowInfo>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowInfo {
+    pub id: u64,
+    pub app_id: String,
+    pub title: String,
+    pub focused: bool,
 }
 
 /// Clients -> compositor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "request", rename_all = "snake_case")]
 pub enum Request {
-    SetOverview { open: bool },
+    SetOverview {
+        open: bool,
+    },
     ToggleOverview,
+    /// Open the overview on the app grid (the dock's apps button).
+    ShowAppGrid,
+    /// Focus this window, switching to its workspace if needed.
+    ActivateWindow {
+        id: u64,
+    },
 }
 
 /// Where a compositor with process id `pid` listens.

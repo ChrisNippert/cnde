@@ -6,6 +6,7 @@
 mod actions;
 mod apps;
 mod config;
+mod dock;
 mod ipc;
 mod launcher;
 mod panel;
@@ -40,7 +41,7 @@ use smithay_client_toolkit::{
     seat::{
         Capability, SeatHandler, SeatState,
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
-        pointer::{BTN_LEFT, PointerEvent, PointerEventKind, PointerHandler},
+        pointer::{BTN_LEFT, BTN_MIDDLE, PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
         WaylandSurface,
@@ -58,6 +59,7 @@ use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::Ext
 
 use crate::{
     actions::Actions,
+    dock::{Click, Dock},
     launcher::{Launcher, Outcome},
     panel::{Button, Panel},
     quick_settings::QuickSettings,
@@ -122,6 +124,11 @@ pub struct App {
     ipc: ipc::Ipc,
     /// The overview's search box, while the overview is open.
     launcher: Option<Launcher>,
+    dock: Option<Dock>,
+    /// Every open window, from the compositor.
+    windows: Vec<cnde_ipc::WindowInfo>,
+    /// Where an overview dock goes (the overview's monitor).
+    dock_output: Option<wl_output::WlOutput>,
     overview_open: bool,
     /// When quick settings was last dismissed by the compositor (a click
     /// outside it). A click on the status icons right after is that same
@@ -173,6 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     launcher.refresh(&app.apps, &app.launches, &app.theme);
                 }
                 app.draw_launcher();
+                app.sync_dock();
             }
         })?;
 
@@ -203,6 +211,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop_handle: event_loop.handle(),
         ipc: ipc::Ipc::connect(ipc_tx),
         launcher: None,
+        dock: None,
+        windows: Vec::new(),
+        dock_output: None,
         overview_open: false,
         quick_settings_dismissed: None,
         apps: Vec::new(),
@@ -278,6 +289,10 @@ impl App {
                     warn!(%output, "overview opened on an unknown monitor");
                     return;
                 };
+                if self.config.dock.position == cnde_config::DockPosition::Overview {
+                    self.dock_output = Some(output.clone());
+                    self.sync_dock();
+                }
                 if self.launcher.as_ref().is_some_and(|l| l.output == output) {
                     return;
                 }
@@ -302,6 +317,11 @@ impl App {
                 self.overview_open = false;
                 self.launcher = None;
                 self.redraw_panels();
+                self.sync_dock();
+            }
+            cnde_ipc::Event::Windows { windows } => {
+                self.windows = windows;
+                self.sync_dock();
             }
         }
     }
@@ -389,6 +409,9 @@ impl App {
             .find(|(_, name, _)| self.config.output(name).is_some_and(|c| c.main))
             .or_else(|| outputs.iter().min_by_key(|(_, _, x)| *x))
             .map(|(o, _, _)| o.clone());
+        if self.config.dock.position != cnde_config::DockPosition::Overview {
+            self.dock_output = main.clone();
+        }
         let wanted: Vec<wl_output::WlOutput> = if self.config.panel.all_monitors {
             outputs.into_iter().map(|(o, _, _)| o).collect()
         } else {
@@ -407,6 +430,62 @@ impl App {
                 );
                 self.panels.push(panel);
             }
+        }
+        self.sync_dock();
+    }
+
+    /// Create, move or drop the dock to match the config (and, for an
+    /// overview dock, whether the overview is open), then refresh it.
+    fn sync_dock(&mut self) {
+        use cnde_config::DockPosition;
+        let position = self.config.dock.position;
+        let wanted = match position {
+            DockPosition::Off => None,
+            DockPosition::Overview if !self.overview_open => None,
+            _ => self.dock_output.clone(),
+        };
+        if self
+            .dock
+            .as_ref()
+            .is_some_and(|d| Some(&d.output) != wanted.as_ref() || d.position() != position)
+        {
+            self.dock = None;
+        }
+        let Some(output) = wanted else {
+            self.dock = None;
+            return;
+        };
+        if self.dock.is_none() {
+            let scale = self
+                .outputs
+                .info(&output)
+                .map_or(1, |info| info.scale_factor);
+            self.dock = Some(Dock::new(
+                &self.compositor,
+                &self.layer_shell,
+                &self.qh,
+                output,
+                position,
+                scale,
+            ));
+        }
+        let items = dock::items(&self.config.dock.favorites, &self.apps, &self.windows);
+        if let Some(dock) = &mut self.dock {
+            dock.update(items, self.config.dock.icon_size as f32);
+        }
+        self.draw_dock();
+    }
+
+    fn draw_dock(&mut self) {
+        if let Some(dock) = &mut self.dock {
+            dock.draw(
+                &self.qh,
+                &mut self.pool,
+                self.shm_format,
+                &mut self.icons,
+                &self.theme,
+                self.config.dock.icon_size as f32,
+            );
         }
     }
 
@@ -553,6 +632,12 @@ impl CompositorHandler for App {
             launcher.set_scale(factor);
             self.draw_launcher();
         }
+        if let Some(dock) = &mut self.dock
+            && dock.layer.wl_surface() == surface
+        {
+            dock.set_scale(factor);
+            self.draw_dock();
+        }
     }
     fn transform_changed(
         &mut self,
@@ -580,6 +665,12 @@ impl CompositorHandler for App {
             && launcher.frame_done()
         {
             self.draw_launcher();
+        }
+        if let Some(dock) = &mut self.dock
+            && dock.layer.wl_surface() == surface
+            && dock.frame_done()
+        {
+            self.draw_dock();
         }
     }
     fn surface_enter(
@@ -622,6 +713,9 @@ impl LayerShellHandler for App {
         if self.launcher.as_ref().is_some_and(|l| &l.layer == layer) {
             self.launcher = None;
         }
+        if self.dock.as_ref().is_some_and(|d| &d.layer == layer) {
+            self.dock = None;
+        }
     }
 
     fn configure(
@@ -641,6 +735,12 @@ impl LayerShellHandler for App {
         {
             launcher.configured();
             self.draw_launcher();
+        }
+        if let Some(dock) = &mut self.dock
+            && &dock.layer == layer
+        {
+            dock.configured();
+            self.draw_dock();
         }
     }
 }
@@ -700,6 +800,41 @@ impl PointerHandler for App {
         events: &[PointerEvent],
     ) {
         for event in events {
+            if let Some(dock) = &mut self.dock
+                && dock.layer.wl_surface() == &event.surface
+            {
+                let icon = self.config.dock.icon_size as f32;
+                let click = match event.kind {
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        if dock.hover(Some(event.position), icon) {
+                            self.draw_dock();
+                        }
+                        continue;
+                    }
+                    PointerEventKind::Leave { .. } => {
+                        if dock.hover(None, icon) {
+                            self.draw_dock();
+                        }
+                        continue;
+                    }
+                    PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
+                        dock.click(event.position, icon, false)
+                    }
+                    PointerEventKind::Press { button, .. } if button == BTN_MIDDLE => {
+                        dock.click(event.position, icon, true)
+                    }
+                    _ => continue,
+                };
+                match click {
+                    Click::Nothing => {}
+                    Click::Launch(id) => self.launch(&id),
+                    Click::Activate(id) => {
+                        self.ipc.send(&cnde_ipc::Request::ActivateWindow { id });
+                    }
+                    Click::AppGrid => self.ipc.send(&cnde_ipc::Request::ShowAppGrid),
+                }
+                continue;
+            }
             if let Some(launcher) = &mut self.launcher
                 && launcher.layer.wl_surface() == &event.surface
             {

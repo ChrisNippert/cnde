@@ -23,6 +23,9 @@ pub struct App {
     pub icon: String,
     exec: String,
     terminal: bool,
+    /// StartupWMClass: the app ID its windows use, when that isn't the
+    /// desktop file's name.
+    wm_class: String,
     keywords: Vec<String>,
     /// Lowercased for matching.
     name_lower: String,
@@ -168,12 +171,32 @@ fn parse(id: &str, text: &str, current_desktop: &str) -> Option<App> {
         icon: get("Icon").to_string(),
         exec: get("Exec").to_string(),
         terminal: yes("Terminal"),
+        wm_class: get("StartupWMClass").to_string(),
         keywords: get("Keywords")
             .split(';')
             .filter(|k| !k.is_empty())
             .map(str::to_lowercase)
             .collect(),
     })
+}
+
+impl App {
+    /// Whether a window with this Wayland app ID belongs to this app:
+    /// "firefox" for firefox.desktop, "org.gnome.Nautilus" for
+    /// org.gnome.Nautilus.desktop, or the entry's StartupWMClass.
+    pub fn owns(&self, app_id: &str) -> bool {
+        if app_id.is_empty() {
+            return false;
+        }
+        let stem = self.id.strip_suffix(".desktop").unwrap_or(&self.id);
+        stem.eq_ignore_ascii_case(app_id)
+            || self.wm_class.eq_ignore_ascii_case(app_id)
+            // Flatpak and reverse-DNS IDs often end in the app ID.
+            || stem
+                .rsplit('.')
+                .next()
+                .is_some_and(|last| last.eq_ignore_ascii_case(app_id))
+    }
 }
 
 /// Desktop entry string escapes: \s \n \t \r \\.

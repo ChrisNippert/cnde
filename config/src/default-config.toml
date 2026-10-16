@@ -57,6 +57,12 @@
 # workspace_dot_size = 7
 # workspace_active_width = 28
 
+[dock]
+# position = "overview"    # "overview" (only there, like GNOME), "bottom", "left", "right", "off"
+# visibility = "always"    # on an edge: "always" ("intellihide" and "autohide" are coming)
+# favorites = ["firefox.desktop", "org.gnome.Nautilus.desktop", "Alacritty.desktop"]
+# icon_size = 48
+
 [launcher]
 # Tapping Super opens the overview. Set a command to run that instead.
 # command = ""             # e.g. "fuzzel"
