@@ -244,6 +244,7 @@ impl App {
     fn draw_quick_settings(&mut self) {
         if let Some((qs, _)) = &mut self.quick_settings {
             qs.draw(
+                &self.qh,
                 &mut self.pool,
                 self.shm_format,
                 &mut self.fonts,
@@ -363,7 +364,20 @@ impl CompositorHandler for App {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    fn frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        if let Some((qs, _)) = &mut self.quick_settings
+            && qs.popup.wl_surface() == surface
+            && qs.frame_done()
+        {
+            self.draw_quick_settings();
+        }
+    }
     fn surface_enter(
         &mut self,
         _: &Connection,

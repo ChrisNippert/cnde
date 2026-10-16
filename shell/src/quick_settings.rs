@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use cnde_ui::{Canvas, Color, Fonts, Icons, Theme, Weight};
 use smithay_client_toolkit::{
-    compositor::CompositorState,
+    compositor::{CompositorState, FrameCallbackData},
     reexports::{
         client::{
             QueueHandle,
@@ -197,6 +197,12 @@ pub struct QuickSettings {
     /// What the user just set, shown until the audio server reports it
     /// back (so the slider tracks the pointer with no lag).
     volume_override: Option<(u32, Instant)>,
+    /// A frame callback is outstanding: draw when it fires, not before.
+    /// Pointer events can arrive far faster than the screen refreshes (1 kHz
+    /// mice), and painting each one would fall behind.
+    frame_pending: bool,
+    /// Something changed since the last draw.
+    dirty: bool,
 }
 
 impl QuickSettings {
@@ -231,11 +237,19 @@ impl QuickSettings {
             layout,
             dragging_volume: false,
             volume_override: None,
+            frame_pending: false,
+            dirty: false,
         })
     }
 
     pub fn configured(&mut self) {
         self.configured = true;
+    }
+
+    /// The compositor is ready for a new frame. Returns true if one is owed.
+    pub fn frame_done(&mut self) -> bool {
+        self.frame_pending = false;
+        self.dirty
     }
 
     pub fn set_scale(&mut self, scale: i32) {
@@ -309,8 +323,10 @@ impl QuickSettings {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
+        qh: &QueueHandle<App>,
         pool: &mut SlotPool,
         format: wl_shm::Format,
         fonts: &mut Fonts,
@@ -318,9 +334,11 @@ impl QuickSettings {
         theme: &Theme,
         status: &Status,
     ) {
-        if !self.configured {
+        if !self.configured || self.frame_pending {
+            self.dirty = true;
             return;
         }
+        self.dirty = false;
         let layout = &self.layout;
         let scale = self.scale;
         let (w, h) = (
@@ -363,6 +381,8 @@ impl QuickSettings {
         let surface = self.popup.wl_surface();
         surface.damage_buffer(0, 0, w, h);
         if buffer.attach_to(surface).is_ok() {
+            surface.frame(qh, FrameCallbackData(surface.clone()));
+            self.frame_pending = true;
             surface.commit();
         }
     }
@@ -660,20 +680,42 @@ mod tests {
         };
         let theme = Theme::dark();
         let status = Status {
-            battery: Some(crate::status::Battery { percent: 87.0, charging: true, full: false }),
-            network: crate::status::Network::Wifi { ssid: "Homenet".into(), strength: 80 },
+            battery: Some(crate::status::Battery {
+                percent: 87.0,
+                charging: true,
+                full: false,
+            }),
+            network: crate::status::Network::Wifi {
+                ssid: "Homenet".into(),
+                strength: 80,
+            },
             wifi_enabled: Some(true),
-            volume: Some(crate::status::Volume { percent: 62, muted: false }),
+            volume: Some(crate::status::Volume {
+                percent: 62,
+                muted: false,
+            }),
         };
         let mut fonts = Fonts::new(theme.font_families);
         let mut icons = Icons::new();
         let layout = layout(&theme, std::env::var_os("CNDE_QS_POWER").is_some());
         let scale = 2.0;
-        let (w, h) = ((layout.width * scale) as u32, (layout.height * scale) as u32);
+        let (w, h) = (
+            (layout.width * scale) as u32,
+            (layout.height * scale) as u32,
+        );
         let mut pixels = vec![0u8; (w * h * 4) as usize];
         {
             let mut canvas = Canvas::new(&mut pixels, w, h, scale).unwrap();
-            paint(&mut canvas, &layout, &mut fonts, &mut icons, &theme, &status, (62, false), scale);
+            paint(
+                &mut canvas,
+                &layout,
+                &mut fonts,
+                &mut icons,
+                &theme,
+                &status,
+                (62, false),
+                scale,
+            );
         }
         let mut data = format!("{w}x{h}\n").into_bytes();
         data.extend_from_slice(&pixels);
