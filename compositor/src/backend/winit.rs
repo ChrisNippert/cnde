@@ -179,7 +179,7 @@ impl State {
                     return;
                 }
             };
-            let elements = render::output_elements(
+            let mut elements = render::output_elements(
                 renderer,
                 &self.space,
                 &self.closing,
@@ -188,6 +188,9 @@ impl State {
                 &backend.output,
                 now,
             );
+            if let Some(wallpaper) = self.wallpapers.element(renderer, &backend.output) {
+                elements.push(render::OutputElement::Wallpaper(wallpaper));
+            }
             match backend.damage_tracker.render_output(
                 renderer,
                 &mut framebuffer,

@@ -34,6 +34,15 @@
 # scale = 1.0
 # main = true              # anchor for workspaces; default is the leftmost
 
+[appearance]
+# color_scheme = "dark"    # or "light"; picks the wallpaper variant
+
+[wallpaper]
+# light = ""               # image path (PNG, JPEG, WebP), e.g. "~/Pictures/day.jpg"
+# dark = ""                # used in dark mode; empty uses `light` for both
+# fit = "fill"             # "fill" (crop to cover), "fit" (whole image), "stretch"
+# With no image set, a built-in gradient is drawn.
+
 [animations]
 # speed = 1.0              # 0.5 = twice as fast, 0.0 = no animations
 

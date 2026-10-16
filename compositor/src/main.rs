@@ -17,6 +17,7 @@ mod snap;
 mod snapshot;
 mod spawn;
 mod state;
+mod wallpaper;
 mod window;
 mod workspaces;
 mod xwayland;

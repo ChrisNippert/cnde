@@ -116,6 +116,8 @@ impl State {
     /// startup, when everything is applied.
     pub fn apply_config(&mut self, old: Option<&Config>) {
         animation::set_speed(self.config.animations.speed);
+        self.wallpapers.update_config(&self.config);
+        self.queue_redraw();
 
         let keyboard_changed =
             old.is_none_or(|old| old.input.keyboard != self.config.input.keyboard);

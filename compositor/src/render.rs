@@ -41,6 +41,7 @@ render_elements! {
     Solid = SolidColorRenderElement,
     Cursor = MemoryRenderBufferRenderElement<GlesRenderer>,
     Surface = WaylandSurfaceRenderElement<GlesRenderer>,
+    Wallpaper = TextureRenderElement<GlesTexture>,
 }
 
 /// The pointer, if it's on this output: a themed image, or the surface a

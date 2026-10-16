@@ -73,6 +73,7 @@ pub struct State {
     pub unmapped: Vec<Window>,
     /// Snapshots of destroyed windows, still animating out.
     pub closing: Vec<ClosingWindow>,
+    pub wallpapers: crate::wallpaper::Wallpapers,
     /// Drag-to-edge preview while a window is being moved.
     pub snap_preview: Option<SnapPreview>,
     pub popups: PopupManager,
@@ -155,6 +156,7 @@ impl State {
             swipe_active: false,
             unmapped: Vec::new(),
             closing: Vec::new(),
+            wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
             snap_preview: None,
             popups: PopupManager::default(),
 

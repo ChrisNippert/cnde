@@ -19,6 +19,8 @@ pub struct Config {
     /// Per-monitor settings, matched by connector name (e.g. "DP-2").
     #[serde(rename = "output")]
     pub outputs: Vec<OutputConfig>,
+    pub appearance: Appearance,
+    pub wallpaper: Wallpaper,
     pub animations: Animations,
     pub panel: Panel,
     pub launcher: Launcher,
@@ -127,6 +129,70 @@ pub struct OutputConfig {
 pub struct Position {
     pub x: i32,
     pub y: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Appearance {
+    pub color_scheme: ColorScheme,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorScheme {
+    #[default]
+    Dark,
+    Light,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Wallpaper {
+    /// Image file (PNG, JPEG or WebP); "~/" means the home directory.
+    /// Empty: the built-in gradient.
+    pub light: String,
+    /// Used in dark mode. Empty: `light` is used in both.
+    pub dark: String,
+    pub fit: WallpaperFit,
+}
+
+impl Default for Wallpaper {
+    fn default() -> Self {
+        Self {
+            light: String::new(),
+            dark: String::new(),
+            fit: WallpaperFit::Fill,
+        }
+    }
+}
+
+impl Wallpaper {
+    /// The image for `scheme`, with "~/" expanded; `None` for the built-in one.
+    pub fn path(&self, scheme: ColorScheme) -> Option<PathBuf> {
+        let path = match scheme {
+            ColorScheme::Dark if !self.dark.is_empty() => &self.dark,
+            _ => &self.light,
+        };
+        if path.is_empty() {
+            return None;
+        }
+        match path.strip_prefix("~/") {
+            Some(rest) => Some(PathBuf::from(std::env::var_os("HOME")?).join(rest)),
+            None => Some(PathBuf::from(path)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WallpaperFit {
+    /// Cover the whole screen, cropping what doesn't fit.
+    #[default]
+    Fill,
+    /// Show the whole image, with bars where it doesn't fill the screen.
+    Fit,
+    /// Stretch to the screen, ignoring the aspect ratio.
+    Stretch,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -366,6 +432,21 @@ mod tests {
         assert_eq!(parse_color("#00000080"), Some((0, 0, 0, 128)));
         assert_eq!(parse_color("ff8000"), None);
         assert!(Config::parse("[panel]\nbackground = \"black\"\n").is_err());
+    }
+
+    #[test]
+    fn wallpaper_variants() {
+        let config = Config::parse(
+            "[wallpaper]\nlight = \"/a.png\"\n[appearance]\ncolor_scheme = \"light\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.appearance.color_scheme, ColorScheme::Light);
+        // No dark variant: the light one is used in dark mode too.
+        assert_eq!(
+            config.wallpaper.path(ColorScheme::Dark),
+            Some(PathBuf::from("/a.png"))
+        );
+        assert_eq!(Wallpaper::default().path(ColorScheme::Dark), None);
     }
 
     #[test]

@@ -524,6 +524,7 @@ impl State {
             layer.layer_surface().send_close();
         }
         self.space.unmap_output(&surface.output);
+        self.wallpapers.forget(&surface.output.name());
         self.display_handle.remove_global::<State>(surface.global);
     }
 
@@ -711,6 +712,9 @@ impl State {
             &output,
             now,
         ));
+        if let Some(wallpaper) = self.wallpapers.element(&mut gpu.renderer, &output) {
+            elements.push(render::OutputElement::Wallpaper(wallpaper));
+        }
 
         let rendered = match surface.drm_output.render_frame(
             &mut gpu.renderer,
