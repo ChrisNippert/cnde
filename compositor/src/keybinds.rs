@@ -27,6 +27,8 @@ pub enum Action {
     /// Tapping the mod key alone: the overview, or a configured launcher.
     Launcher,
     CloseOverview,
+    /// Super+A: the overview's app grid.
+    AppGrid,
     /// Slide the workspace strip: +1 = next (content moves left).
     /// `carry` brings the focused window along.
     Workspace {
@@ -97,6 +99,7 @@ pub fn action_for(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> Option
         (false, keysyms::KEY_q) => Action::SpawnTerminal,
         (false, keysyms::KEY_f) => Action::SpawnBrowser,
         (false, keysyms::KEY_c) => Action::CloseWindow,
+        (false, keysyms::KEY_a) => Action::AppGrid,
         (false, keysyms::KEY_Up) => Action::Maximize,
         (false, keysyms::KEY_Down) => Action::Restore,
         (false, keysyms::KEY_Left) => Action::SnapLeft,

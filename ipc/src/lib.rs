@@ -21,6 +21,8 @@ pub enum Event {
         output: String,
     },
     OverviewClosed,
+    /// Super+A: show the app grid (or hide it, if it's showing).
+    ToggleAppGrid,
 }
 
 /// Clients -> compositor.

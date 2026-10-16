@@ -182,6 +182,10 @@ impl State {
                 }
             }
             Action::CloseOverview => self.set_overview(false),
+            Action::AppGrid => {
+                self.set_overview(true);
+                self.ipc.broadcast(&cnde_ipc::Event::ToggleAppGrid);
+            }
         }
     }
 

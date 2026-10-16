@@ -91,6 +91,13 @@ pub struct Theme {
     pub search_selected: Color,
     pub search_max_results: usize,
 
+    // App grid (every app, in the overview)
+    pub grid_max_width: f32,
+    pub grid_padding: f32,
+    pub grid_cell_width: f32,
+    pub grid_cell_height: f32,
+    pub grid_icon_size: f32,
+
     // Text
     pub font_size: f32,
     pub font_families: &'static [&'static str],
@@ -141,6 +148,12 @@ impl Theme {
             search_icon_size: 36.0,
             search_selected: Color::rgba(0xff, 0xff, 0xff, 0.12),
             search_max_results: 7,
+
+            grid_max_width: 1240.0,
+            grid_padding: 28.0,
+            grid_cell_width: 136.0,
+            grid_cell_height: 124.0,
+            grid_icon_size: 64.0,
 
             panel_button_hover: Color::rgba(0xff, 0xff, 0xff, 0.12),
             panel_button_active: Color::rgba(0xff, 0xff, 0xff, 0.22),

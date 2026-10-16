@@ -58,7 +58,7 @@ use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::Ext
 
 use crate::{
     actions::Actions,
-    launcher::{KeyOutcome, Launcher},
+    launcher::{Launcher, Outcome},
     panel::{Button, Panel},
     quick_settings::QuickSettings,
     status::Update,
@@ -267,10 +267,14 @@ impl App {
                 self.rescan_apps_if_changed();
                 let found = self.outputs.outputs().find_map(|o| {
                     let info = self.outputs.info(&o)?;
-                    (info.name.as_deref() == Some(output.as_str()))
-                        .then_some((o, info.scale_factor))
+                    let size = info.logical_size.unwrap_or((1920, 1080));
+                    (info.name.as_deref() == Some(output.as_str())).then_some((
+                        o,
+                        info.scale_factor,
+                        (size.0 as f32, size.1 as f32),
+                    ))
                 });
-                let Some((output, scale)) = found else {
+                let Some((output, scale, size)) = found else {
                     warn!(%output, "overview opened on an unknown monitor");
                     return;
                 };
@@ -280,11 +284,19 @@ impl App {
                 self.launcher = Some(Launcher::new(
                     &self.compositor,
                     &self.layer_shell,
+                    &self.shm,
                     &self.qh,
                     output,
+                    size,
                     &self.theme,
                     scale,
                 ));
+            }
+            cnde_ipc::Event::ToggleAppGrid => {
+                if let Some(launcher) = &mut self.launcher {
+                    launcher.toggle_grid(&self.theme, self.apps.len());
+                }
+                self.draw_launcher();
             }
             cnde_ipc::Event::OverviewClosed => {
                 self.overview_open = false;
@@ -316,7 +328,6 @@ impl App {
             launcher.draw(
                 &self.qh,
                 &self.compositor,
-                &mut self.pool,
                 self.shm_format,
                 &mut self.fonts,
                 &mut self.icons,
@@ -337,10 +348,10 @@ impl App {
             &self.launches,
             &self.theme,
         ) {
-            KeyOutcome::Nothing => {}
-            KeyOutcome::Redraw => self.draw_launcher(),
-            KeyOutcome::Close => self.close_overview(),
-            KeyOutcome::Launch(id) => self.launch(&id),
+            Outcome::Nothing => {}
+            Outcome::Redraw => self.draw_launcher(),
+            Outcome::Close => self.close_overview(),
+            Outcome::Launch(id) => self.launch(&id),
         }
     }
 
@@ -692,17 +703,29 @@ impl PointerHandler for App {
             if let Some(launcher) = &mut self.launcher
                 && launcher.layer.wl_surface() == &event.surface
             {
+                let apps = self.apps.len();
                 match event.kind {
                     PointerEventKind::Motion { .. } | PointerEventKind::Enter { .. } => {
-                        if launcher.hover(event.position, &self.theme) {
+                        if launcher.hover(event.position, &self.theme, apps) {
                             self.draw_launcher();
                         }
                     }
                     PointerEventKind::Press {
                         button: BTN_LEFT, ..
-                    } => {
-                        if let Some(id) = launcher.click(event.position, &self.theme) {
-                            self.launch(&id);
+                    } => match launcher.click(event.position, &self.theme, &self.apps) {
+                        Outcome::Launch(id) => self.launch(&id),
+                        Outcome::Redraw => self.draw_launcher(),
+                        Outcome::Nothing | Outcome::Close => {}
+                    },
+                    PointerEventKind::Axis { vertical, .. } => {
+                        // Wheel notches (v120), or touchpad travel.
+                        let notches = if vertical.value120 != 0 {
+                            vertical.value120 as f64 / 120.0
+                        } else {
+                            vertical.absolute / 60.0
+                        };
+                        if launcher.scroll(notches, &self.theme, apps) {
+                            self.draw_launcher();
                         }
                     }
                     _ => {}
