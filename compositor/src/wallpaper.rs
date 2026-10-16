@@ -9,7 +9,7 @@
 
 use std::{collections::HashMap, path::PathBuf, sync::mpsc, thread};
 
-use cnde_config::{ColorScheme, Config, WallpaperFit};
+use cnde_config::{ColorScheme, Config, Palette, WallpaperFit};
 use image::{RgbaImage, imageops::FilterType};
 use smithay::{
     backend::{
@@ -37,6 +37,7 @@ struct Source {
     path: Option<PathBuf>,
     fit: WallpaperFit,
     scheme: ColorScheme,
+    palette: Palette,
 }
 
 impl Source {
@@ -46,6 +47,7 @@ impl Source {
             path: config.wallpaper.path(scheme),
             fit: config.wallpaper.fit,
             scheme,
+            palette: config.appearance.palette,
         }
     }
 }
@@ -327,7 +329,7 @@ fn worker(jobs: mpsc::Receiver<Job>, done: channel::Sender<Done>) {
             let (w, h) = (job.size.w.max(1) as u32, job.size.h.max(1) as u32);
             let pixels = match image {
                 Some(image) => scale_to(image, w, h, job.source.fit),
-                None => gradient(w, h, job.source.scheme),
+                None => gradient(w, h, job.source.scheme, job.source.palette),
             };
             let blurred = frost(&pixels);
             let blurred_size = Size::from((blurred.width() as i32, blurred.height() as i32));
@@ -416,10 +418,22 @@ fn scale_to(image: &RgbaImage, w: u32, h: u32, fit: WallpaperFit) -> RgbaImage {
 
 /// The built-in wallpaper: a diagonal gradient with a soft glow, dithered so
 /// it doesn't band on 8-bit panels.
-fn gradient(w: u32, h: u32, scheme: ColorScheme) -> RgbaImage {
-    let (from, to, glow) = match scheme {
-        ColorScheme::Dark => ([0.11, 0.13, 0.25], [0.04, 0.04, 0.07], [0.30, 0.22, 0.45]),
-        ColorScheme::Light => ([0.78, 0.84, 0.95], [0.93, 0.94, 0.97], [0.98, 0.86, 0.80]),
+fn gradient(w: u32, h: u32, scheme: ColorScheme, palette: Palette) -> RgbaImage {
+    let (from, to, glow) = match (palette, scheme) {
+        // Dusk: deep plum fading to near-black, a pink glow.
+        (Palette::Cnde, ColorScheme::Dark) => {
+            ([0.17, 0.10, 0.25], [0.05, 0.035, 0.08], [0.46, 0.22, 0.40])
+        }
+        // Blossom: blush into lavender, a warm pink glow.
+        (Palette::Cnde, ColorScheme::Light) => {
+            ([0.96, 0.85, 0.91], [0.91, 0.89, 0.97], [1.0, 0.78, 0.86])
+        }
+        (Palette::Adwaita, ColorScheme::Dark) => {
+            ([0.11, 0.13, 0.25], [0.04, 0.04, 0.07], [0.30, 0.22, 0.45])
+        }
+        (Palette::Adwaita, ColorScheme::Light) => {
+            ([0.78, 0.84, 0.95], [0.93, 0.94, 0.97], [0.98, 0.86, 0.80])
+        }
     };
     let (fw, fh) = (w as f32, h as f32);
     RgbaImage::from_fn(w, h, |x, y| {
@@ -467,7 +481,7 @@ mod tests {
 
     #[test]
     fn gradient_is_opaque_and_sized() {
-        let out = gradient(64, 32, ColorScheme::Dark);
+        let out = gradient(64, 32, ColorScheme::Dark, Palette::Cnde);
         assert_eq!(out.dimensions(), (64, 32));
         assert!(out.pixels().all(|p| p[3] == 255));
     }
@@ -482,10 +496,10 @@ fn wallpaper_preview() {
     let Some(dir) = std::env::var_os("CNDE_WALLPAPER_PREVIEW").map(PathBuf::from) else {
         return;
     };
-    gradient(1280, 720, ColorScheme::Dark)
+    gradient(1280, 720, ColorScheme::Dark, Palette::Cnde)
         .save(dir.join("dark.png"))
         .unwrap();
-    gradient(1280, 720, ColorScheme::Light)
+    gradient(1280, 720, ColorScheme::Light, Palette::Cnde)
         .save(dir.join("light.png"))
         .unwrap();
     if let Some(image) = std::env::var_os("CNDE_WALLPAPER_IMAGE").and_then(|p| load(&p.into())) {

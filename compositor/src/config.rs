@@ -116,8 +116,7 @@ impl State {
     /// startup, when everything is applied.
     pub fn apply_config(&mut self, old: Option<&Config>) {
         animation::set_speed(self.config.animations.speed);
-        self.decorations.dark =
-            self.config.appearance.color_scheme == cnde_config::ColorScheme::Dark;
+        self.decorations.appearance = self.config.appearance.clone();
         self.decorations.all_buttons =
             self.config.appearance.window_buttons == cnde_config::WindowButtons::All;
         if old.is_some_and(|old| old.appearance.titlebars != self.config.appearance.titlebars) {
@@ -163,6 +162,7 @@ impl State {
         if !nested && old.is_none_or(|old| old.appearance != self.config.appearance) {
             publish_color_scheme(self.config.appearance.color_scheme);
             publish_window_buttons(self.config.appearance.window_buttons);
+            publish_accent(self.config.appearance.palette);
         }
     }
 
@@ -212,6 +212,15 @@ fn publish_window_buttons(buttons: cnde_config::WindowButtons) {
         cnde_config::WindowButtons::Close => "appmenu:close",
     };
     gsettings_set("org.gnome.desktop.wm.preferences", "button-layout", value);
+}
+
+/// GTK apps (GNOME 47 and later) take their accent from this.
+fn publish_accent(palette: cnde_config::Palette) {
+    let value = match palette {
+        cnde_config::Palette::Cnde => "pink",
+        cnde_config::Palette::Adwaita => "blue",
+    };
+    gsettings_set("org.gnome.desktop.interface", "accent-color", value);
 }
 
 /// Shared with any GNOME session on this account (one dconf database).

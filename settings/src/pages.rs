@@ -336,6 +336,20 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .sub("Menus, quick settings and this window; also picks the wallpaper"),
                 Row::new(
+                    "appearance.palette",
+                    "Colours",
+                    Control::Segmented(choices(&[("cnde", s("cnde")), ("GNOME", s("adwaita"))])),
+                    s(match c.appearance.palette {
+                        cnde_config::Palette::Cnde => "cnde",
+                        cnde_config::Palette::Adwaita => "adwaita",
+                    }),
+                    s(match d.appearance.palette {
+                        cnde_config::Palette::Cnde => "cnde",
+                        cnde_config::Palette::Adwaita => "adwaita",
+                    }),
+                )
+                .sub("cnde: plum and pink when dark, blush and rose when light"),
+                Row::new(
                     "appearance.titlebars",
                     "Matching title bars",
                     Control::Switch {

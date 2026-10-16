@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cnde-config = { path = "../config" }
 tiny-skia = "0.12"
 # Symbolic icons from the Adwaita theme; no text/font support needed.
 resvg = { version = "0.48", default-features = false }

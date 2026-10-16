@@ -133,7 +133,7 @@ struct Key {
     scale: u64,
     focused: bool,
     hover: Option<Part>,
-    dark: bool,
+    appearance: cnde_config::Appearance,
     rounded: bool,
     maximized: bool,
     all_buttons: bool,
@@ -144,8 +144,8 @@ struct Key {
 pub struct Decorations {
     fonts: Option<Fonts>,
     icons: Option<Icons>,
-    /// The light/dark style.
-    pub dark: bool,
+    /// The style and palette.
+    pub appearance: cnde_config::Appearance,
     /// Minimize and maximize buttons too (`appearance.window_buttons`).
     pub all_buttons: bool,
 }
@@ -193,7 +193,7 @@ impl Decorations {
             scale: scale.x.to_bits(),
             focused,
             hover: state.titlebar_hover,
-            dark: self.dark,
+            appearance: self.appearance.clone(),
             rounded: state.placement == Placement::Floating,
             maximized: state.placement == Placement::Maximized,
             all_buttons: self.all_buttons,
@@ -268,27 +268,15 @@ impl Decorations {
 /// libadwaita's header bar colours.
 fn paint(canvas: &mut Canvas<'_>, fonts: &mut Fonts, icons: &mut Icons, key: &Key) {
     let (width, height) = (key.width as f32, HEIGHT as f32);
-    let (background, text, ink) = match (key.dark, key.focused) {
-        (true, true) => (
-            Color::rgb(0x30, 0x30, 0x30),
-            Color::rgb(0xff, 0xff, 0xff),
-            Color::rgba(0xff, 0xff, 0xff, 1.0),
-        ),
-        (true, false) => (
-            Color::rgb(0x24, 0x24, 0x24),
-            Color::rgba(0xff, 0xff, 0xff, 0.5),
-            Color::rgba(0xff, 0xff, 0xff, 1.0),
-        ),
-        (false, true) => (
-            Color::rgb(0xeb, 0xeb, 0xed),
-            Color::rgb(0x24, 0x24, 0x28),
-            Color::rgba(0x00, 0x00, 0x06, 1.0),
-        ),
-        (false, false) => (
-            Color::rgb(0xfa, 0xfa, 0xfb),
-            Color::rgba(0x24, 0x24, 0x28, 0.5),
-            Color::rgba(0x00, 0x00, 0x06, 1.0),
-        ),
+    // The palette's window colours: the sidebar shade for a focused bar,
+    // the page shade for the others.
+    let theme = cnde_ui::Theme::for_appearance(&key.appearance);
+    let dark = theme.dark;
+    let ink = theme.window_text.with_alpha(1.0);
+    let (background, text) = if key.focused {
+        (theme.window_sidebar, theme.window_text)
+    } else {
+        (theme.window_background, theme.window_text.with_alpha(0.5))
     };
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
     if key.rounded {
@@ -305,7 +293,7 @@ fn paint(canvas: &mut Canvas<'_>, fonts: &mut Fonts, icons: &mut Icons, key: &Ke
         width,
         1.0,
         0.0,
-        ink.with_alpha(if key.dark { 0.10 } else { 0.08 }),
+        ink.with_alpha(if dark { 0.10 } else { 0.08 }),
     );
 
     // The buttons, right to left: close, maximize, minimize.

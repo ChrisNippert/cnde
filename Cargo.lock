@@ -490,6 +490,7 @@ dependencies = [
 name = "cnde-ui"
 version = "0.1.0"
 dependencies = [
+ "cnde-config",
  "cosmic-text",
  "resvg",
  "tiny-skia",

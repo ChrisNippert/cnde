@@ -34,8 +34,7 @@ pub fn theme_from(config: &Config) -> Theme {
             Color::rgba(r, g, b, a as f32 / 255.0)
         })
     };
-    let mut theme =
-        Theme::for_dark(config.appearance.color_scheme == cnde_config::ColorScheme::Dark);
+    let mut theme = Theme::for_appearance(&config.appearance);
     theme.panel_height = panel.height;
     if !panel.rounded {
         theme.panel_radius = 0.0;

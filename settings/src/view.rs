@@ -664,26 +664,37 @@ fn wallpapers(
             .stroke_rounded_rect(r.x - 4.0, r.y - 4.0, r.w + 8.0, r.h + 8.0, 12.0, 3.0, color);
     };
 
-    // The built-in gradient first.
+    // The built-in gradient first, roughly as the compositor draws it.
     let r = place(0);
+    let appearance = &ui.config.appearance;
+    let dark = appearance.color_scheme == cnde_config::ColorScheme::Dark;
+    let (top, bottom, label_color) = match (appearance.palette, dark) {
+        (cnde_config::Palette::Cnde, true) => (
+            Color::rgb(0x2b, 0x1a, 0x40),
+            Color::rgb(0x4a, 0x26, 0x48),
+            Color::rgb(0xff, 0xff, 0xff),
+        ),
+        (cnde_config::Palette::Cnde, false) => (
+            Color::rgb(0xf5, 0xd9, 0xe8),
+            Color::rgb(0xe8, 0xe2, 0xf7),
+            Color::rgb(0x2d, 0x22, 0x38),
+        ),
+        (cnde_config::Palette::Adwaita, true) => (
+            Color::rgb(0x24, 0x3b, 0x5e),
+            Color::rgb(0x3d, 0x2b, 0x55),
+            Color::rgb(0xff, 0xff, 0xff),
+        ),
+        (cnde_config::Palette::Adwaita, false) => (
+            Color::rgb(0xc7, 0xd6, 0xf2),
+            Color::rgb(0xf0, 0xe0, 0xdc),
+            Color::rgb(0x24, 0x24, 0x28),
+        ),
+    };
+    p.canvas.rounded_rect(r.x, r.y, r.w, r.h, 8.0, top);
     p.canvas
-        .rounded_rect(r.x, r.y, r.w, r.h, 8.0, Color::rgb(0x24, 0x3b, 0x5e));
-    p.canvas.rounded_rect(
-        r.x,
-        r.y + r.h / 2.0,
-        r.w,
-        r.h / 2.0,
-        8.0,
-        Color::rgb(0x3d, 0x2b, 0x55),
-    );
-    p.canvas.rounded_rect(
-        r.x,
-        r.y + r.h / 2.0,
-        r.w,
-        8.0,
-        0.0,
-        Color::rgb(0x31, 0x33, 0x5a),
-    );
+        .rounded_rect(r.x, r.y + r.h / 2.0, r.w, r.h / 2.0, 8.0, bottom);
+    p.canvas
+        .rounded_rect(r.x, r.y + r.h / 2.0, r.w, 8.0, 0.0, top.mix(bottom, 0.5));
     let label = "Default";
     let lw = p.measure(label, t.subtitle_size, Weight::Normal);
     p.label_v(
@@ -693,7 +704,7 @@ fn wallpapers(
         r.w,
         t.subtitle_size,
         Weight::Normal,
-        t.window_text,
+        label_color,
     );
     let lit = hover(a, ui, Target::Wallpaper(None));
     if current.is_none() {
@@ -821,8 +832,7 @@ mod tests {
     fn render(ui: &Ui, name: &str) -> Painted {
         let (w, h) = (920u32, 680u32);
         let mut pixels = vec![0u8; (w * h * 4) as usize];
-        let theme =
-            Theme::for_dark(ui.config.appearance.color_scheme == cnde_config::ColorScheme::Dark);
+        let theme = Theme::for_appearance(&ui.config.appearance);
         let mut res = Res {
             fonts: Fonts::new(theme.font_families),
             icons: Icons::new(),

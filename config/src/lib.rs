@@ -145,6 +145,19 @@ pub struct Appearance {
     pub titlebars: Titlebars,
     /// Buttons at the right end of title bars (ours, and GTK apps').
     pub window_buttons: WindowButtons,
+    /// The colours: cnde's own, or GNOME's.
+    pub palette: Palette,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Palette {
+    /// Dusk (deep plum, pastel pink) when dark, Blossom (blush, rose)
+    /// when light.
+    #[default]
+    Cnde,
+    /// libadwaita's greys and blue.
+    Adwaita,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

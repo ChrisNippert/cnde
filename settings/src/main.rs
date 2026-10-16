@@ -675,7 +675,7 @@ impl App {
 }
 
 fn theme_for(config: &Config) -> Theme {
-    Theme::for_dark(config.appearance.color_scheme == cnde_config::ColorScheme::Dark)
+    Theme::for_appearance(&config.appearance)
 }
 
 /// "~/…" for paths in the home directory, as hand-written configs do.

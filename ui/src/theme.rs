@@ -317,6 +317,101 @@ impl Theme {
     pub fn for_dark(dark: bool) -> Self {
         if dark { Self::dark() } else { Self::light() }
     }
+
+    /// The theme the config's appearance asks for.
+    pub fn for_appearance(appearance: &cnde_config::Appearance) -> Self {
+        let dark = appearance.color_scheme == cnde_config::ColorScheme::Dark;
+        match (appearance.palette, dark) {
+            (cnde_config::Palette::Adwaita, dark) => Self::for_dark(dark),
+            (cnde_config::Palette::Cnde, true) => Self::dusk(),
+            (cnde_config::Palette::Cnde, false) => Self::blossom(),
+        }
+    }
+
+    /// cnde's dark palette: deep plum, lavender-white text, a pastel pink
+    /// accent and lavender for focus.
+    pub fn dusk() -> Self {
+        let text = |a: f32| Color::rgba(0xec, 0xe6, 0xf5, a);
+        let pink = Color::rgb(0xf4, 0xa7, 0xc6);
+        let glass = Color::rgba(0x22, 0x1c, 0x2e, 0.95);
+        Self {
+            panel_background: Color::rgb(0x15, 0x11, 0x1d),
+            panel_foreground: text(1.0),
+            panel_button_hover: text(0.12),
+            panel_button_active: text(0.22),
+            qs_background: glass,
+            qs_tile: text(0.07),
+            qs_toggle_off: text(0.13),
+            qs_toggle_on: pink,
+            qs_slider_track: text(0.13),
+            qs_slider_fill: pink,
+            qs_on_fill: Color::rgb(0x2a, 0x1a, 0x26),
+            qs_dim: text(0.6),
+            search_background: glass,
+            search_selected: text(0.11),
+            window_background: Color::rgb(0x1c, 0x17, 0x26),
+            window_sidebar: Color::rgb(0x24, 0x1e, 0x31),
+            window_text: text(1.0),
+            window_dim: text(0.58),
+            sidebar_selected: text(0.09),
+            hover: text(0.05),
+            card_background: text(0.06),
+            card_separator: Color::rgba(0x08, 0x04, 0x10, 0.4),
+            switch_off: text(0.18),
+            button_background: text(0.09),
+            button_hover: text(0.14),
+            entry_background: text(0.09),
+            focus_ring: Color::rgba(0xb8, 0xa4, 0xe8, 0.7),
+            popover_background: Color::rgb(0x2f, 0x28, 0x40),
+            error: Color::rgb(0xff, 0x8f, 0xa3),
+            accent: pink,
+            popup_text: text(1.0),
+            on_accent: Color::rgb(0x2a, 0x1a, 0x26),
+            ..Self::dark()
+        }
+    }
+
+    /// cnde's light palette: blush white, plum ink and a rose accent.
+    pub fn blossom() -> Self {
+        let ink = |a: f32| Color::rgba(0x2d, 0x22, 0x38, a);
+        let rose = Color::rgb(0xd9, 0x66, 0x9a);
+        let paper = Color::rgba(0xfd, 0xf3, 0xf7, 0.97);
+        Self {
+            panel_background: Color::rgb(0xf8, 0xe6, 0xee),
+            panel_foreground: ink(1.0),
+            panel_button_hover: ink(0.08),
+            panel_button_active: ink(0.14),
+            qs_background: paper,
+            qs_tile: ink(0.05),
+            qs_toggle_off: ink(0.10),
+            qs_toggle_on: rose,
+            qs_slider_track: ink(0.10),
+            qs_slider_fill: rose,
+            qs_on_fill: Color::rgb(0xff, 0xff, 0xff),
+            qs_dim: ink(0.58),
+            search_background: paper,
+            search_selected: ink(0.08),
+            popup_text: ink(1.0),
+            window_background: Color::rgb(0xfd, 0xf3, 0xf7),
+            window_sidebar: Color::rgb(0xf8, 0xe6, 0xee),
+            window_text: ink(1.0),
+            window_dim: ink(0.58),
+            sidebar_selected: ink(0.09),
+            hover: ink(0.04),
+            card_background: Color::rgb(0xff, 0xff, 0xff),
+            card_separator: ink(0.08),
+            switch_off: ink(0.16),
+            button_background: ink(0.07),
+            button_hover: ink(0.11),
+            entry_background: ink(0.06),
+            focus_ring: Color::rgba(0x9b, 0x84, 0xd6, 0.7),
+            popover_background: Color::rgb(0xff, 0xff, 0xff),
+            error: Color::rgb(0xc0, 0x26, 0x4d),
+            accent: rose,
+            on_accent: Color::rgb(0xff, 0xff, 0xff),
+            ..Self::light()
+        }
+    }
 }
 
 impl Default for Theme {
