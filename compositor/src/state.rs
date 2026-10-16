@@ -94,6 +94,9 @@ pub struct State {
     pub mod_tap_armed: bool,
     /// Set by the key filter when a tap completed; acted on after it returns.
     pub mod_tapped: bool,
+    /// When a tap last opened the overview: a second tap soon after goes
+    /// on to the app grid, a later one closes it.
+    pub mod_tap_opened: Option<std::time::Instant>,
     /// Keys whose press triggered a compositor binding; their releases are
     /// swallowed too so clients never see half a key event.
     pub suppressed_keys: Vec<Keycode>,
@@ -179,6 +182,7 @@ impl State {
             mod_key,
             mod_tap_armed: false,
             mod_tapped: false,
+            mod_tap_opened: None,
             suppressed_keys: Vec::new(),
 
             compositor_state,

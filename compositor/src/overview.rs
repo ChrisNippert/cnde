@@ -10,6 +10,9 @@
 use std::{collections::HashMap, time::Instant};
 
 use cnde_ipc::app_grid;
+
+/// Two Super taps closer together than this open the app grid.
+const DOUBLE_TAP: std::time::Duration = std::time::Duration::from_millis(400);
 use smithay::{
     backend::renderer::{
         element::{
@@ -215,12 +218,18 @@ impl State {
         }
     }
 
-    /// Tapping Super, GNOME style: the overview, then the app grid, then
-    /// back to the desktop.
+    /// Tapping Super, GNOME style: the overview; tap again to leave it.
+    /// Two taps in quick succession go straight on to the app grid.
     pub fn super_tapped(&mut self) {
+        let now = Instant::now();
+        let double = self
+            .mod_tap_opened
+            .take()
+            .is_some_and(|at| now.duration_since(at) < DOUBLE_TAP);
         if !self.overview.is_open() {
             self.set_overview(true);
-        } else if !self.overview.app_grid() {
+            self.mod_tap_opened = Some(now);
+        } else if double && !self.overview.app_grid() {
             self.overview.set_app_grid(true);
             self.ipc.broadcast(&cnde_ipc::Event::ToggleAppGrid);
         } else {

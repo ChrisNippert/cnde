@@ -356,12 +356,6 @@ impl App {
                     &self.theme,
                     scale,
                 ));
-                // The app grid stops above an overview dock.
-                if let Some(launcher) = &mut self.launcher
-                    && self.config.dock.position == cnde_config::DockPosition::Overview
-                {
-                    launcher.bottom_reserve = self.config.dock.icon_size as f32 + 64.0;
-                }
             }
             cnde_ipc::Event::ToggleAppGrid => {
                 if let Some(launcher) = &mut self.launcher {
@@ -494,7 +488,9 @@ impl App {
             self.ipc
                 .send(&cnde_ipc::Request::AppGridShown { shown: grid });
         }
+        let reserve = self.launcher_reserve();
         if let Some(launcher) = &mut self.launcher {
+            launcher.bottom_reserve = reserve;
             launcher.draw(
                 &self.qh,
                 &self.compositor,
@@ -505,6 +501,28 @@ impl App {
                 &self.apps,
             );
         }
+    }
+
+    /// How much of the bottom of the launcher's monitor a dock takes up,
+    /// so the app grid (and its page dots) stop above it.
+    fn launcher_reserve(&self) -> f32 {
+        use cnde_config::DockPosition;
+        let Some(launcher) = &self.launcher else {
+            return 0.0;
+        };
+        let margin = match self.config.dock.position {
+            DockPosition::Overview => 20.0,
+            DockPosition::Bottom => 8.0,
+            _ => return 0.0,
+        };
+        let height = self
+            .dock
+            .as_ref()
+            .filter(|d| d.output == launcher.output && d.size().1 > 0)
+            .map_or(self.config.dock.icon_size as f32 + 24.0, |d| {
+                d.size().1 as f32
+            });
+        height + margin + 16.0
     }
 
     fn launcher_key(&mut self, event: KeyEvent) {
@@ -638,6 +656,14 @@ impl App {
             dock.update(items, icon);
         }
         self.draw_dock();
+        // A dock that grew (bigger icons, edit mode) pushes the grid up.
+        if self
+            .launcher
+            .as_ref()
+            .is_some_and(|l| l.bottom_reserve != self.launcher_reserve())
+        {
+            self.draw_launcher();
+        }
     }
 
     fn draw_dock(&mut self) {
