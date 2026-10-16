@@ -30,10 +30,12 @@ entries when they're done.
   minimize button (nothing to minimize to). Apps that ask to draw their own
   (GNOME apps' header bars) keep theirs.
 - **Frosted dock** frosts the wallpaper only, not windows behind it.
-- **Wi-Fi settings** were tried against NetworkManager (reading only); iwd
-  and actually joining networks haven't been tried yet. Only WPA-Personal
-  passwords (no enterprise logins). Changing Wi-Fi may need polkit rules
-  when there's no logind session.
+- **Wi-Fi settings** were tried against NetworkManager (reading networks
+  and connection details only); iwd and actually joining networks haven't
+  been tried yet, and enterprise (802.1X) and WEP joining are checked only by
+  tests of the settings sent. With iwd, enterprise networks must first be set
+  up as root in /var/lib/iwd (iwd's rule), and WEP isn't supported. Changing
+  Wi-Fi may need polkit rules when there's no logind session.
 - **Three-finger swipes up and down** and the **launch feedback** haven't
   been tried on real hardware yet (the busy pointer only shows on a real
   session, not nested).

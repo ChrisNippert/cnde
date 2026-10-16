@@ -63,7 +63,7 @@ use smithay_client_toolkit::{
 use tracing::{info, warn};
 
 use crate::{
-    pages::{Control, Display, Key, Page, Value, WifiKey},
+    pages::{Control, Display, JoinField, Key, Page, Value, WifiKey},
     view::{Edit, Painted, Res, Target, Ui},
 };
 
@@ -234,7 +234,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rounded: true,
             dragging: None,
             wifi: None,
-            wifi_asking: None,
+            wifi_join: None,
         },
         res: Res {
             fonts,
@@ -286,14 +286,14 @@ impl App {
             .loop_handle
             .insert_source(rx, |event, _, app: &mut App| {
                 if let channel::Event::Msg(state) = event {
-                    // Joined: no more password to ask for.
-                    if let Some(ssid) = &app.ui.wifi_asking
+                    // Joined: the form's done.
+                    if let Some(join) = &app.ui.wifi_join
                         && state
                             .networks
                             .iter()
-                            .any(|n| &n.ssid == ssid && n.connected)
+                            .any(|n| n.ssid == join.ssid && n.connected)
                     {
-                        app.ui.wifi_asking = None;
+                        app.ui.wifi_join = None;
                     }
                     app.ui.wifi = Some(state);
                     app.redraw();
@@ -317,8 +317,8 @@ impl App {
         }
     }
 
-    /// A Wi-Fi row was clicked: join that network, asking for its password
-    /// first if it needs one we don't have.
+    /// A Wi-Fi row was clicked: bring it up if it's saved or open, else
+    /// show what joining it needs.
     fn wifi_clicked(&mut self, ssid: &str) {
         let Some(network) = self
             .ui
@@ -332,45 +332,118 @@ impl App {
         if network.connected {
             return;
         }
-        if network.known || !network.secured {
-            self.ui.wifi_asking = None;
-            self.wifi_command(wifi::Command::Connect {
-                ssid: ssid.to_string(),
-                password: None,
-            });
+        if network.known || !network.security.secured() {
+            self.ui.wifi_join = None;
+            self.wifi_command(wifi::Command::Activate(ssid.to_string()));
             return;
         }
-        self.ui.wifi_asking = Some(ssid.to_string());
-        self.ui.edit = Some(Edit {
-            key: Key::Wifi(WifiKey::Password(ssid.to_string())),
-            text: String::new(),
-            cursor: 0,
-            int: false,
+        // Clicking it again folds the form away.
+        if self
+            .ui
+            .wifi_join
+            .as_ref()
+            .is_some_and(|j| !j.hidden && j.ssid == ssid)
+        {
+            self.ui.wifi_join = None;
+            self.ui.edit = None;
+            self.redraw();
+            return;
+        }
+        self.ui.wifi_join = Some(wifi::Join {
+            ssid: ssid.to_string(),
+            security: network.security,
+            ..wifi::Join::default()
         });
+        let first = if network.security == wifi::Security::Enterprise {
+            JoinField::Identity
+        } else {
+            JoinField::Password
+        };
+        self.edit_field(Key::Wifi(WifiKey::Join(first)), String::new());
         self.redraw();
     }
 
-    /// Changes to Wi-Fi rows go to the worker; the rest are config.
+    fn edit_field(&mut self, key: Key, text: String) {
+        self.ui.edit = Some(Edit {
+            key,
+            cursor: text.chars().count(),
+            text,
+            int: false,
+        });
+    }
+
+    /// Changes to Wi-Fi rows go to the worker (or the join form); the rest
+    /// are config.
     fn write_wifi(&mut self, key: &WifiKey, value: &Value) {
+        let text = value.as_str();
         match (key, value) {
             (WifiKey::Enabled, Value::Bool(on)) => {
                 self.wifi_command(wifi::Command::SetEnabled(*on))
             }
-            (WifiKey::Password(ssid), Value::Str(password)) if !password.is_empty() => {
-                self.ui.wifi_asking = None;
-                self.wifi_command(wifi::Command::Connect {
-                    ssid: ssid.clone(),
-                    password: Some(password.clone()),
-                });
-            }
-            (WifiKey::Actions(_), Value::Str(action)) if action == "disconnect" => {
+            (WifiKey::Actions(_), _) if text == "disconnect" => {
                 self.wifi_command(wifi::Command::Disconnect)
             }
-            (WifiKey::Actions(ssid), Value::Str(action)) if action == "forget" => {
+            (WifiKey::Actions(ssid), _) if text == "forget" => {
                 self.wifi_command(wifi::Command::Forget(ssid.clone()))
+            }
+            (WifiKey::Hidden, _) => {
+                self.ui.wifi_join = Some(wifi::Join {
+                    hidden: true,
+                    security: wifi::Security::Psk,
+                    ..wifi::Join::default()
+                });
+                self.edit_field(Key::Wifi(WifiKey::Join(JoinField::Ssid)), String::new());
+            }
+            (WifiKey::Join(JoinField::Submit), _) => match text {
+                "connect" => self.submit_join(),
+                _ => self.ui.wifi_join = None,
+            },
+            (WifiKey::Join(field), _) => {
+                let Some(join) = &mut self.ui.wifi_join else {
+                    return;
+                };
+                let text = text.to_string();
+                match field {
+                    JoinField::Ssid => join.ssid = text,
+                    JoinField::Security => {
+                        join.security = wifi::Security::from_name(&text).unwrap_or_default()
+                    }
+                    JoinField::Password => join.password = text,
+                    JoinField::Eap => {
+                        if let Some(eap) = wifi::Eap::ALL.into_iter().find(|e| e.name() == text) {
+                            join.eap = eap;
+                        }
+                    }
+                    JoinField::Phase2 => {
+                        if let Some(p) = wifi::Phase2::ALL.into_iter().find(|p| p.name() == text) {
+                            join.phase2 = p;
+                        }
+                    }
+                    JoinField::Identity => join.identity = text,
+                    JoinField::AnonymousIdentity => join.anonymous_identity = text,
+                    JoinField::CaCert => join.ca_cert = text,
+                    JoinField::Domain => join.domain = text,
+                    JoinField::ClientCert => join.client_cert = text,
+                    JoinField::PrivateKey => join.private_key = text,
+                    JoinField::Submit => {}
+                }
             }
             _ => {}
         }
+    }
+
+    /// Connect with what the form says, or say what's missing. The form
+    /// stays until it's connected, in case something needs fixing.
+    fn submit_join(&mut self) {
+        let Some(join) = self.ui.wifi_join.clone() else {
+            return;
+        };
+        if let Some(missing) = join.missing() {
+            self.show_error(missing.into());
+            return;
+        }
+        self.clear_error();
+        self.wifi_command(wifi::Command::Join(join));
     }
 
     fn redraw(&mut self) {
@@ -764,9 +837,15 @@ impl App {
         let Some(edit) = self.ui.edit.take() else {
             return;
         };
-        // A password is taken exactly as typed.
-        if let Key::Wifi(key @ WifiKey::Password(_)) = &edit.key {
-            self.write_wifi(&key.clone(), &Value::Str(edit.text.clone()));
+        // Passwords are taken exactly as typed; the join form's other
+        // fields aren't config either.
+        if let Key::Wifi(key @ WifiKey::Join(field)) = &edit.key {
+            let text = if *field == JoinField::Password {
+                edit.text.clone()
+            } else {
+                edit.text.trim().to_string()
+            };
+            self.write_wifi(&key.clone(), &Value::Str(text));
             self.redraw();
             return;
         }
@@ -822,7 +901,30 @@ impl App {
         };
         match event.keysym {
             Keysym::Return | Keysym::KP_Enter => {
+                let joining = matches!(edit.key, Key::Wifi(WifiKey::Join(_)));
+                let key = edit.key.clone();
                 self.commit_edit();
+                // In the join form: connect once it's complete, else on to
+                // the next field.
+                if joining {
+                    if self
+                        .ui
+                        .wifi_join
+                        .as_ref()
+                        .is_some_and(|j| j.missing().is_none())
+                        || !self.edit_next(&key)
+                    {
+                        self.submit_join();
+                    }
+                    self.redraw();
+                }
+                return;
+            }
+            Keysym::Tab | Keysym::ISO_Left_Tab => {
+                let key = edit.key.clone();
+                self.commit_edit();
+                self.edit_next(&key);
+                self.redraw();
                 return;
             }
             Keysym::BackSpace if edit.cursor > 0 => {
@@ -873,6 +975,34 @@ impl App {
             self.cursor = icon;
             let _ = pointer.set_cursor(&self.conn, icon);
         }
+    }
+
+    /// Start typing in the text field after the one for `key`; false if
+    /// there's none.
+    fn edit_next(&mut self, key: &Key) -> bool {
+        let rows = &self.painted.rows;
+        let Some(at) = rows.iter().position(|r| r.key == *key) else {
+            return false;
+        };
+        let next = rows[at + 1..].iter().find(|r| {
+            matches!(
+                r.control,
+                Control::Text { .. } | Control::Password | Control::Color { .. }
+            )
+        });
+        if let Some(row) = next.cloned() {
+            let text = match &row.value {
+                Value::Int(v) => v.to_string(),
+                Value::Float(v) => v.to_string(),
+                other => other.as_str().to_string(),
+            };
+            self.edit_field(row.key.clone(), text);
+            if let Some(edit) = &mut self.ui.edit {
+                edit.int = matches!(row.control, Control::Text { int: true, .. });
+            }
+            return true;
+        }
+        false
     }
 
     fn resize_edge(&self, (x, y): (f64, f64)) -> Option<ResizeEdge> {

@@ -120,10 +120,31 @@ pub enum WifiKey {
     Enabled,
     /// A network in the list (clicking it connects).
     Network(String),
-    /// The password for a network being joined.
-    Password(String),
     /// Disconnect from or forget a network.
     Actions(String),
+    /// A read-only line about the connection.
+    Detail(String),
+    /// "Join Hidden Network…".
+    Hidden,
+    /// A field of the network being joined.
+    Join(JoinField),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum JoinField {
+    Ssid,
+    Security,
+    Password,
+    Eap,
+    Phase2,
+    Identity,
+    AnonymousIdentity,
+    CaCert,
+    Domain,
+    ClientCert,
+    PrivateKey,
+    /// Cancel or Connect.
+    Submit,
 }
 
 impl Key {
@@ -231,6 +252,8 @@ pub enum Control {
     },
     /// A text entry that shows dots.
     Password,
+    /// Read-only text on the right (connection details).
+    Info,
     /// A colour: a hex entry, and swatches to pick from below the title.
     Color {
         placeholder: &'static str,
@@ -342,12 +365,12 @@ pub struct Display {
     pub description: String,
 }
 
-/// What the Wi-Fi page shows: the worker's last report, and which network
-/// is asking for its password.
+/// What the Wi-Fi page shows: the worker's last report, and the network
+/// being joined (its form shows under it).
 #[derive(Clone, Copy, Default)]
 pub struct WifiView<'a> {
     pub state: Option<&'a crate::wifi::State>,
-    pub asking: Option<&'a str>,
+    pub join: Option<&'a crate::wifi::Join>,
 }
 
 pub fn build(page: Page, c: &Config, displays: &[Display], wifi: WifiView<'_>) -> Vec<Group> {
@@ -425,8 +448,11 @@ fn wifi_page(view: WifiView<'_>) -> Vec<Group> {
     if !state.enabled {
         return vec![top];
     }
-    let mut rows = Vec::new();
-    for network in &state.networks {
+    let mut groups = vec![top];
+    let join = view.join;
+    let joining = |ssid: &str| join.is_some_and(|j| !j.hidden && j.ssid == ssid);
+
+    let network_row = |network: &crate::wifi::Network| {
         let connecting = state.connecting.as_deref() == Some(network.ssid.as_str());
         let status = if network.connected {
             "Connected"
@@ -434,55 +460,276 @@ fn wifi_page(view: WifiView<'_>) -> Vec<Group> {
             "Connecting…"
         } else if network.known {
             "Saved"
-        } else if network.secured {
-            "Needs a password"
         } else {
-            "Open"
+            ""
         };
         let mut row = wifi_row(
             WifiKey::Network(network.ssid.clone()),
             &network.ssid,
             Control::Network {
                 signal: network.signal,
-                secured: network.secured,
+                secured: network.security.secured(),
                 connected: network.connected,
             },
             Value::Unset,
         );
-        row.subtitle = status.into();
-        rows.push(row);
-        if view.asking == Some(network.ssid.as_str()) && !network.connected {
-            let mut ask = wifi_row(
-                WifiKey::Password(network.ssid.clone()),
-                "Password",
-                Control::Password,
-                Value::Str(String::new()),
-            );
-            ask.subtitle = "Enter to connect".into();
-            rows.push(ask);
+        row.subtitle = match status {
+            "" => network.security.label().to_string(),
+            status => format!("{status} · {}", network.security.label()),
+        };
+        row
+    };
+
+    if let Some(network) = state.networks.iter().find(|n| n.connected) {
+        let mut rows = vec![network_row(network)];
+        if let Some(details) = &state.details {
+            rows.extend(detail_rows(network, details));
         }
-        if network.connected {
-            rows.push(wifi_row(
-                WifiKey::Actions(network.ssid.clone()),
-                "",
-                Control::Segmented(choices(&[
-                    ("Disconnect", s("disconnect")),
-                    ("Forget", s("forget")),
-                ])),
-                Value::Unset,
-            ));
+        rows.push(wifi_row(
+            WifiKey::Actions(network.ssid.clone()),
+            "",
+            Control::Segmented(choices(&[
+                ("Disconnect", s("disconnect")),
+                ("Forget", s("forget")),
+            ])),
+            Value::Unset,
+        ));
+        groups.push(group("Connected", rows));
+    }
+
+    let mut rows = Vec::new();
+    for network in state.networks.iter().filter(|n| !n.connected) {
+        rows.push(network_row(network));
+        if joining(&network.ssid)
+            && let Some(join) = join
+        {
+            rows.extend(join_rows(join));
         }
     }
-    let networks = Group {
-        title: "Networks".into(),
-        description: if rows.is_empty() {
-            "No networks found yet.".into()
-        } else {
-            String::new()
-        },
-        rows,
+    let description = if rows.is_empty() {
+        "No other networks found yet."
+    } else {
+        ""
     };
-    vec![top, networks]
+    let mut hidden = wifi_row(
+        WifiKey::Hidden,
+        "Hidden network",
+        Control::Segmented(choices(&[("Join…", s("join"))])),
+        Value::Unset,
+    );
+    hidden.subtitle = "One that doesn't show its name".into();
+    rows.push(hidden);
+    if let Some(join) = join.filter(|j| j.hidden) {
+        rows.extend(join_rows(join));
+    }
+    groups.push(Group {
+        title: "Networks".into(),
+        description: description.into(),
+        rows,
+    });
+    groups
+}
+
+/// Read-only rows about the connection that's up.
+fn detail_rows(network: &crate::wifi::Network, d: &crate::wifi::Details) -> Vec<Row> {
+    let info = |title: &str, text: String| {
+        wifi_row(
+            WifiKey::Detail(title.to_string()),
+            title,
+            Control::Info,
+            Value::Str(text),
+        )
+    };
+    let quality = match network.signal {
+        0..=24 => "Weak",
+        25..=49 => "Fair",
+        50..=74 => "Good",
+        _ => "Excellent",
+    };
+    let mut rows = vec![info(
+        "Signal",
+        match d.dbm {
+            Some(dbm) => format!("{quality} · {dbm} dBm"),
+            None => format!("{quality} · {}%", network.signal),
+        },
+    )];
+    let security = if d.security.is_empty() {
+        network.security.label().to_string()
+    } else {
+        d.security.clone()
+    };
+    rows.push(info("Security", security));
+    if let Some(frequency) = d.frequency {
+        rows.push(info("Band", crate::wifi::band(frequency)));
+    }
+    if let Some(bitrate) = d.bitrate {
+        rows.push(info("Link speed", format!("{bitrate} Mb/s")));
+    }
+    if !d.ipv4.is_empty() {
+        rows.push(info("IPv4 address", d.ipv4.join(", ")));
+    }
+    if !d.ipv6.is_empty() {
+        rows.push(info("IPv6 address", d.ipv6.join(", ")).advanced());
+    }
+    if let Some(gateway) = &d.gateway {
+        rows.push(info("Gateway", gateway.clone()));
+    }
+    if !d.dns.is_empty() {
+        rows.push(info("DNS", d.dns.join(", ")));
+    }
+    if let Some(mac) = &d.mac {
+        rows.push(info("Hardware address", mac.clone()).advanced());
+    }
+    if let Some(bssid) = &d.bssid {
+        rows.push(info("Access point", bssid.clone()).advanced());
+    }
+    if !d.interface.is_empty() {
+        rows.push(info("Interface", d.interface.clone()).advanced());
+    }
+    rows
+}
+
+/// The form for joining a network: what its security needs.
+fn join_rows(join: &crate::wifi::Join) -> Vec<Row> {
+    use crate::wifi::{Eap, Phase2, Security};
+    let field = |f: JoinField, title: &str, control: Control, value: &str| {
+        wifi_row(WifiKey::Join(f), title, control, s(value))
+    };
+    let text = |placeholder| Control::Text {
+        placeholder,
+        int: false,
+    };
+    let mut rows = Vec::new();
+    if join.hidden {
+        rows.push(field(
+            JoinField::Ssid,
+            "Name",
+            text("Network name"),
+            &join.ssid,
+        ));
+        let options: Vec<(&str, Value)> = Security::CHOICES
+            .iter()
+            .map(|sec| (sec.label(), s(sec.name())))
+            .collect();
+        rows.push(field(
+            JoinField::Security,
+            "Security",
+            Control::Dropdown(choices(&options)),
+            join.security.name(),
+        ));
+    }
+    match join.security {
+        security if security.takes_password() => {
+            let mut row = field(
+                JoinField::Password,
+                "Password",
+                Control::Password,
+                &join.password,
+            );
+            row.subtitle = if security == Security::Wep {
+                "The WEP key or passphrase".into()
+            } else {
+                "Enter to connect".into()
+            };
+            rows.push(row);
+        }
+        Security::Enterprise => {
+            let options: Vec<(&str, Value)> =
+                Eap::ALL.iter().map(|e| (e.label(), s(e.name()))).collect();
+            rows.push(field(
+                JoinField::Eap,
+                "Authentication",
+                Control::Dropdown(choices(&options)),
+                join.eap.name(),
+            ));
+            if join.eap.tunnelled() {
+                let options: Vec<(&str, Value)> = Phase2::ALL
+                    .iter()
+                    .map(|p| (p.label(), s(p.name())))
+                    .collect();
+                rows.push(
+                    field(
+                        JoinField::Phase2,
+                        "Inner authentication",
+                        Control::Dropdown(choices(&options)),
+                        join.phase2.name(),
+                    )
+                    .sub("Usually MSCHAPv2"),
+                );
+            }
+            rows.push(field(
+                JoinField::Identity,
+                "Username",
+                text("name@example.edu"),
+                &join.identity,
+            ));
+            if join.eap == Eap::Tls {
+                rows.push(field(
+                    JoinField::ClientCert,
+                    "Your certificate",
+                    text("/path/to/cert.pem"),
+                    &join.client_cert,
+                ));
+                rows.push(field(
+                    JoinField::PrivateKey,
+                    "Private key",
+                    text("/path/to/key.pem"),
+                    &join.private_key,
+                ));
+                rows.push(field(
+                    JoinField::Password,
+                    "Private key password",
+                    Control::Password,
+                    &join.password,
+                ));
+            } else {
+                rows.push(field(
+                    JoinField::Password,
+                    "Password",
+                    Control::Password,
+                    &join.password,
+                ));
+            }
+            rows.push(
+                field(
+                    JoinField::AnonymousIdentity,
+                    "Anonymous identity",
+                    text("Optional"),
+                    &join.anonymous_identity,
+                )
+                .sub("Sent before the secure tunnel, e.g. anonymous@example.edu"),
+            );
+            rows.push(
+                field(
+                    JoinField::Domain,
+                    "Domain",
+                    text("Optional, e.g. example.edu"),
+                    &join.domain,
+                )
+                .sub("Checks the server's certificate is for this domain"),
+            );
+            rows.push(
+                field(
+                    JoinField::CaCert,
+                    "CA certificate",
+                    text("/path/to/ca.pem"),
+                    &join.ca_cert,
+                )
+                .sub("Empty: the system's certificates if a domain is set, else no check"),
+            );
+        }
+        _ => {}
+    }
+    rows.push(field(
+        JoinField::Submit,
+        "",
+        Control::Segmented(choices(&[
+            ("Cancel", s("cancel")),
+            ("Connect", s("connect")),
+        ])),
+        "",
+    ));
+    rows
 }
 
 fn speed(v: f64) -> String {

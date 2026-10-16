@@ -101,7 +101,8 @@ pub struct Ui {
     /// The Wi-Fi worker's last report (once the page has been opened).
     pub wifi: Option<crate::wifi::State>,
     /// The network whose password is being asked for.
-    pub wifi_asking: Option<String>,
+    /// The network being joined, whose form shows.
+    pub wifi_join: Option<crate::wifi::Join>,
 }
 
 /// The result of a paint, for hit-testing.
@@ -345,7 +346,7 @@ fn page(
         &ui.displays,
         pages::WifiView {
             state: ui.wifi.as_ref(),
-            asking: ui.wifi_asking.as_deref(),
+            join: ui.wifi_join.as_ref(),
         },
     );
     let show_advanced = ui.advanced.contains(&ui.page);
@@ -674,12 +675,27 @@ fn paint_row(
             );
             let (text, cursor) = match &ui.edit {
                 Some(edit) if edit.key == row.key => (edit.text.as_str(), Some(edit.cursor)),
-                _ => ("", None),
+                _ => (row.value.as_str(), None),
             };
             let dots: String = "•".repeat(text.chars().count());
             p.entry(r, &dots, "Password", cursor, false);
             out.hits.push((r, Target::Entry(index)));
             r.x
+        }
+        Control::Info => {
+            let text = row.value.as_str();
+            let max = (rect.w * 0.6).max(120.0);
+            let tw = p.measure(text, t.font_size, Weight::Normal).min(max);
+            p.label_v(
+                text,
+                right - tw,
+                cy,
+                tw + 1.0,
+                t.font_size,
+                Weight::Normal,
+                t.window_dim,
+            );
+            right - tw
         }
         Control::Wallpapers => unreachable!(),
     };
@@ -1019,7 +1035,7 @@ mod tests {
             rounded: true,
             dragging: None,
             wifi: None,
-            wifi_asking: None,
+            wifi_join: None,
         }
     }
 
@@ -1094,13 +1110,14 @@ mod tests {
     }
 
     #[test]
-    fn wifi_page_lists_networks_and_asks_for_passwords() {
-        use crate::wifi::{Backend, Network, State};
+    fn wifi_page_shows_details_and_join_forms() {
+        use crate::wifi::{Backend, Details, Join, Network, Security, State};
+        use pages::{JoinField, WifiKey};
         let mut ui = ui(Page::Wifi);
-        let network = |ssid: &str, signal, secured, known, connected| Network {
+        let network = |ssid: &str, signal, security, known, connected| Network {
             ssid: ssid.into(),
             signal,
-            secured,
+            security,
             known,
             connected,
         };
@@ -1109,18 +1126,73 @@ mod tests {
             has_device: true,
             enabled: true,
             networks: vec![
-                network("Home", 82, true, true, true),
-                network("Cafe Guest", 55, false, false, false),
-                network("Neighbour 5G", 30, true, false, false),
+                network("Home", 82, Security::PskSae, true, true),
+                network("Cafe Guest", 55, Security::Open, false, false),
+                network("Neighbour 5G", 30, Security::Sae, false, false),
+                network("eduroam", 64, Security::Enterprise, false, false),
             ],
             connecting: None,
             error: None,
+            details: Some(Details {
+                interface: "wlan0".into(),
+                security: "WPA3 Personal".into(),
+                dbm: Some(-52),
+                frequency: Some(5180),
+                bitrate: Some(866),
+                ipv4: vec!["10.0.0.160/24".into()],
+                ipv6: vec!["2001:db8::5/64".into()],
+                gateway: Some("10.0.0.1".into()),
+                dns: vec!["10.0.0.1".into()],
+                mac: Some("3c:a9:f4:00:11:22".into()),
+                bssid: Some("aa:bb:cc:dd:ee:ff".into()),
+            }),
         });
-        ui.wifi_asking = Some("Neighbour 5G".into());
+        let has = |painted: &Painted, key: Key| painted.rows.iter().any(|r| r.key == key);
+
+        ui.wifi_join = Some(Join {
+            ssid: "Neighbour 5G".into(),
+            security: Security::Sae,
+            ..Join::default()
+        });
         let painted = render(&ui, "wifi");
-        let keys: Vec<&Key> = painted.rows.iter().map(|r| &r.key).collect();
-        assert!(keys.contains(&&Key::Wifi(pages::WifiKey::Password("Neighbour 5G".into()))));
-        assert!(keys.contains(&&Key::Wifi(pages::WifiKey::Actions("Home".into()))));
+        assert!(has(&painted, Key::Wifi(WifiKey::Join(JoinField::Password))));
+        assert!(has(&painted, Key::Wifi(WifiKey::Actions("Home".into()))));
+        assert!(has(&painted, Key::Wifi(WifiKey::Detail("Band".into()))));
+        assert!(!has(
+            &painted,
+            Key::Wifi(WifiKey::Join(JoinField::Identity))
+        ));
+
+        ui.wifi_join = Some(Join {
+            ssid: "eduroam".into(),
+            security: Security::Enterprise,
+            identity: "me@uni.edu".into(),
+            password: "secret".into(),
+            ..Join::default()
+        });
+        ui.scroll = 560.0;
+        let painted = render(&ui, "wifi-enterprise");
+        for field in [
+            JoinField::Eap,
+            JoinField::Phase2,
+            JoinField::Identity,
+            JoinField::Password,
+            JoinField::CaCert,
+            JoinField::Domain,
+            JoinField::Submit,
+        ] {
+            assert!(has(&painted, Key::Wifi(WifiKey::Join(field))), "{field:?}");
+        }
+
+        ui.wifi_join = Some(Join {
+            hidden: true,
+            security: Security::Psk,
+            ..Join::default()
+        });
+        ui.scroll = 540.0;
+        let painted = render(&ui, "wifi-hidden");
+        assert!(has(&painted, Key::Wifi(WifiKey::Join(JoinField::Ssid))));
+        assert!(has(&painted, Key::Wifi(WifiKey::Join(JoinField::Security))));
     }
 
     #[test]
