@@ -231,7 +231,29 @@ pub enum Control {
     },
     /// A text entry that shows dots.
     Password,
+    /// A colour: a hex entry, and swatches to pick from below the title.
+    Color {
+        placeholder: &'static str,
+    },
 }
+
+/// The colours offered under a colour row: a light, a bright and a deep
+/// shade of each hue from red round to violet, then pink and grey. The
+/// default base (deep violet) and accent (light pink) are among them.
+pub const SWATCHES: [[&str; 10]; 3] = [
+    [
+        "#f7a8a8", "#f9c49a", "#f6e3a1", "#b5e3b0", "#a6e0dc", "#a8c8f5", "#b8b5f2", "#d4b3f0",
+        "#f4a7c6", "#d6d3dc",
+    ],
+    [
+        "#e5484d", "#f08a3c", "#e8c547", "#5bb974", "#2fb3a6", "#3d8bfd", "#6366f1", "#9b5de5",
+        "#e0569b", "#8e8a96",
+    ],
+    [
+        "#5c1a22", "#6b3414", "#5e4a12", "#1d4a2c", "#134a46", "#1a3260", "#2a2a66", "#2b1a40",
+        "#5a1f40", "#2b2930",
+    ],
+];
 
 impl Control {
     fn switch() -> Self {
@@ -606,7 +628,9 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
             Row::new(
                 "appearance.base_color",
                 "Base colour",
-                Control::text("#2b1a40"),
+                Control::Color {
+                    placeholder: "#2b1a40",
+                },
                 s(&c.appearance.base_color),
                 s(&d.appearance.base_color),
             )
@@ -617,7 +641,9 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
             Row::new(
                 "appearance.accent_color",
                 "Accent colour",
-                Control::text("#f4a7c6"),
+                Control::Color {
+                    placeholder: "#f4a7c6",
+                },
                 s(&c.appearance.accent_color),
                 s(&d.appearance.accent_color),
             )

@@ -120,6 +120,8 @@ struct App {
     error_timer: Option<RegistrationToken>,
     /// Commands for the Wi-Fi worker, started when its page first opens.
     wifi: Option<std::sync::mpsc::Sender<wifi::Command>>,
+    /// Where a picture chosen through "Add" arrives.
+    picked: Option<channel::Sender<Result<Option<wallpapers::Thumb>, String>>>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -182,6 +184,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })?;
     wallpapers::load(view::expand(&config.wallpaper.light), thumb_tx);
+    // A picture of your own, chosen through "Add": show it and set it.
+    let (picked_tx, picked_rx) = channel::channel::<Result<Option<wallpapers::Thumb>, String>>();
+    event_loop
+        .handle()
+        .insert_source(picked_rx, |event, _, app: &mut App| {
+            let channel::Event::Msg(result) = event else {
+                return;
+            };
+            match result {
+                Ok(Some(thumb)) => {
+                    let light = Value::Str(tilde(&thumb.path));
+                    app.ui.thumbs.retain(|t| t.path != thumb.path);
+                    app.ui.thumbs.insert(0, thumb);
+                    app.write(&[
+                        (Key::Path("wallpaper.light"), light),
+                        (Key::Path("wallpaper.dark"), Value::Unset),
+                    ]);
+                }
+                Ok(None) => {}
+                Err(message) => app.show_error(message),
+            }
+            app.redraw();
+        })?;
 
     let mut app = App {
         registry: RegistryState::new(&globals),
@@ -237,6 +262,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_header_click: None,
         error_timer: None,
         wifi: None,
+        picked: Some(picked_tx),
     };
     WaylandSource::new(conn, queue).insert(event_loop.handle())?;
     watch_config(&mut app);
@@ -275,6 +301,13 @@ impl App {
             });
         if inserted.is_ok() {
             self.wifi = Some(wifi::start(tx));
+        }
+    }
+
+    /// "Add" in the wallpaper grid: choose a picture.
+    fn add_wallpaper(&mut self) {
+        if let Some(tx) = &self.picked {
+            wallpapers::add(tx.clone());
         }
     }
 
@@ -667,6 +700,17 @@ impl App {
                     (Key::Path("wallpaper.dark"), Value::Unset),
                 ]);
             }
+            Target::Swatch(i, n) => {
+                let hex = pages::SWATCHES.as_flattened().get(n);
+                if let Some(row) = self.row(i)
+                    && let Some(hex) = hex
+                {
+                    let key = row.key.clone();
+                    self.ui.edit = None;
+                    self.write(&[(key, Value::Str(hex.to_string()))]);
+                }
+            }
+            Target::AddWallpaper => self.add_wallpaper(),
             Target::Advanced => {
                 let page = self.ui.page;
                 if !self.ui.advanced.remove(&page) {

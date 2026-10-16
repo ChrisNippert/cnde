@@ -55,6 +55,9 @@ icon("actions", "view-app-grid",
           "M9 4.5A1.5 1.5 0 0 1 10.5 3h1A1.5 1.5 0 0 1 13 4.5v1A1.5 1.5 0 0 1 11.5 7h-1A1.5 1.5 0 0 1 9 5.5z"
           "M3 10.5A1.5 1.5 0 0 1 4.5 9h1A1.5 1.5 0 0 1 7 10.5v1A1.5 1.5 0 0 1 5.5 13h-1A1.5 1.5 0 0 1 3 11.5z"
           "M9 10.5A1.5 1.5 0 0 1 10.5 9h1A1.5 1.5 0 0 1 13 10.5v1A1.5 1.5 0 0 1 11.5 13h-1A1.5 1.5 0 0 1 9 11.5z"))
+# Add a picture: a plus in a rounded square (an empty slot to fill).
+icon("actions", "insert-image", '<rect x="2.5" y="2.5" width="11" height="11" rx="3"/><path d="M8 5.5v5M5.5 8h5"/>')
+icon("actions", "list-add", '<path d="M8 3.5v9M3.5 8h9"/>')
 icon("apps", "application-x-executable",
      '<rect x="2" y="2.5" width="12" height="11" rx="3"/><path d="M5 6.5l2 1.75-2 1.75M8.5 10.5h2.5"/>')
 

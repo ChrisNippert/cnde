@@ -143,3 +143,192 @@ fn thumbnail(path: &Path) -> Option<Pixmap> {
     }
     Pixmap::from_vec(data, cnde_ui::tiny_skia::IntSize::from_wh(tw, th)?)
 }
+
+/// Ask for a picture of your own (the desktop's file chooser through the
+/// portal, else zenity or kdialog), keep a copy where GNOME keeps added
+/// backgrounds, and send its thumbnail. `Ok(None)`: cancelled.
+pub fn add(tx: Sender<Result<Option<Thumb>, String>>) {
+    std::thread::Builder::new()
+        .name("add-wallpaper".into())
+        .spawn(move || {
+            let result = choose().and_then(|picked| match picked {
+                None => Ok(None),
+                Some(path) => {
+                    let path = keep(&path)?;
+                    let image = thumbnail(&path)
+                        .ok_or_else(|| format!("{} isn't a picture", path.display()))?;
+                    Ok(Some(Thumb { path, image }))
+                }
+            });
+            let _ = tx.send(result);
+        })
+        .ok();
+}
+
+fn choose() -> Result<Option<PathBuf>, String> {
+    match portal_choose() {
+        Ok(picked) => return Ok(picked),
+        Err(err) => debug!(%err, "no file chooser portal; trying zenity and kdialog"),
+    }
+    let tools: [(&str, &[&str]); 2] = [
+        (
+            "zenity",
+            &[
+                "--file-selection",
+                "--title=Choose a Background",
+                "--file-filter=Pictures | *.png *.jpg *.jpeg *.webp *.PNG *.JPG *.JPEG *.WEBP",
+            ],
+        ),
+        (
+            "kdialog",
+            &[
+                "--title",
+                "Choose a Background",
+                "--getopenfilename",
+                ".",
+                "image/png image/jpeg image/webp",
+            ],
+        ),
+    ];
+    for (tool, args) in tools {
+        let Ok(output) = std::process::Command::new(tool)
+            .args(args)
+            .current_dir(std::env::var_os("HOME").unwrap_or_else(|| "/".into()))
+            .output()
+        else {
+            continue;
+        };
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // Exit status 1 with nothing printed: cancelled.
+        return Ok((output.status.success() && !path.is_empty()).then(|| path.into()));
+    }
+    Err(
+        "No file chooser: install xdg-desktop-portal-gtk (or zenity), \
+         or put pictures in ~/Pictures/Wallpapers"
+            .into(),
+    )
+}
+
+/// org.freedesktop.portal.FileChooser.OpenFile, waiting for its answer.
+fn portal_choose() -> zbus::Result<Option<PathBuf>> {
+    use std::collections::HashMap;
+    use zbus::zvariant::{OwnedValue, Value};
+
+    let conn = zbus::blocking::Connection::session()?;
+    let token = format!("cnde_settings_{}", std::process::id());
+    // Listen on the request's path before asking, so a quick answer isn't
+    // missed (the path is predictable from our name and the token).
+    let sender = conn
+        .unique_name()
+        .map(|n| n.trim_start_matches(':').replace('.', "_"))
+        .unwrap_or_default();
+    let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
+    let request = zbus::blocking::Proxy::new(
+        &conn,
+        "org.freedesktop.portal.Desktop",
+        path.as_str(),
+        "org.freedesktop.portal.Request",
+    )?;
+    let mut responses = request.receive_signal("Response")?;
+
+    let filters = vec![(
+        "Pictures",
+        vec![(1u32, "image/png"), (1, "image/jpeg"), (1, "image/webp")],
+    )];
+    let mut options: HashMap<&str, Value> = HashMap::new();
+    options.insert("handle_token", Value::from(token.as_str()));
+    options.insert("filters", Value::from(filters));
+    conn.call_method(
+        Some("org.freedesktop.portal.Desktop"),
+        "/org/freedesktop/portal/desktop",
+        Some("org.freedesktop.portal.FileChooser"),
+        "OpenFile",
+        &("", "Choose a Background", options),
+    )?;
+
+    let Some(message) = responses.next() else {
+        return Err(zbus::Error::Failure("the portal went away".into()));
+    };
+    let (code, results): (u32, HashMap<String, OwnedValue>) = message.body().deserialize()?;
+    if code != 0 {
+        return Ok(None);
+    }
+    let uris: Vec<String> = results
+        .get("uris")
+        .and_then(|v| v.try_clone().ok())
+        .and_then(|v| v.try_into().ok())
+        .unwrap_or_default();
+    Ok(uris.first().and_then(|uri| file_uri_path(uri)))
+}
+
+/// "file:///a%20b.png" -> "/a b.png".
+fn file_uri_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    let bytes = rest.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let Some(byte) = rest
+                .get(i + 1..i + 3)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            out.push(byte);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    use std::os::unix::ffi::OsStringExt;
+    Some(std::ffi::OsString::from_vec(out).into())
+}
+
+/// A copy in ~/.local/share/backgrounds, so the picture stays offered (and
+/// set) even if the original moves. Pictures already there stay put.
+fn keep(path: &Path) -> Result<PathBuf, String> {
+    let dir = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .ok_or("HOME isn't set")?
+        .join("backgrounds");
+    if path.starts_with(&dir) {
+        return Ok(path.to_path_buf());
+    }
+    std::fs::create_dir_all(&dir).map_err(|err| format!("Can't make {}: {err}", dir.display()))?;
+    let name = path.file_name().ok_or("That's not a file")?;
+    let mut target = dir.join(name);
+    // Another picture by this name: number this one.
+    let mut n = 2;
+    while target.exists() && !same_file(path, &target) {
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        let ext = path.extension().unwrap_or_default().to_string_lossy();
+        target = dir.join(format!("{stem}-{n}.{ext}"));
+        n += 1;
+    }
+    if !target.exists() {
+        std::fs::copy(path, &target).map_err(|err| format!("Can't copy the picture: {err}"))?;
+    }
+    Ok(target)
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::read(a), std::fs::read(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_uris_decode() {
+        assert_eq!(
+            file_uri_path("file:///home/me/My%20Pics/a%2Bb.png"),
+            Some(PathBuf::from("/home/me/My Pics/a+b.png"))
+        );
+        assert_eq!(file_uri_path("https://example.com/a.png"), None);
+    }
+}

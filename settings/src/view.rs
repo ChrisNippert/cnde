@@ -11,7 +11,7 @@ use cnde_ui::{
 };
 
 use crate::{
-    pages::{self, Control, Display, Key, Page, Row, Value},
+    pages::{self, Control, Display, Key, Page, Row, SWATCHES, Value},
     wallpapers::Thumb,
 };
 
@@ -37,6 +37,10 @@ pub enum Target {
     Reset(usize),
     /// A wallpaper tile; `None` is the built-in one.
     Wallpaper(Option<usize>),
+    /// The tile after the wallpapers: pick a picture of your own.
+    AddWallpaper,
+    /// A colour row's swatch: the row, and which of `SWATCHES` (row-major).
+    Swatch(usize, usize),
     Advanced,
 }
 
@@ -453,15 +457,27 @@ fn page(
 fn row_height(ui: &Ui, row: &Row, t: &Theme, col_w: f32) -> f32 {
     if let Control::Wallpapers = row.control {
         let (cols, _, tile_h) = wallpaper_grid(col_w, t);
-        let count = ui.thumbs.len() + 1;
+        // The built-in one, the pictures, and "Add".
+        let count = ui.thumbs.len() + 2;
         let lines = count.div_ceil(cols);
         return t.row_padding * 2.0 + lines as f32 * (tile_h + 12.0) - 12.0;
+    }
+    if let Control::Color { .. } = row.control {
+        return t.row_subtitle_height + swatches_height() + t.row_padding;
     }
     if row.subtitle.is_empty() {
         t.row_height
     } else {
         t.row_subtitle_height
     }
+}
+
+const SWATCH: f32 = 26.0;
+const SWATCH_GAP: f32 = 8.0;
+
+fn swatches_height() -> f32 {
+    let lines = SWATCHES.len() as f32;
+    lines * SWATCH + (lines - 1.0) * SWATCH_GAP
 }
 
 /// Columns, tile width and tile height for a card `col_w` wide.
@@ -518,7 +534,12 @@ fn paint_row(
     if activatable {
         out.hits.push((rect, Target::Row(index)));
     }
-    let cy = rect.y + rect.h / 2.0;
+    // Colour rows put their swatches below the usual title line.
+    let line_h = match row.control {
+        Control::Color { .. } => t.row_subtitle_height,
+        _ => rect.h,
+    };
+    let cy = rect.y + line_h / 2.0;
     let right = rect.right() - t.row_padding;
 
     // The control, right-aligned; returns its left edge.
@@ -594,7 +615,7 @@ fn paint_row(
             );
             r.x - 8.0 - tw.max(40.0)
         }
-        Control::Text { placeholder, .. } => {
+        Control::Text { placeholder, .. } | Control::Color { placeholder } => {
             let r = Rect::new(
                 right - ENTRY_WIDTH,
                 cy - t.button_height / 2.0,
@@ -708,6 +729,62 @@ fn paint_row(
             t.window_dim,
         );
     }
+    if let Control::Color { .. } = row.control {
+        swatches(ui, a, p, out, row, index, rect, line_h);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn swatches(
+    ui: &Ui,
+    a: &mut Anim,
+    p: &mut Painter<'_, '_>,
+    out: &mut Painted,
+    row: &Row,
+    index: usize,
+    rect: Rect,
+    line_h: f32,
+) {
+    let t = p.theme;
+    let current = row.value.as_str().to_ascii_lowercase();
+    let x0 = rect.x + t.row_padding;
+    let y0 = rect.y + line_h;
+    for (line, colors) in SWATCHES.iter().enumerate() {
+        for (column, hex) in colors.iter().enumerate() {
+            let Some((r, g, b, _)) = cnde_config::parse_color(hex) else {
+                continue;
+            };
+            let x = x0 + column as f32 * (SWATCH + SWATCH_GAP);
+            let y = y0 + line as f32 * (SWATCH + SWATCH_GAP);
+            let swatch = Rect::new(x, y, SWATCH, SWATCH);
+            let n = line * colors.len() + column;
+            let lit = hover(a, ui, Target::Swatch(index, n));
+            if *hex == current {
+                p.canvas.stroke_rounded_rect(
+                    x - 3.5,
+                    y - 3.5,
+                    SWATCH + 7.0,
+                    SWATCH + 7.0,
+                    10.0,
+                    2.0,
+                    t.window_text,
+                );
+            } else if lit > 0.0 {
+                p.canvas.stroke_rounded_rect(
+                    x - 3.5,
+                    y - 3.5,
+                    SWATCH + 7.0,
+                    SWATCH + 7.0,
+                    10.0,
+                    2.0,
+                    t.window_dim.with_alpha(t.window_dim.a * lit),
+                );
+            }
+            p.canvas
+                .rounded_rect(x, y, SWATCH, SWATCH, 7.0, Color::rgb(r, g, b));
+            out.hits.push((swatch, Target::Swatch(index, n)));
+        }
+    }
 }
 
 fn wallpapers(
@@ -804,6 +881,43 @@ fn wallpapers(
         }
         out.hits.push((r, Target::Wallpaper(Some(i))));
     }
+
+    // "Add": an empty slot with a plus in a square.
+    let r = place(ui.thumbs.len() + 1);
+    let lit = hover(a, ui, Target::AddWallpaper);
+    if lit > 0.0 {
+        p.canvas.rounded_rect(
+            r.x,
+            r.y,
+            r.w,
+            r.h,
+            8.0,
+            t.button_hover.with_alpha(t.button_hover.a * lit),
+        );
+    }
+    p.canvas.stroke_rounded_rect(
+        r.x + 1.0,
+        r.y + 1.0,
+        r.w - 2.0,
+        r.h - 2.0,
+        8.0,
+        1.5,
+        t.window_dim.with_alpha(t.window_dim.a * 0.5),
+    );
+    let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    p.icon("insert-image-symbolic", cx, cy - 8.0, 24.0, t.window_dim);
+    let label = "Add";
+    let lw = p.measure(label, t.subtitle_size, Weight::Normal);
+    p.label_v(
+        label,
+        cx - lw / 2.0,
+        cy + 18.0,
+        lw + 1.0,
+        t.subtitle_size,
+        Weight::Normal,
+        t.window_dim,
+    );
+    out.hits.push((r, Target::AddWallpaper));
 }
 
 /// `top` blended over an opaque `base`.
