@@ -137,7 +137,7 @@ pub struct Position {
     pub y: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Appearance {
     pub color_scheme: ColorScheme,
@@ -147,6 +147,22 @@ pub struct Appearance {
     pub window_buttons: WindowButtons,
     /// The colours: cnde's own, or GNOME's.
     pub palette: Palette,
+    /// Symbolic icons for the shell, Settings and title bars: "cnde" (its
+    /// own), "Adwaita", or any installed theme's name. Missing icons come
+    /// from cnde's set.
+    pub icon_theme: String,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            color_scheme: ColorScheme::default(),
+            titlebars: Titlebars::default(),
+            window_buttons: WindowButtons::default(),
+            palette: Palette::default(),
+            icon_theme: "cnde".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

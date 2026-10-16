@@ -183,6 +183,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = config::load();
     let theme = config::theme_from(&config);
+    let mut icons = Icons::new();
+    icons.set_theme(&config.appearance.icon_theme);
     let fonts = Fonts::new(theme.font_families);
     info!(font = fonts.family(), "cnde-shell starting");
 
@@ -226,7 +228,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config,
         theme,
         fonts,
-        icons: Icons::new(),
+        icons,
         status: Status::default(),
         panels: Vec::new(),
         workspaces: Workspaces::default(),

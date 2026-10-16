@@ -137,6 +137,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or_default();
     let theme = theme_for(&config);
+    let mut icons = Icons::new();
+    icons.set_theme(&config.appearance.icon_theme);
     let fonts = Fonts::new(theme.font_families);
 
     let compositor = CompositorState::bind(&globals, &qh)?;
@@ -190,7 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         res: Res {
             fonts,
-            icons: Icons::new(),
+            icons,
             theme,
             anim: view::Anim::new(),
         },
@@ -290,8 +292,9 @@ impl App {
     }
 
     fn set_config(&mut self, config: Config) {
-        if config.appearance.color_scheme != self.ui.config.appearance.color_scheme {
+        if config.appearance != self.ui.config.appearance {
             self.res.theme = theme_for(&config);
+            self.res.icons.set_theme(&config.appearance.icon_theme);
         }
         self.ui.config = config;
         self.redraw();

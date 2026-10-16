@@ -251,6 +251,7 @@ impl Decorations {
                 ])
             });
             let icons = self.icons.get_or_insert_with(Icons::new);
+            icons.set_theme(&key.appearance.icon_theme);
             let mut canvas = Canvas::new(&mut pixels, w, h, scale as f32)?;
             paint(&mut canvas, fonts, icons, key);
         }

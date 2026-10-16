@@ -1,7 +1,8 @@
 //! Icons from the installed icon themes, rendered once per size.
 //!
-//! Symbolic icons (Adwaita first) keep only their alpha channel and are drawn
-//! tinted with any colour, the way GTK draws them. App icons are full colour,
+//! Symbolic icons (the configured theme, then cnde's own, then Adwaita) keep
+//! only their alpha channel and are drawn tinted with any colour, the way
+//! GTK draws them. App icons are full colour,
 //! from SVG or PNG, looked up in the user's GTK icon theme, then hicolor
 //! (where nearly every app installs its icon), then Adwaita.
 
@@ -12,11 +13,14 @@ use std::{
 
 use resvg::{tiny_skia, usvg};
 
-/// Themes searched in order; hicolor is the freedesktop fallback.
-const THEMES: &[&str] = &["Adwaita", "hicolor"];
+/// Symbolic themes searched after the configured one; hicolor is the
+/// freedesktop fallback.
+const THEMES: &[&str] = &["cnde", "Adwaita", "hicolor"];
 
 pub struct Icons {
     base_dirs: Vec<PathBuf>,
+    /// Symbolic themes, in search order.
+    themes: Vec<String>,
     /// (name, pixel size) -> coverage mask, or None if the theme lacks it.
     cache: HashMap<(String, u32), Option<Mask>>,
     /// Themes searched for app icons, in order.
@@ -50,6 +54,11 @@ impl Icons {
                 .filter(|d| !d.is_empty())
                 .map(|d| PathBuf::from(d).join("icons")),
         );
+        // A build that isn't installed: cnde's icons from the source tree.
+        let source = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../icons"));
+        if source.is_dir() {
+            base_dirs.push(source);
+        }
         let mut app_themes: Vec<String> = gtk_icon_theme().into_iter().collect();
         // AdwaitaLegacy has the classic full-colour icons (preferences-system).
         for theme in ["hicolor", "Adwaita", "AdwaitaLegacy"] {
@@ -59,6 +68,7 @@ impl Icons {
         }
         Self {
             base_dirs,
+            themes: THEMES.iter().map(|t| t.to_string()).collect(),
             cache: HashMap::new(),
             app_themes,
             app_cache: HashMap::new(),
@@ -152,11 +162,31 @@ impl Icons {
         self.cache.get(&key)?.as_ref()
     }
 
-    /// `<base>/<theme>/{symbolic,scalable}/<context>/<name>.svg`.
+    /// Prefer `theme` for symbolic icons (`appearance.icon_theme`); empty
+    /// or "cnde" means cnde's own. Missing icons come from cnde's, then
+    /// Adwaita.
+    pub fn set_theme(&mut self, theme: &str) {
+        let mut themes: Vec<String> = Vec::new();
+        if !theme.is_empty() {
+            themes.push(theme.to_string());
+        }
+        for fallback in THEMES {
+            if !themes.iter().any(|t| t.eq_ignore_ascii_case(fallback)) {
+                themes.push(fallback.to_string());
+            }
+        }
+        if themes != self.themes {
+            self.themes = themes;
+            self.cache.clear();
+        }
+    }
+
+    /// `<base>/<theme>/{symbolic,scalable}/<context>/<name>.svg`; themes
+    /// first, so a theme anywhere beats the next one.
     fn find(&self, name: &str) -> Option<PathBuf> {
         let file = format!("{name}.svg");
-        for base in &self.base_dirs {
-            for theme in THEMES {
+        for theme in &self.themes {
+            for base in &self.base_dirs {
                 for kind in ["symbolic", "scalable"] {
                     let Ok(contexts) = std::fs::read_dir(base.join(theme).join(kind)) else {
                         continue;

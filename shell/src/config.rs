@@ -138,6 +138,7 @@ impl App {
         }
         info!("config reloaded");
         self.theme = theme_from(&config);
+        self.icons.set_theme(&config.appearance.icon_theme);
         let dock_moved = config.dock.position != self.config.dock.position;
         self.config = config;
         for panel in &mut self.panels {

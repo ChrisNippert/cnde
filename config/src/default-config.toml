@@ -36,6 +36,7 @@
 
 [appearance]
 # color_scheme = "dark"    # or "light"; picks the wallpaper variant
+# icon_theme = "cnde"      # "cnde", "Adwaita", or any installed icon theme (e.g. "Papirus")
 # palette = "cnde"         # "cnde" (Dusk when dark, Blossom when light) or "adwaita" (GNOME's)
 # window_buttons = "all"   # "all" (minimize, maximize, close) or "close"
 # titlebars = "cnde"       # "cnde" draws title bars for apps that allow it; "app" leaves them to the app
