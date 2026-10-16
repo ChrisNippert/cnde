@@ -21,6 +21,9 @@ pub enum Action {
     SetVolume(u32),
     ToggleMute,
     SetWifi(bool),
+    /// Percent of the panel's maximum brightness.
+    SetBrightness(u32),
+    SetPowerProfile(crate::status::PowerProfile),
     Suspend,
     Reboot,
     PowerOff,
@@ -49,10 +52,15 @@ fn worker(rx: Receiver<Action>) {
         queue.push_back(first);
         queue.extend(rx.try_iter());
         while let Some(action) = queue.pop_front() {
-            // A later volume in the queue makes this one pointless.
-            if matches!(action, Action::SetVolume(_))
-                && queue.iter().any(|a| matches!(a, Action::SetVolume(_)))
-            {
+            // A later value for the same slider makes this one pointless.
+            let superseded = match action {
+                Action::SetVolume(_) => queue.iter().any(|a| matches!(a, Action::SetVolume(_))),
+                Action::SetBrightness(_) => {
+                    queue.iter().any(|a| matches!(a, Action::SetBrightness(_)))
+                }
+                _ => false,
+            };
+            if superseded {
                 continue;
             }
             perform(action);
@@ -67,6 +75,8 @@ fn perform(action: Action) {
         }
         Action::ToggleMute => pactl(&["set-sink-mute", "@DEFAULT_SINK@", "toggle"]),
         Action::SetWifi(enabled) => set_wifi(*enabled),
+        Action::SetBrightness(percent) => set_brightness(*percent),
+        Action::SetPowerProfile(profile) => set_power_profile(*profile),
         Action::Suspend => login1("Suspend"),
         Action::Reboot => login1("Reboot"),
         Action::PowerOff => login1("PowerOff"),
@@ -105,22 +115,114 @@ fn login1(method: &str) -> Result<(), String> {
     .map_err(|err| err.to_string())
 }
 
-/// NetworkManager's radio switch. (iwd: power the device; not yet.)
-fn set_wifi(enabled: bool) -> Result<(), String> {
-    let conn = Connection::system().map_err(|err| err.to_string())?;
-    let props = PropertiesProxy::builder(&conn)
-        .destination("org.freedesktop.NetworkManager")
-        .and_then(|b| b.path("/org/freedesktop/NetworkManager"))
+/// Set a D-Bus property on the system bus.
+fn set_property(
+    conn: &Connection,
+    destination: &str,
+    path: &str,
+    interface: &str,
+    name: &str,
+    value: zbus::zvariant::Value<'_>,
+) -> Result<(), String> {
+    let props = PropertiesProxy::builder(conn)
+        .destination(destination)
+        .and_then(|b| b.path(path))
         .and_then(|b| b.build())
         .map_err(|err| err.to_string())?;
-    let interface = "org.freedesktop.NetworkManager"
+    let interface = interface
         .try_into()
         .map_err(|err: zbus::names::Error| err.to_string())?;
     props
-        .set(
-            interface,
-            "WirelessEnabled",
-            zbus::zvariant::Value::from(enabled),
-        )
+        .set(interface, name, value)
         .map_err(|err| err.to_string())
+}
+
+/// The Wi-Fi radio: NetworkManager's switch if it's running, else iwd's
+/// device power.
+fn set_wifi(enabled: bool) -> Result<(), String> {
+    let conn = Connection::system().map_err(|err| err.to_string())?;
+    let nm = set_property(
+        &conn,
+        "org.freedesktop.NetworkManager",
+        "/org/freedesktop/NetworkManager",
+        "org.freedesktop.NetworkManager",
+        "WirelessEnabled",
+        enabled.into(),
+    );
+    if nm.is_ok() {
+        return nm;
+    }
+    let objects = zbus::blocking::fdo::ObjectManagerProxy::builder(&conn)
+        .destination("net.connman.iwd")
+        .and_then(|b| b.path("/"))
+        .and_then(|b| b.build())
+        .map_err(|err| err.to_string())?;
+    let devices: Vec<String> = objects
+        .get_managed_objects()
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .filter(|(_, ifaces)| ifaces.contains_key("net.connman.iwd.Device"))
+        .map(|(path, _)| path.to_string())
+        .collect();
+    if devices.is_empty() {
+        return Err("no NetworkManager or iwd Wi-Fi device".into());
+    }
+    for path in devices {
+        set_property(
+            &conn,
+            "net.connman.iwd",
+            &path,
+            "net.connman.iwd.Device",
+            "Powered",
+            enabled.into(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Write the backlight directly (needs write access to the sysfs file,
+/// which cnde's laptop setup grants the video group), else ask logind,
+/// which allows it for the active session.
+fn set_brightness(percent: u32) -> Result<(), String> {
+    let backlight = crate::status::read_backlight().ok_or("no backlight")?;
+    // Never all the way to black: a 0% panel looks like a dead screen.
+    let raw = ((percent.clamp(1, 100) as f64 / 100.0) * backlight.max as f64).round() as u32;
+    let raw = raw.max(1);
+    let direct = std::fs::write(backlight.path.join("brightness"), raw.to_string());
+    if direct.is_ok() {
+        return Ok(());
+    }
+    let device = backlight
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let conn = Connection::system().map_err(|err| err.to_string())?;
+    conn.call_method(
+        Some("org.freedesktop.login1"),
+        "/org/freedesktop/login1/session/auto",
+        Some("org.freedesktop.login1.Session"),
+        "SetBrightness",
+        &("backlight", device.as_str(), raw),
+    )
+    .map(|_| ())
+    .map_err(|err| {
+        format!(
+            "can't write {} ({}) and logind refused ({err}); give the video group write access",
+            backlight.path.display(),
+            direct.err().map(|e| e.to_string()).unwrap_or_default()
+        )
+    })
+}
+
+fn set_power_profile(profile: crate::status::PowerProfile) -> Result<(), String> {
+    let conn = Connection::system().map_err(|err| err.to_string())?;
+    set_property(
+        &conn,
+        "net.hadess.PowerProfiles",
+        "/net/hadess/PowerProfiles",
+        "net.hadess.PowerProfiles",
+        "ActiveProfile",
+        profile.dbus_name().into(),
+    )
 }

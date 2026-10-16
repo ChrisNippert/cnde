@@ -1,5 +1,6 @@
 //! System status for the panel: battery (UPower), network (NetworkManager or
-//! iwd, ARCHITECTURE.md §5.2) and volume (PipeWire via `pactl`).
+//! iwd, ARCHITECTURE.md §5.2), volume (PipeWire via `pactl`), power mode
+//! (power-profiles-daemon) and screen brightness (the kernel's backlight).
 //!
 //! Each source runs on its own thread, blocked on change notifications (no
 //! polling), and sends `Update`s to the main loop only when its value
@@ -31,6 +32,38 @@ pub enum Update {
     /// Whether the Wi-Fi radio is on; `None` if we can't switch it.
     WifiEnabled(Option<bool>),
     Volume(Option<Volume>),
+    PowerProfiles(Option<PowerProfiles>),
+}
+
+/// power-profiles-daemon's modes, in the order they're shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerProfile {
+    PowerSaver,
+    Balanced,
+    Performance,
+}
+
+impl PowerProfile {
+    pub const ALL: [PowerProfile; 3] = [Self::PowerSaver, Self::Balanced, Self::Performance];
+
+    pub fn dbus_name(self) -> &'static str {
+        match self {
+            Self::PowerSaver => "power-saver",
+            Self::Balanced => "balanced",
+            Self::Performance => "performance",
+        }
+    }
+
+    fn from_dbus(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.dbus_name() == name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PowerProfiles {
+    pub active: PowerProfile,
+    /// Performance isn't offered on every machine.
+    pub available: Vec<PowerProfile>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -64,7 +97,8 @@ pub struct Volume {
 pub fn start(tx: Sender<Update>) {
     spawn("status-battery", tx.clone(), battery);
     spawn("status-network", tx.clone(), network);
-    spawn("status-volume", tx, volume);
+    spawn("status-volume", tx.clone(), volume);
+    spawn("status-power-profiles", tx, power_profiles);
 }
 
 fn spawn(name: &str, tx: Sender<Update>, run: fn(&Sender<Update>) -> zbus::Result<()>) {
@@ -224,65 +258,85 @@ fn iwd(conn: &Connection, tx: &Sender<Update>) -> zbus::Result<()> {
         .destination(IWD)?
         .path("/")?
         .build()?;
-    // Switching iwd's radio isn't wired up yet.
-    let _ = tx.send(Update::WifiEnabled(None));
-    let mut out = Dedup::new(tx);
-    loop {
+    // Everything iwd announces (devices powering on and off, stations
+    // connecting, interfaces appearing) re-reads the whole state; it's
+    // small, and Dedup drops the repeats.
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender(IWD)?
+        .build();
+    let signals = zbus::blocking::MessageIterator::for_match_rule(rule, conn, Some(64))?;
+    let (mut out, mut out_radio) = (Dedup::new(tx), Dedup::new(tx));
+    let mut read = || -> zbus::Result<()> {
         let managed = objects.get_managed_objects()?;
+        // The first wireless device, and whether its radio is on.
+        let device = managed
+            .iter()
+            .find(|(_, ifaces)| ifaces.contains_key("net.connman.iwd.Device"));
+        let powered = device.and_then(|(path, _)| {
+            let props = props(conn, IWD, path.as_str()).ok()?;
+            value::<bool>(&get_all(&props, "net.connman.iwd.Device")?, "Powered")
+        });
+        out_radio.send(Update::WifiEnabled(powered));
         let station = managed
             .iter()
             .find(|(_, ifaces)| ifaces.contains_key("net.connman.iwd.Station"))
             .map(|(path, _)| path.clone());
-        let Some(station_path) = station else {
-            // No wireless device (yet): check again later.
-            out.send(Update::Network(Network::Disconnected));
-            thread::sleep(Duration::from_secs(30));
-            continue;
+        let network = match (powered, station) {
+            (Some(true), Some(path)) => iwd_station(conn, &path),
+            _ => Network::Disconnected,
         };
-        let station = props(conn, IWD, station_path.as_str())?;
-        let read = || -> Network {
-            let Some(all) = get_all(&station, "net.connman.iwd.Station") else {
-                return Network::Disconnected;
-            };
-            let state: String = value(&all, "State").unwrap_or_default();
-            match state.as_str() {
-                "connected" => {}
-                "connecting" | "roaming" => return Network::Connecting,
-                _ => return Network::Disconnected,
-            }
-            let Some(network): Option<OwnedObjectPath> = value(&all, "ConnectedNetwork") else {
-                return Network::Disconnected;
-            };
-            let ssid = props(conn, IWD, network.as_str())
-                .ok()
-                .and_then(|n| get_all(&n, "net.connman.iwd.Network"))
-                .and_then(|n| value::<String>(&n, "Name"))
-                .unwrap_or_default();
-            // Signal strength (in 100 * dBm) from the station's scan results.
-            let strength = conn
-                .call_method(
-                    Some(IWD),
-                    station_path.as_str(),
-                    Some("net.connman.iwd.Station"),
-                    "GetOrderedNetworks",
-                    &(),
-                )
-                .ok()
-                .and_then(|reply| {
-                    reply
-                        .body()
-                        .deserialize::<Vec<(OwnedObjectPath, i16)>>()
-                        .ok()
-                })
-                .and_then(|list| list.into_iter().find(|(path, _)| path == &network))
-                .map_or(0, |(_, rssi)| dbm_to_percent(rssi as f64 / 100.0));
-            Network::Wifi { ssid, strength }
-        };
-        out.send(Update::Network(read()));
-        for _ in station.receive_properties_changed()? {
-            out.send(Update::Network(read()));
-        }
+        out.send(Update::Network(network));
+        Ok(())
+    };
+    read()?;
+    for _ in signals {
+        read()?;
     }
+    Ok(())
+}
+
+fn iwd_station(conn: &Connection, station_path: &OwnedObjectPath) -> Network {
+    const IWD: &str = "net.connman.iwd";
+    let Some(all) = props(conn, IWD, station_path.as_str())
+        .ok()
+        .and_then(|station| get_all(&station, "net.connman.iwd.Station"))
+    else {
+        return Network::Disconnected;
+    };
+    let state: String = value(&all, "State").unwrap_or_default();
+    match state.as_str() {
+        "connected" => {}
+        "connecting" | "roaming" => return Network::Connecting,
+        _ => return Network::Disconnected,
+    }
+    let Some(network): Option<OwnedObjectPath> = value(&all, "ConnectedNetwork") else {
+        return Network::Disconnected;
+    };
+    let ssid = props(conn, IWD, network.as_str())
+        .ok()
+        .and_then(|n| get_all(&n, "net.connman.iwd.Network"))
+        .and_then(|n| value::<String>(&n, "Name"))
+        .unwrap_or_default();
+    // Signal strength (in 100 * dBm) from the station's scan results.
+    let strength = conn
+        .call_method(
+            Some(IWD),
+            station_path.as_str(),
+            Some("net.connman.iwd.Station"),
+            "GetOrderedNetworks",
+            &(),
+        )
+        .ok()
+        .and_then(|reply| {
+            reply
+                .body()
+                .deserialize::<Vec<(OwnedObjectPath, i16)>>()
+                .ok()
+        })
+        .and_then(|list| list.into_iter().find(|(path, _)| path == &network))
+        .map_or(0, |(_, rssi)| dbm_to_percent(rssi as f64 / 100.0));
+    Network::Wifi { ssid, strength }
 }
 
 /// -90 dBm and below is nothing, -50 dBm and above is full.
@@ -318,6 +372,87 @@ fn volume(tx: &Sender<Update>) -> zbus::Result<()> {
         out.send(Update::Volume(None));
         thread::sleep(Duration::from_secs(3));
     }
+}
+
+// --- Power mode: power-profiles-daemon.
+
+fn power_profiles(tx: &Sender<Update>) -> zbus::Result<()> {
+    let conn = Connection::system()?;
+    let daemon = props(
+        &conn,
+        "net.hadess.PowerProfiles",
+        "/net/hadess/PowerProfiles",
+    )?;
+    let read = || -> Option<PowerProfiles> {
+        let all = get_all(&daemon, "net.hadess.PowerProfiles")?;
+        let active: String = value(&all, "ActiveProfile")?;
+        let profiles: Vec<HashMap<String, OwnedValue>> =
+            value(&all, "Profiles").unwrap_or_default();
+        let mut available: Vec<PowerProfile> = profiles
+            .iter()
+            .filter_map(|p| PowerProfile::from_dbus(&value::<String>(p, "Profile")?))
+            .collect();
+        available.sort_by_key(|p| PowerProfile::ALL.iter().position(|q| q == p));
+        Some(PowerProfiles {
+            active: PowerProfile::from_dbus(&active)?,
+            available,
+        })
+    };
+    let mut out = Dedup::new(tx);
+    out.send(Update::PowerProfiles(read()));
+    for _ in daemon.receive_properties_changed()? {
+        out.send(Update::PowerProfiles(read()));
+    }
+    Ok(())
+}
+
+// --- Brightness: /sys/class/backlight. Read on demand (when quick settings
+// opens, and after we change it); there's no change notification to wait on.
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Backlight {
+    pub path: std::path::PathBuf,
+    pub max: u32,
+    pub current: u32,
+}
+
+impl Backlight {
+    pub fn percent(&self) -> u32 {
+        ((self.current as f64 / self.max.max(1) as f64) * 100.0).round() as u32
+    }
+}
+
+/// The laptop panel's backlight, preferring the GPU's own over firmware ones.
+pub fn read_backlight() -> Option<Backlight> {
+    let mut devices: Vec<std::path::PathBuf> = std::fs::read_dir("/sys/class/backlight")
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    let kind = |path: &std::path::Path| {
+        std::fs::read_to_string(path.join("type"))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    devices.sort_by_key(|p| match kind(p).as_str() {
+        "raw" => 0,
+        "platform" => 1,
+        _ => 2,
+    });
+    let path = devices.into_iter().next()?;
+    let number = |file: &str| -> Option<u32> {
+        std::fs::read_to_string(path.join(file))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    };
+    Some(Backlight {
+        max: number("max_brightness")?,
+        current: number("brightness")?,
+        path,
+    })
 }
 
 fn read_volume() -> Option<Volume> {

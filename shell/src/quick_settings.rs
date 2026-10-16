@@ -31,6 +31,9 @@ use crate::{
 pub enum Hit {
     Volume,
     Mute,
+    Brightness,
+    /// Index into the available power profiles.
+    PowerProfile(usize),
     Wifi,
     Bluetooth,
     DarkMode,
@@ -65,6 +68,9 @@ pub struct Layout {
     /// (circle bounds, what it is), left to right.
     pub toggles: Vec<(Rect, Hit)>,
     pub volume: Rect,
+    pub brightness: Option<Rect>,
+    /// The power mode tile and its segments.
+    pub power_profiles: Option<(Rect, Vec<Rect>)>,
     pub footer_y: f32,
     pub power_button: Rect,
     pub power_menu: Option<Vec<(Rect, Hit)>>,
@@ -73,8 +79,29 @@ pub struct Layout {
 const FOOTER_HEIGHT: f32 = 40.0;
 const POWER_TILE_HEIGHT: f32 = 64.0;
 const LABEL_GAP: f32 = 6.0;
+const PROFILE_TILE_HEIGHT: f32 = 64.0;
 
-pub fn layout(theme: &Theme, power_menu_open: bool) -> Layout {
+/// Which optional parts the card has, from what the machine offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Features {
+    pub brightness: bool,
+    /// How many power modes to offer (0: no power-profiles-daemon).
+    pub power_profiles: usize,
+}
+
+impl Features {
+    pub fn of(status: &Status) -> Self {
+        Self {
+            brightness: status.backlight.is_some(),
+            power_profiles: status
+                .power_profiles
+                .as_ref()
+                .map_or(0, |p| p.available.len()),
+        }
+    }
+}
+
+pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layout {
     let width = theme.qs_width;
     let pad = theme.qs_padding;
     let inner = width - 2.0 * pad;
@@ -117,6 +144,39 @@ pub fn layout(theme: &Theme, power_menu_open: bool) -> Layout {
     };
     y += theme.qs_slider_height + theme.qs_gap;
 
+    let brightness = features.brightness.then(|| {
+        let rect = Rect {
+            x: pad,
+            y,
+            w: inner,
+            h: theme.qs_slider_height,
+        };
+        y += theme.qs_slider_height + theme.qs_gap;
+        rect
+    });
+
+    let power_profiles = (features.power_profiles > 0).then(|| {
+        let tile = Rect {
+            x: pad,
+            y,
+            w: inner,
+            h: PROFILE_TILE_HEIGHT,
+        };
+        let n = features.power_profiles as f32;
+        let inset = 6.0;
+        let seg_w = (inner - 2.0 * inset) / n;
+        let segments = (0..features.power_profiles)
+            .map(|i| Rect {
+                x: pad + inset + i as f32 * seg_w,
+                y: y + inset,
+                w: seg_w,
+                h: PROFILE_TILE_HEIGHT - 2.0 * inset,
+            })
+            .collect();
+        y += PROFILE_TILE_HEIGHT + theme.qs_gap;
+        (tile, segments)
+    });
+
     let power_menu = power_menu_open.then(|| {
         let gap = theme.qs_gap;
         let tile_w = (inner - 2.0 * gap) / 3.0;
@@ -154,6 +214,8 @@ pub fn layout(theme: &Theme, power_menu_open: bool) -> Layout {
         toggle_tile,
         toggles,
         volume,
+        brightness,
+        power_profiles,
         footer_y,
         power_button,
         power_menu,
@@ -174,6 +236,14 @@ impl Layout {
                 Hit::Volume
             });
         }
+        if self.brightness.is_some_and(|b| b.contains(point)) {
+            return Some(Hit::Brightness);
+        }
+        if let Some((_, segments)) = &self.power_profiles
+            && let Some(i) = segments.iter().position(|r| r.contains(point))
+        {
+            return Some(Hit::PowerProfile(i));
+        }
         self.toggles
             .iter()
             .chain(self.power_menu.iter().flatten())
@@ -184,7 +254,30 @@ impl Layout {
 
     /// Volume (0-100) for a pointer at `x` over the slider.
     pub fn volume_at(&self, x: f64) -> u32 {
-        (((x as f32 - self.volume.x) / self.volume.w).clamp(0.0, 1.0) * 100.0).round() as u32
+        percent_along(self.volume, x)
+    }
+
+    pub fn brightness_at(&self, x: f64) -> Option<u32> {
+        self.brightness.map(|b| percent_along(b, x))
+    }
+}
+
+fn percent_along(rect: Rect, x: f64) -> u32 {
+    (((x as f32 - rect.x) / rect.w).clamp(0.0, 1.0) * 100.0).round() as u32
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Slider {
+    Volume,
+    Brightness,
+}
+
+impl Layout {
+    fn slider_at(&self, slider: Slider, x: f64) -> Option<u32> {
+        match slider {
+            Slider::Volume => Some(self.volume_at(x)),
+            Slider::Brightness => self.brightness_at(x),
+        }
     }
 }
 
@@ -193,10 +286,13 @@ pub struct QuickSettings {
     scale: i32,
     configured: bool,
     layout: Layout,
-    dragging_volume: bool,
+    features: Features,
+    dragging: Option<Slider>,
     /// What the user just set, shown until the audio server reports it
     /// back (so the slider tracks the pointer with no lag).
     volume_override: Option<(u32, Instant)>,
+    /// Brightness has no change notification: what we set is what it is.
+    brightness: Option<u32>,
     /// A frame callback is outstanding: draw when it fires, not before.
     /// Pointer events can arrive far faster than the screen refreshes (1 kHz
     /// mice), and painting each one would fall behind.
@@ -217,9 +313,11 @@ impl QuickSettings {
         serial: u32,
         anchor: (i32, i32, i32, i32),
         theme: &Theme,
+        status: &Status,
         scale: i32,
     ) -> Option<Self> {
-        let layout = layout(theme, false);
+        let features = Features::of(status);
+        let layout = layout(theme, false, features);
         let positioner = positioner(xdg_shell, &layout, anchor)?;
         let surface = compositor.create_surface(qh);
         let popup = Popup::from_surface(None, &positioner, qh, surface, xdg_shell)
@@ -235,8 +333,10 @@ impl QuickSettings {
             scale,
             configured: false,
             layout,
-            dragging_volume: false,
+            features,
+            dragging: None,
             volume_override: None,
+            brightness: status.backlight.as_ref().map(|b| b.percent()),
             frame_pending: false,
             dirty: false,
         })
@@ -264,7 +364,7 @@ impl QuickSettings {
         theme: &Theme,
         anchor: (i32, i32, i32, i32),
     ) {
-        self.layout = layout(theme, self.layout.power_menu.is_none());
+        self.layout = layout(theme, self.layout.power_menu.is_none(), self.features);
         if let Some(positioner) = positioner(xdg_shell, &self.layout, anchor) {
             self.popup.reposition(&positioner, 0);
         }
@@ -282,8 +382,21 @@ impl QuickSettings {
     ) -> bool {
         match self.layout.hit(point) {
             Some(Hit::Volume) => {
-                self.dragging_volume = true;
-                self.set_volume(self.layout.volume_at(point.0), actions);
+                self.dragging = Some(Slider::Volume);
+                self.slide(Slider::Volume, point.0, actions);
+            }
+            Some(Hit::Brightness) => {
+                self.dragging = Some(Slider::Brightness);
+                self.slide(Slider::Brightness, point.0, actions);
+            }
+            Some(Hit::PowerProfile(i)) => {
+                if let Some(profile) = status
+                    .power_profiles
+                    .as_ref()
+                    .and_then(|p| p.available.get(i))
+                {
+                    actions.run(Action::SetPowerProfile(*profile));
+                }
             }
             Some(Hit::Mute) => actions.run(Action::ToggleMute),
             Some(Hit::Wifi) => {
@@ -307,19 +420,32 @@ impl QuickSettings {
     }
 
     pub fn motion(&mut self, point: (f64, f64), actions: &Actions) {
-        if self.dragging_volume {
-            self.set_volume(self.layout.volume_at(point.0), actions);
+        if let Some(slider) = self.dragging {
+            self.slide(slider, point.0, actions);
         }
     }
 
     pub fn release(&mut self) {
-        self.dragging_volume = false;
+        self.dragging = None;
     }
 
-    fn set_volume(&mut self, percent: u32, actions: &Actions) {
-        if self.volume_override.map(|(v, _)| v) != Some(percent) {
-            self.volume_override = Some((percent, Instant::now()));
-            actions.run(Action::SetVolume(percent));
+    fn slide(&mut self, slider: Slider, x: f64, actions: &Actions) {
+        let Some(percent) = self.layout.slider_at(slider, x) else {
+            return;
+        };
+        match slider {
+            Slider::Volume => {
+                if self.volume_override.map(|(v, _)| v) != Some(percent) {
+                    self.volume_override = Some((percent, Instant::now()));
+                    actions.run(Action::SetVolume(percent));
+                }
+            }
+            Slider::Brightness => {
+                if self.brightness != Some(percent) {
+                    self.brightness = Some(percent);
+                    actions.run(Action::SetBrightness(percent));
+                }
+            }
         }
     }
 
@@ -358,7 +484,7 @@ impl QuickSettings {
         // What the slider shows: the user's own value while it's fresh.
         if let Some((_, since)) = self.volume_override
             && since.elapsed() > Duration::from_secs(2)
-            && !self.dragging_volume
+            && self.dragging != Some(Slider::Volume)
         {
             self.volume_override = None;
         }
@@ -375,6 +501,7 @@ impl QuickSettings {
             theme,
             status,
             volume,
+            self.brightness,
             scale as f32,
         );
 
@@ -398,6 +525,7 @@ fn paint(
     theme: &Theme,
     status: &Status,
     volume: (u32, bool),
+    brightness: Option<u32>,
     s: f32,
 ) {
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
@@ -476,12 +604,18 @@ fn paint(
             icon_size,
             Color::rgba(255, 255, 255, fade),
         );
-        let mut text = fonts.layout(
-            &ellipsize(&label, 13),
-            theme.qs_label_size,
-            Weight::Normal,
-            s,
-        );
+        // Fit the label under its toggle: a little smaller if need be,
+        // shortened only as a last resort (long network names).
+        let room = layout.toggle_tile.w / layout.toggles.len() as f32 - 4.0;
+        let mut text = fonts.layout(&label, theme.qs_label_size, Weight::Normal, s);
+        let mut size = theme.qs_label_size;
+        while text.width > room && size > theme.qs_label_size - 1.5 {
+            size -= 0.5;
+            text = fonts.layout(&label, size, Weight::Normal, s);
+        }
+        if text.width > room {
+            text = fonts.layout(&ellipsize(&label, 13), size, Weight::Normal, s);
+        }
         let tx = (rect.x + rect.w / 2.0 - text.width / 2.0).round();
         canvas.text(
             fonts,
@@ -532,6 +666,87 @@ fn paint(
         icon_size,
         icon_color,
     );
+
+    // Brightness: the same fat slider, a sun inside.
+    if let (Some(b), Some(percent)) = (layout.brightness, brightness) {
+        canvas.slider(
+            b.x,
+            b.y,
+            b.w,
+            b.h,
+            percent as f32 / 100.0,
+            theme.qs_slider_track,
+            theme.qs_slider_fill,
+        );
+        let icon_x = b.x + (b.h - icon_size) / 2.0 + 4.0;
+        let covered = (percent as f32 / 100.0) * b.w > icon_x - b.x + icon_size;
+        canvas.icon(
+            icons,
+            "display-brightness-symbolic",
+            icon_x,
+            b.y + (b.h - icon_size) / 2.0,
+            icon_size,
+            if covered {
+                theme.qs_on_fill
+            } else {
+                Color::rgb(255, 255, 255)
+            },
+        );
+    }
+
+    // Power mode: one segment per profile, the active one lit.
+    if let (Some((tile, segments)), Some(profiles)) =
+        (&layout.power_profiles, &status.power_profiles)
+    {
+        canvas.rounded_rect(
+            tile.x,
+            tile.y,
+            tile.w,
+            tile.h,
+            theme.qs_tile_radius,
+            theme.qs_tile,
+        );
+        for (rect, profile) in segments.iter().zip(&profiles.available) {
+            let active = *profile == profiles.active;
+            if active {
+                canvas.rounded_rect(
+                    rect.x,
+                    rect.y,
+                    rect.w,
+                    rect.h,
+                    theme.qs_tile_radius - 6.0,
+                    theme.qs_toggle_on,
+                );
+            }
+            let (icon, label) = match profile {
+                crate::status::PowerProfile::PowerSaver => {
+                    ("power-profile-power-saver-symbolic", "Power Saver")
+                }
+                crate::status::PowerProfile::Balanced => {
+                    ("power-profile-balanced-symbolic", "Balanced")
+                }
+                crate::status::PowerProfile::Performance => {
+                    ("power-profile-performance-symbolic", "Performance")
+                }
+            };
+            let fg = if active {
+                Color::rgb(255, 255, 255)
+            } else {
+                theme.qs_dim
+            };
+            canvas.icon(
+                icons,
+                icon,
+                rect.x + (rect.w - 18.0) / 2.0,
+                rect.y + 7.0,
+                18.0,
+                fg,
+            );
+            let mut text = fonts.layout(label, theme.qs_label_size, Weight::Normal, s);
+            let tx = (rect.x + (rect.w - text.width) / 2.0).round();
+            canvas.text(fonts, &mut text, tx, rect.y + 29.0, fg);
+        }
+    }
 
     // Power row.
     for (rect, hit) in layout.power_menu.iter().flatten() {
@@ -637,7 +852,7 @@ mod tests {
     #[test]
     fn layout_hits() {
         let theme = Theme::dark();
-        let l = layout(&theme, false);
+        let l = layout(&theme, false, Features::default());
         let centre = |r: Rect| ((r.x + r.w / 2.0) as f64, (r.y + r.h / 2.0) as f64);
         assert_eq!(l.hit(centre(l.toggles[0].0)), Some(Hit::Wifi));
         assert_eq!(
@@ -652,8 +867,8 @@ mod tests {
     #[test]
     fn power_menu_grows_the_card() {
         let theme = Theme::dark();
-        let closed = layout(&theme, false);
-        let open = layout(&theme, true);
+        let closed = layout(&theme, false, Features::default());
+        let open = layout(&theme, true, Features::default());
         assert!(open.height > closed.height);
         let reboot = open.power_menu.as_ref().unwrap()[1].0;
         assert_eq!(
@@ -663,8 +878,29 @@ mod tests {
     }
 
     #[test]
+    fn laptop_parts_hit() {
+        let features = Features {
+            brightness: true,
+            power_profiles: 3,
+        };
+        let l = layout(&Theme::dark(), false, features);
+        let b = l.brightness.unwrap();
+        assert_eq!(
+            l.hit(((b.x + b.w / 2.0) as f64, (b.y + 4.0) as f64)),
+            Some(Hit::Brightness)
+        );
+        let (_, segments) = l.power_profiles.as_ref().unwrap();
+        let last = segments[2];
+        assert_eq!(
+            l.hit(((last.x + 4.0) as f64, (last.y + 4.0) as f64)),
+            Some(Hit::PowerProfile(2))
+        );
+        assert!(l.height > layout(&Theme::dark(), false, Features::default()).height);
+    }
+
+    #[test]
     fn slider_maps_x_to_percent() {
-        let l = layout(&Theme::dark(), false);
+        let l = layout(&Theme::dark(), false, Features::default());
         assert_eq!(l.volume_at(l.volume.x as f64), 0);
         assert_eq!(l.volume_at((l.volume.x + l.volume.w) as f64), 100);
         assert_eq!(l.volume_at((l.volume.x + l.volume.w / 2.0) as f64), 50);
@@ -694,10 +930,23 @@ mod tests {
                 percent: 62,
                 muted: false,
             }),
+            power_profiles: Some(crate::status::PowerProfiles {
+                active: crate::status::PowerProfile::Balanced,
+                available: crate::status::PowerProfile::ALL.to_vec(),
+            }),
+            backlight: Some(crate::status::Backlight {
+                path: "/sys/class/backlight/x".into(),
+                max: 100,
+                current: 40,
+            }),
         };
         let mut fonts = Fonts::new(theme.font_families);
         let mut icons = Icons::new();
-        let layout = layout(&theme, std::env::var_os("CNDE_QS_POWER").is_some());
+        let layout = layout(
+            &theme,
+            std::env::var_os("CNDE_QS_POWER").is_some(),
+            Features::of(&status),
+        );
         let scale = 2.0;
         let (w, h) = (
             (layout.width * scale) as u32,
@@ -714,6 +963,7 @@ mod tests {
                 &theme,
                 &status,
                 (62, false),
+                Some(40),
                 scale,
             );
         }

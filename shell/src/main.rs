@@ -72,6 +72,9 @@ pub struct Status {
     pub network: status::Network,
     pub wifi_enabled: Option<bool>,
     pub volume: Option<status::Volume>,
+    pub power_profiles: Option<status::PowerProfiles>,
+    /// Read when quick settings opens; `None` on desktops.
+    pub backlight: Option<status::Backlight>,
 }
 
 impl Status {
@@ -81,6 +84,7 @@ impl Status {
             Update::Network(network) => self.network = network,
             Update::WifiEnabled(enabled) => self.wifi_enabled = enabled,
             Update::Volume(volume) => self.volume = volume,
+            Update::PowerProfiles(profiles) => self.power_profiles = profiles,
         }
     }
 }
@@ -436,6 +440,8 @@ impl App {
         let Some(anchor) = panel.status_anchor() else {
             return;
         };
+        // Brightness can change behind our back (keys, other tools).
+        self.status.backlight = status::read_backlight();
         self.quick_settings = QuickSettings::open(
             &self.compositor,
             &self.xdg_shell,
@@ -445,6 +451,7 @@ impl App {
             serial,
             anchor,
             &self.theme,
+            &self.status,
             panel.scale(),
         )
         .map(|qs| (qs, anchor));
