@@ -29,6 +29,59 @@ impl Color {
         Self { a, ..self }
     }
 
+    /// Hue (0-360), saturation and lightness (0-1).
+    pub fn hsl(self) -> (f32, f32, f32) {
+        let (r, g, b) = (self.r, self.g, self.b);
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let l = (max + min) / 2.0;
+        let d = max - min;
+        if d < 1e-6 {
+            return (0.0, 0.0, l);
+        }
+        let s = d / (1.0 - (2.0 * l - 1.0).abs()).max(1e-6);
+        let h = if max == r {
+            60.0 * ((g - b) / d).rem_euclid(6.0)
+        } else if max == g {
+            60.0 * ((b - r) / d + 2.0)
+        } else {
+            60.0 * ((r - g) / d + 4.0)
+        };
+        (h, s.clamp(0.0, 1.0), l)
+    }
+
+    pub fn from_hsl(h: f32, s: f32, l: f32) -> Self {
+        let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+        let x = c * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
+        let m = l - c / 2.0;
+        let (r, g, b) = match (h.rem_euclid(360.0) / 60.0) as u32 {
+            0 => (c, x, 0.0),
+            1 => (x, c, 0.0),
+            2 => (0.0, c, x),
+            3 => (0.0, x, c),
+            4 => (x, 0.0, c),
+            _ => (c, 0.0, x),
+        };
+        Self {
+            r: r + m,
+            g: g + m,
+            b: b + m,
+            a: 1.0,
+        }
+    }
+
+    /// Relative luminance (WCAG), for picking legible text on a colour.
+    pub fn luminance(self) -> f32 {
+        let lin = |c: f32| {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(self.r) + 0.7152 * lin(self.g) + 0.0722 * lin(self.b)
+    }
+
     /// Between `self` (t = 0) and `other` (t = 1), alpha included.
     pub fn mix(self, other: Color, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
@@ -325,6 +378,105 @@ impl Theme {
             (cnde_config::Palette::Adwaita, dark) => Self::for_dark(dark),
             (cnde_config::Palette::Cnde, true) => Self::dusk(),
             (cnde_config::Palette::Cnde, false) => Self::blossom(),
+            (cnde_config::Palette::Custom, dark) => {
+                let parse = |text: &str, fallback: Color| {
+                    cnde_config::parse_color(text)
+                        .map_or(fallback, |(r, g, b, _)| Color::rgb(r, g, b))
+                };
+                let base = parse(&appearance.base_color, Color::rgb(0x1c, 0x17, 0x26));
+                let accent = parse(&appearance.accent_color, Color::rgb(0xf4, 0xa7, 0xc6));
+                Self::custom(dark, base, accent)
+            }
+        }
+    }
+
+    /// A palette worked out from two colours: every surface takes `base`'s
+    /// hue (and some of its saturation) at the lightness its role needs,
+    /// dark or light; `accent` marks what's on or chosen.
+    pub fn custom(dark: bool, base: Color, accent: Color) -> Self {
+        let (h, s, _) = base.hsl();
+        // Muted, so a vivid base still reads as a background.
+        let s = (s * 0.45).min(0.35);
+        let shade = |l: f32| Color::from_hsl(h, s, l);
+        let tint = |l: f32, a: f32| Color::from_hsl(h, s * 0.6, l).with_alpha(a);
+        let on_accent = if accent.luminance() > 0.4 {
+            Color::from_hsl(h, s, 0.12)
+        } else {
+            Color::rgb(0xff, 0xff, 0xff)
+        };
+        let accent = accent.with_alpha(1.0);
+        if dark {
+            let text = |a: f32| tint(0.93, a);
+            Self {
+                panel_background: shade(0.06),
+                panel_foreground: text(1.0),
+                panel_button_hover: text(0.12),
+                panel_button_active: text(0.22),
+                qs_background: shade(0.13).with_alpha(0.95),
+                qs_tile: text(0.07),
+                qs_toggle_off: text(0.13),
+                qs_toggle_on: accent,
+                qs_slider_track: text(0.13),
+                qs_slider_fill: accent,
+                qs_on_fill: on_accent,
+                qs_dim: text(0.6),
+                search_background: shade(0.13).with_alpha(0.95),
+                search_selected: text(0.11),
+                window_background: shade(0.11),
+                window_sidebar: shade(0.15),
+                window_text: text(1.0),
+                window_dim: text(0.58),
+                sidebar_selected: text(0.09),
+                hover: text(0.05),
+                card_background: text(0.06),
+                card_separator: shade(0.03).with_alpha(0.5),
+                switch_off: text(0.18),
+                button_background: text(0.09),
+                button_hover: text(0.14),
+                entry_background: text(0.09),
+                focus_ring: accent.with_alpha(0.6),
+                popover_background: shade(0.2),
+                accent,
+                popup_text: text(1.0),
+                on_accent,
+                ..Self::dark()
+            }
+        } else {
+            let ink = |a: f32| tint(0.17, a);
+            Self {
+                panel_background: shade(0.92),
+                panel_foreground: ink(1.0),
+                panel_button_hover: ink(0.08),
+                panel_button_active: ink(0.14),
+                qs_background: shade(0.97).with_alpha(0.97),
+                qs_tile: ink(0.05),
+                qs_toggle_off: ink(0.10),
+                qs_toggle_on: accent,
+                qs_slider_track: ink(0.10),
+                qs_slider_fill: accent,
+                qs_on_fill: on_accent,
+                qs_dim: ink(0.58),
+                search_background: shade(0.97).with_alpha(0.97),
+                search_selected: ink(0.08),
+                popup_text: ink(1.0),
+                window_background: shade(0.97),
+                window_sidebar: shade(0.93),
+                window_text: ink(1.0),
+                window_dim: ink(0.58),
+                sidebar_selected: ink(0.09),
+                hover: ink(0.04),
+                card_background: Color::from_hsl(h, s, 0.995),
+                card_separator: ink(0.08),
+                switch_off: ink(0.16),
+                button_background: ink(0.07),
+                button_hover: ink(0.11),
+                entry_background: ink(0.06),
+                focus_ring: accent.with_alpha(0.6),
+                popover_background: Color::from_hsl(h, s, 0.995),
+                accent,
+                on_accent,
+                ..Self::light()
+            }
         }
     }
 

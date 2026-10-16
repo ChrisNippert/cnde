@@ -316,6 +316,13 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
             ColorScheme::Light => "light",
         })
     };
+    let palette = |v: cnde_config::Palette| {
+        s(match v {
+            cnde_config::Palette::Cnde => "cnde",
+            cnde_config::Palette::Adwaita => "adwaita",
+            cnde_config::Palette::Custom => "custom",
+        })
+    };
     let fit = |v: WallpaperFit| {
         s(match v {
             WallpaperFit::Fill => "fill",
@@ -323,7 +330,7 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
             WallpaperFit::Stretch => "stretch",
         })
     };
-    vec![
+    let mut groups = vec![
         group(
             "Style",
             vec![
@@ -338,17 +345,18 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                 Row::new(
                     "appearance.palette",
                     "Colours",
-                    Control::Segmented(choices(&[("cnde", s("cnde")), ("GNOME", s("adwaita"))])),
-                    s(match c.appearance.palette {
-                        cnde_config::Palette::Cnde => "cnde",
-                        cnde_config::Palette::Adwaita => "adwaita",
-                    }),
-                    s(match d.appearance.palette {
-                        cnde_config::Palette::Cnde => "cnde",
-                        cnde_config::Palette::Adwaita => "adwaita",
-                    }),
+                    Control::Segmented(choices(&[
+                        ("cnde", s("cnde")),
+                        ("GNOME", s("adwaita")),
+                        ("Custom", s("custom")),
+                    ])),
+                    palette(c.appearance.palette),
+                    palette(d.appearance.palette),
                 )
-                .sub("cnde: plum and pink when dark, blush and rose when light"),
+                .sub(match c.appearance.palette {
+                    cnde_config::Palette::Custom => "Worked out from the two colours below",
+                    _ => "cnde: plum and pink when dark, blush and rose when light",
+                }),
                 Row::new(
                     "appearance.titlebars",
                     "Matching title bars",
@@ -425,7 +433,35 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                 .advanced(),
             ],
         ),
-    ]
+    ];
+    // Custom colours: the two the palette is worked out from.
+    if c.appearance.palette == cnde_config::Palette::Custom
+        && let Some(style) = groups.first_mut()
+    {
+        style.rows.insert(
+            2,
+            Row::new(
+                "appearance.base_color",
+                "Base colour",
+                Control::text("#2b1a40"),
+                s(&c.appearance.base_color),
+                s(&d.appearance.base_color),
+            )
+            .sub("Backgrounds and bars take its hue"),
+        );
+        style.rows.insert(
+            3,
+            Row::new(
+                "appearance.accent_color",
+                "Accent colour",
+                Control::text("#f4a7c6"),
+                s(&c.appearance.accent_color),
+                s(&d.appearance.accent_color),
+            )
+            .sub("Switches, selections and sliders"),
+        );
+    }
+    groups
 }
 
 fn displays_page(c: &Config, displays: &[Display]) -> Vec<Group> {

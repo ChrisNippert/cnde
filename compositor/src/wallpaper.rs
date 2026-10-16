@@ -38,6 +38,8 @@ struct Source {
     fit: WallpaperFit,
     scheme: ColorScheme,
     palette: Palette,
+    /// `palette = "custom"`: the base and accent colours.
+    custom: (String, String),
 }
 
 impl Source {
@@ -48,6 +50,10 @@ impl Source {
             fit: config.wallpaper.fit,
             scheme,
             palette: config.appearance.palette,
+            custom: (
+                config.appearance.base_color.clone(),
+                config.appearance.accent_color.clone(),
+            ),
         }
     }
 }
@@ -329,7 +335,7 @@ fn worker(jobs: mpsc::Receiver<Job>, done: channel::Sender<Done>) {
             let (w, h) = (job.size.w.max(1) as u32, job.size.h.max(1) as u32);
             let pixels = match image {
                 Some(image) => scale_to(image, w, h, job.source.fit),
-                None => gradient(w, h, job.source.scheme, job.source.palette),
+                None => gradient(w, h, &job.source),
             };
             let blurred = frost(&pixels);
             let blurred_size = Size::from((blurred.width() as i32, blurred.height() as i32));
@@ -416,10 +422,40 @@ fn scale_to(image: &RgbaImage, w: u32, h: u32, fit: WallpaperFit) -> RgbaImage {
     }
 }
 
+/// The built-in wallpaper's colours for a custom palette: the base's hue,
+/// dark or light, with a glow of the accent.
+fn custom_gradient(
+    base: &str,
+    accent: &str,
+    scheme: ColorScheme,
+) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    use cnde_ui::Color;
+    let color = |text: &str, fallback: Color| {
+        cnde_config::parse_color(text).map_or(fallback, |(r, g, b, _)| Color::rgb(r, g, b))
+    };
+    let (h, s, _) = color(base, Color::rgb(0x2b, 0x1a, 0x40)).hsl();
+    let (ah, as_, _) = color(accent, Color::rgb(0xf4, 0xa7, 0xc6)).hsl();
+    let s = (s * 0.6).min(0.5);
+    let rgb = |c: Color| [c.r, c.g, c.b];
+    match scheme {
+        ColorScheme::Dark => (
+            rgb(Color::from_hsl(h, s, 0.17)),
+            rgb(Color::from_hsl(h, s, 0.05)),
+            rgb(Color::from_hsl(ah, as_ * 0.6, 0.38)),
+        ),
+        ColorScheme::Light => (
+            rgb(Color::from_hsl(h, s, 0.9)),
+            rgb(Color::from_hsl(h, s * 0.6, 0.95)),
+            rgb(Color::from_hsl(ah, as_ * 0.7, 0.86)),
+        ),
+    }
+}
+
 /// The built-in wallpaper: a diagonal gradient with a soft glow, dithered so
 /// it doesn't band on 8-bit panels.
-fn gradient(w: u32, h: u32, scheme: ColorScheme, palette: Palette) -> RgbaImage {
-    let (from, to, glow) = match (palette, scheme) {
+fn gradient(w: u32, h: u32, source: &Source) -> RgbaImage {
+    let (from, to, glow) = match (source.palette, source.scheme) {
+        (Palette::Custom, scheme) => custom_gradient(&source.custom.0, &source.custom.1, scheme),
         // Dusk: deep plum fading to near-black, a pink glow.
         (Palette::Cnde, ColorScheme::Dark) => {
             ([0.17, 0.10, 0.25], [0.05, 0.035, 0.08], [0.46, 0.22, 0.40])
@@ -481,9 +517,21 @@ mod tests {
 
     #[test]
     fn gradient_is_opaque_and_sized() {
-        let out = gradient(64, 32, ColorScheme::Dark, Palette::Cnde);
+        let out = gradient(64, 32, &test_source(ColorScheme::Dark));
         assert_eq!(out.dimensions(), (64, 32));
         assert!(out.pixels().all(|p| p[3] == 255));
+    }
+}
+
+/// The built-in wallpaper's source in the default palette.
+#[cfg(test)]
+fn test_source(scheme: ColorScheme) -> Source {
+    Source {
+        path: None,
+        fit: WallpaperFit::Fill,
+        scheme,
+        palette: Palette::Cnde,
+        custom: Default::default(),
     }
 }
 
@@ -496,10 +544,10 @@ fn wallpaper_preview() {
     let Some(dir) = std::env::var_os("CNDE_WALLPAPER_PREVIEW").map(PathBuf::from) else {
         return;
     };
-    gradient(1280, 720, ColorScheme::Dark, Palette::Cnde)
+    gradient(1280, 720, &test_source(ColorScheme::Dark))
         .save(dir.join("dark.png"))
         .unwrap();
-    gradient(1280, 720, ColorScheme::Light, Palette::Cnde)
+    gradient(1280, 720, &test_source(ColorScheme::Light))
         .save(dir.join("light.png"))
         .unwrap();
     if let Some(image) = std::env::var_os("CNDE_WALLPAPER_IMAGE").and_then(|p| load(&p.into())) {

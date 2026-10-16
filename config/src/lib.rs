@@ -151,6 +151,10 @@ pub struct Appearance {
     /// own), "Adwaita", or any installed theme's name. Missing icons come
     /// from cnde's set.
     pub icon_theme: String,
+    /// For `palette = "custom"`: the surfaces' colour ("#rrggbb"; its hue
+    /// is what matters, lightness is chosen per style) and the accent.
+    pub base_color: String,
+    pub accent_color: String,
 }
 
 impl Default for Appearance {
@@ -161,6 +165,8 @@ impl Default for Appearance {
             window_buttons: WindowButtons::default(),
             palette: Palette::default(),
             icon_theme: "cnde".into(),
+            base_color: "#2b1a40".into(),
+            accent_color: "#f4a7c6".into(),
         }
     }
 }
@@ -174,6 +180,8 @@ pub enum Palette {
     Cnde,
     /// libadwaita's greys and blue.
     Adwaita,
+    /// Worked out from `base_color` and `accent_color`.
+    Custom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -530,6 +538,8 @@ impl Config {
         for (name, color) in [
             ("panel.background", &panel.background),
             ("panel.foreground", &panel.foreground),
+            ("appearance.base_color", &self.appearance.base_color),
+            ("appearance.accent_color", &self.appearance.accent_color),
         ] {
             if !color.is_empty() && parse_color(color).is_none() {
                 return Err(Error::Invalid(format!(

@@ -162,7 +162,7 @@ impl State {
         if !nested && old.is_none_or(|old| old.appearance != self.config.appearance) {
             publish_color_scheme(self.config.appearance.color_scheme);
             publish_window_buttons(self.config.appearance.window_buttons);
-            publish_accent(self.config.appearance.palette);
+            publish_accent(&self.config.appearance);
         }
     }
 
@@ -215,10 +215,27 @@ fn publish_window_buttons(buttons: cnde_config::WindowButtons) {
 }
 
 /// GTK apps (GNOME 47 and later) take their accent from this.
-fn publish_accent(palette: cnde_config::Palette) {
-    let value = match palette {
+fn publish_accent(appearance: &cnde_config::Appearance) {
+    let value = match appearance.palette {
         cnde_config::Palette::Cnde => "pink",
         cnde_config::Palette::Adwaita => "blue",
+        // GNOME's named accent nearest the chosen one.
+        cnde_config::Palette::Custom => {
+            let (h, s, _) = cnde_config::parse_color(&appearance.accent_color)
+                .map(|(r, g, b, _)| cnde_ui::Color::rgb(r, g, b).hsl())
+                .unwrap_or((330.0, 0.8, 0.8));
+            match h {
+                _ if s < 0.15 => "slate",
+                h if !(15.0..345.0).contains(&h) => "red",
+                h if h < 45.0 => "orange",
+                h if h < 65.0 => "yellow",
+                h if h < 160.0 => "green",
+                h if h < 190.0 => "teal",
+                h if h < 250.0 => "blue",
+                h if h < 290.0 => "purple",
+                _ => "pink",
+            }
+        }
     };
     gsettings_set("org.gnome.desktop.interface", "accent-color", value);
 }

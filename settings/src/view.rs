@@ -703,6 +703,12 @@ fn wallpapers(
             Color::rgb(0xf0, 0xe0, 0xdc),
             Color::rgb(0x24, 0x24, 0x28),
         ),
+        // Custom: the window's own colours stand in.
+        (cnde_config::Palette::Custom, _) => (
+            t.window_sidebar,
+            t.window_background.mix(t.accent, 0.25),
+            t.window_text,
+        ),
     };
     p.canvas.rounded_rect(r.x, r.y, r.w, r.h, 8.0, top);
     p.canvas
@@ -911,5 +917,23 @@ mod tests {
         ui.scroll = 0.0;
         ui.popover = Some(painted.rows[clock].key.clone());
         render(&ui, "panel-light");
+    }
+
+    #[test]
+    fn custom_palette_paints_both_styles() {
+        let mut ui = ui(Page::Appearance);
+        ui.config.appearance.palette = cnde_config::Palette::Custom;
+        ui.config.appearance.base_color = "#1d4e57".into();
+        ui.config.appearance.accent_color = "#ffa94d".into();
+        let painted = render(&ui, "custom-dark");
+        assert!(
+            painted
+                .rows
+                .iter()
+                .any(|r| r.key == Key::Path("appearance.accent_color")),
+            "the colour rows show for a custom palette"
+        );
+        ui.config.appearance.color_scheme = cnde_config::ColorScheme::Light;
+        render(&ui, "custom-light");
     }
 }
