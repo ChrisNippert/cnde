@@ -51,6 +51,7 @@
 # enabled = true           # false: hide the top bar (e.g. to use waybar via autostart)
 # all_monitors = false     # true: a panel on every monitor, not just the main one
 # height = 32
+# rounded = true           # rounded bottom corners and a soft shadow; false for a flat strip
 # background = ""          # "#rrggbb" or "#rrggbbaa" (translucent); empty follows the style
 # foreground = ""
 # font_size = 14

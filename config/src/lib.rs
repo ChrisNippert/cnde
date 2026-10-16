@@ -238,6 +238,8 @@ pub struct Panel {
     pub all_monitors: bool,
     /// Logical pixels.
     pub height: u32,
+    /// Rounded bottom corners and a soft shadow; off, a flat strip.
+    pub rounded: bool,
     /// "#rrggbb" or "#rrggbbaa"; empty follows the light/dark style.
     pub background: String,
     pub foreground: String,
@@ -256,6 +258,7 @@ impl Default for Panel {
             enabled: true,
             all_monitors: false,
             height: 32,
+            rounded: true,
             background: String::new(),
             foreground: String::new(),
             font_size: 14.0,

@@ -52,6 +52,10 @@ pub struct Theme {
     pub panel_foreground: Color,
     /// Logical pixels.
     pub panel_height: u32,
+    /// The bar's bottom corners (0: a flat strip, as in GNOME).
+    pub panel_radius: f32,
+    /// A soft shadow under the bar, logical pixels tall (0: none).
+    pub panel_shadow: u32,
 
     // Workspace indicator (GNOME-style dots; the active one is a pill)
     pub workspace_dot: Color,
@@ -167,6 +171,8 @@ impl Theme {
             panel_background: Color::rgb(0x00, 0x00, 0x00),
             panel_foreground: Color::rgb(0xff, 0xff, 0xff),
             panel_height: 32,
+            panel_radius: 14.0,
+            panel_shadow: 8,
 
             workspace_dot: Color::rgba(0xff, 0xff, 0xff, 0.45),
             workspace_active: Color::rgb(0xff, 0xff, 0xff),

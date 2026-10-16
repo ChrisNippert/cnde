@@ -422,6 +422,7 @@ impl App {
                         .round()
                         .clamp(16.0, 96.0) as u32;
                     panel.set_height(height);
+                    panel.update_input_region(&self.compositor);
                 }
                 Some(PanelDrag::Clock { .. }) => {
                     set_panel_drag(

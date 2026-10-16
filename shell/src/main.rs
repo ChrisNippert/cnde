@@ -1001,6 +1001,7 @@ impl LayerShellHandler for App {
     ) {
         if let Some(i) = self.panels.iter().position(|p| &p.layer == layer) {
             self.panels[i].configure(configure.new_size);
+            self.panels[i].update_input_region(&self.compositor);
             self.draw_panel(i);
         }
         if self

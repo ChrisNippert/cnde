@@ -37,6 +37,10 @@ pub fn theme_from(config: &Config) -> Theme {
     let mut theme =
         Theme::for_dark(config.appearance.color_scheme == cnde_config::ColorScheme::Dark);
     theme.panel_height = panel.height;
+    if !panel.rounded {
+        theme.panel_radius = 0.0;
+        theme.panel_shadow = 0;
+    }
     theme.panel_background = color(&panel.background, theme.panel_background);
     theme.panel_foreground = color(&panel.foreground, theme.panel_foreground);
     theme.font_size = panel.font_size;

@@ -4,7 +4,7 @@
 
 use chrono::Local;
 use cnde_config::ClockPosition;
-use cnde_ui::{Animator, Canvas, Fonts, Icons, Theme, Weight, anim::SHORT};
+use cnde_ui::{Animator, Canvas, Color, Fonts, Icons, Theme, Weight, anim::SHORT};
 use smithay_client_toolkit::{
     compositor::{CompositorState, FrameCallbackData},
     reexports::client::{
@@ -76,7 +76,10 @@ pub struct Panel {
     pub layer: LayerSurface,
     /// Logical size; 0 until the compositor configures us.
     width: u32,
+    /// The bar itself; the surface is `shadow` taller.
     height: u32,
+    shadow: u32,
+    radius: f32,
     scale: i32,
     /// The Activities button's logical x range, from the last draw.
     activities_region: Option<(f32, f32)>,
@@ -113,8 +116,8 @@ impl Panel {
         );
         layer.set_anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
         // Width 0 = stretch across the monitor; the compositor picks it.
-        layer.set_size(0, theme.panel_height);
-        // Maximized windows stop below the panel.
+        layer.set_size(0, theme.panel_height + theme.panel_shadow);
+        // Maximized windows stop below the bar (its shadow falls on them).
         layer.set_exclusive_zone(theme.panel_height as i32);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.commit();
@@ -123,6 +126,8 @@ impl Panel {
             layer,
             width: 0,
             height: theme.panel_height,
+            shadow: theme.panel_shadow,
+            radius: theme.panel_radius,
             scale: 1,
             activities_region: None,
             status_region: None,
@@ -138,18 +143,30 @@ impl Panel {
 
     /// A new theme may change the bar's height (and the space it reserves).
     pub fn apply_theme(&mut self, theme: &Theme) {
-        if self.height != theme.panel_height {
+        self.radius = theme.panel_radius;
+        if self.height != theme.panel_height || self.shadow != theme.panel_shadow {
             self.height = theme.panel_height;
-            self.layer.set_size(0, theme.panel_height);
+            self.shadow = theme.panel_shadow;
+            self.layer
+                .set_size(0, theme.panel_height + theme.panel_shadow);
             self.layer.set_exclusive_zone(theme.panel_height as i32);
             self.layer.commit();
         }
     }
 
-    pub fn configure(&mut self, (width, height): (u32, u32)) {
+    /// Only the width comes from the compositor: the height is ours (and
+    /// the surface's includes the shadow).
+    pub fn configure(&mut self, (width, _height): (u32, u32)) {
         self.width = width;
-        if height > 0 {
-            self.height = height;
+    }
+
+    /// Clicks on the shadow go to whatever is under it.
+    pub fn update_input_region(&self, compositor: &CompositorState) {
+        if let Ok(region) = smithay_client_toolkit::compositor::Region::new(compositor) {
+            region.add(0, 0, self.width as i32, self.height as i32);
+            self.layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
         }
     }
 
@@ -202,7 +219,7 @@ impl Panel {
     pub fn set_height(&mut self, height: u32) {
         if height != self.height {
             self.height = height;
-            self.layer.set_size(0, height);
+            self.layer.set_size(0, height + self.shadow);
             self.layer.set_exclusive_zone(height as i32);
             self.layer.commit();
         }
@@ -277,7 +294,10 @@ impl Panel {
         self.dirty = false;
         self.anim.begin();
         let scale = self.scale;
-        let (w, h) = (self.width as i32 * scale, self.height as i32 * scale);
+        let (w, h) = (
+            self.width as i32 * scale,
+            (self.height + self.shadow) as i32 * scale,
+        );
         let (buffer, pixels) = match pool.create_buffer(w, h, w * 4, format) {
             Ok(created) => created,
             Err(err) => {
@@ -288,8 +308,31 @@ impl Panel {
         let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) else {
             return;
         };
-        let (width, height) = canvas.size();
-        canvas.clear(theme.panel_background);
+        let (width, _) = canvas.size();
+        let height = self.height as f32;
+        canvas.clear(Color::rgba(0, 0, 0, 0.0));
+        // A soft shadow: rounded rects each a little taller and fainter.
+        for i in 1..=self.shadow {
+            let fade = 1.0 - i as f32 / (self.shadow + 1) as f32;
+            canvas.rounded_rect(
+                0.0,
+                -self.radius,
+                width,
+                height + self.radius + i as f32,
+                self.radius + i as f32,
+                Color::rgba(0, 0, 0, 0.07 * fade),
+            );
+        }
+        // The bar: square at the top edge, rounded at the bottom (its top
+        // corners are drawn off the surface).
+        canvas.rounded_rect(
+            0.0,
+            -self.radius,
+            width,
+            height + self.radius,
+            self.radius,
+            theme.panel_background,
+        );
 
         // Activities: GNOME-style workspace dots, the active ones stretched
         // into pills. The whole cluster is one button.
