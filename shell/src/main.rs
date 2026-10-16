@@ -12,6 +12,7 @@ mod edit_mode;
 mod ipc;
 mod launcher;
 mod menu;
+mod osd;
 mod panel;
 mod quick_settings;
 mod screenshot;
@@ -169,6 +170,8 @@ pub struct App {
     apps_loading: bool,
     apps_tx: channel::Sender<(Vec<apps::App>, Vec<Option<SystemTime>>)>,
     launches: apps::LaunchCounts,
+    /// The volume or brightness level, shown after its key.
+    osd: Option<osd::Osd>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -261,6 +264,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         apps_loading: false,
         apps_tx,
         launches: apps::LaunchCounts::load(),
+        osd: None,
     };
     app.rescan_apps_if_changed();
     app.workspaces.manager = globals
@@ -369,6 +373,7 @@ impl App {
                     scale,
                 ));
             }
+            cnde_ipc::Event::MediaKey { key } => self.media_key(key),
             cnde_ipc::Event::ToggleAppGrid => {
                 if let Some(launcher) = &mut self.launcher {
                     launcher.toggle_grid(&self.theme, self.apps.len());
@@ -998,6 +1003,9 @@ impl LayerShellHandler for App {
         if self.dock.as_ref().is_some_and(|d| &d.layer == layer) {
             self.dock = None;
         }
+        if self.osd.as_ref().is_some_and(|o| &o.layer == layer) {
+            self.osd = None;
+        }
         if self
             .screenshot
             .as_ref()
@@ -1027,6 +1035,9 @@ impl LayerShellHandler for App {
             .is_some_and(|(holder, _, _)| holder == layer)
         {
             self.desktop_holder_configured();
+        }
+        if self.osd.as_ref().is_some_and(|o| &o.layer == layer) {
+            self.osd_configured();
         }
         if self
             .dock_preview

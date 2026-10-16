@@ -126,6 +126,14 @@ impl State {
                     state.mod_tap_armed = is_mod;
                 }
                 if key_state == KeyState::Released {
+                    if state
+                        .media_repeat
+                        .as_ref()
+                        .is_some_and(|(k, _)| *k == keycode)
+                        && let Some((_, timer)) = state.media_repeat.take()
+                    {
+                        state.loop_handle.remove(timer);
+                    }
                     if let Some(i) = state.suppressed_keys.iter().position(|k| *k == keycode) {
                         state.suppressed_keys.swap_remove(i);
                         return FilterResult::Intercept(None);
@@ -137,6 +145,13 @@ impl State {
                 if let Some(action) = keybinds::vt_switch(handle.modified_sym()) {
                     state.suppressed_keys.push(keycode);
                     return FilterResult::Intercept(Some(action));
+                }
+                // Volume and brightness keys work whatever's focused, held
+                // ones repeating.
+                if let Some(key) = keybinds::media_key(handle.modified_sym()) {
+                    state.suppressed_keys.push(keycode);
+                    state.start_media_repeat(keycode, key);
+                    return FilterResult::Intercept(Some(Action::Media(key)));
                 }
                 let Some(sym) = handle.raw_latin_sym_or_raw_current_sym() else {
                     return FilterResult::Forward;
@@ -165,6 +180,28 @@ impl State {
         }
         if std::mem::take(&mut self.mod_tapped) {
             self.run_action(Action::Launcher);
+        }
+    }
+
+    /// Send a held media key again, after a pause, until it's released.
+    fn start_media_repeat(
+        &mut self,
+        keycode: smithay::input::keyboard::Keycode,
+        key: cnde_ipc::MediaKey,
+    ) {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        if let Some((_, timer)) = self.media_repeat.take() {
+            self.loop_handle.remove(timer);
+        }
+        let timer = self.loop_handle.insert_source(
+            Timer::from_duration(std::time::Duration::from_millis(400)),
+            move |_, _, state| {
+                state.run_action(Action::Media(key));
+                TimeoutAction::ToDuration(std::time::Duration::from_millis(90))
+            },
+        );
+        if let Ok(timer) = timer {
+            self.media_repeat = Some((keycode, timer));
         }
     }
 
@@ -208,6 +245,7 @@ impl State {
             Action::ToggleFullscreen => self.toggle_focused_fullscreen(),
             Action::SwitchVt(vt) => self.switch_vt(vt),
             Action::Workspace { step, carry } => self.step_workspace(step, carry),
+            Action::Media(key) => self.ipc.broadcast(&cnde_ipc::Event::MediaKey { key }),
             Action::Screenshot => self.start_screenshot(),
             Action::Launcher if self.screenshot.active => {}
             Action::Launcher => {

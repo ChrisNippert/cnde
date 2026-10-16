@@ -20,6 +20,7 @@ pub enum Action {
     /// Percent of the default output.
     SetVolume(u32),
     ToggleMute,
+    ToggleMicMute,
     SetWifi(bool),
     /// Percent of the panel's maximum brightness.
     SetBrightness(u32),
@@ -74,6 +75,7 @@ fn perform(action: Action) {
             pactl(&["set-sink-volume", "@DEFAULT_SINK@", &format!("{percent}%")])
         }
         Action::ToggleMute => pactl(&["set-sink-mute", "@DEFAULT_SINK@", "toggle"]),
+        Action::ToggleMicMute => pactl(&["set-source-mute", "@DEFAULT_SOURCE@", "toggle"]),
         Action::SetWifi(enabled) => set_wifi(*enabled),
         Action::SetBrightness(percent) => set_brightness(*percent),
         Action::SetPowerProfile(profile) => set_power_profile(*profile),

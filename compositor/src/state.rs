@@ -115,6 +115,8 @@ pub struct State {
     /// Keys whose press triggered a compositor binding; their releases are
     /// swallowed too so clients never see half a key event.
     pub suppressed_keys: Vec<Keycode>,
+    /// A held volume or brightness key, and its repeat timer.
+    pub media_repeat: Option<(Keycode, smithay::reexports::calloop::RegistrationToken)>,
 
     // Smithay protocol state
     pub compositor_state: CompositorState,
@@ -207,6 +209,7 @@ impl State {
             mod_tapped: false,
             mod_tap_opened: None,
             suppressed_keys: Vec::new(),
+            media_repeat: None,
 
             compositor_state,
             xdg_shell_state,

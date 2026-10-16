@@ -47,6 +47,22 @@ pub enum Event {
         y: i32,
         serial: u32,
     },
+    /// A volume or brightness key: the shell changes it and shows the
+    /// level. Sent again while the key's held.
+    MediaKey {
+        key: MediaKey,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKey {
+    VolumeUp,
+    VolumeDown,
+    Mute,
+    MicMute,
+    BrightnessUp,
+    BrightnessDown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -123,6 +139,10 @@ pub enum Request {
         y: f64,
         #[serde(default)]
         press: Option<bool>,
+    },
+    /// Testing aid, debug builds only: as if this key were pressed.
+    FakeMediaKey {
+        key: MediaKey,
     },
 }
 

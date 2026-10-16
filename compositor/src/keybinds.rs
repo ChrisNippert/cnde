@@ -37,6 +37,22 @@ pub enum Action {
         step: isize,
         carry: bool,
     },
+    /// Volume and brightness keys, passed to the shell.
+    Media(cnde_ipc::MediaKey),
+}
+
+/// The volume and brightness keys, with or without modifiers.
+pub fn media_key(sym: Keysym) -> Option<cnde_ipc::MediaKey> {
+    use cnde_ipc::MediaKey;
+    Some(match sym.raw() {
+        keysyms::KEY_XF86AudioRaiseVolume => MediaKey::VolumeUp,
+        keysyms::KEY_XF86AudioLowerVolume => MediaKey::VolumeDown,
+        keysyms::KEY_XF86AudioMute => MediaKey::Mute,
+        keysyms::KEY_XF86AudioMicMute => MediaKey::MicMute,
+        keysyms::KEY_XF86MonBrightnessUp => MediaKey::BrightnessUp,
+        keysyms::KEY_XF86MonBrightnessDown => MediaKey::BrightnessDown,
+        _ => return None,
+    })
 }
 
 /// Whether `sym` is the mod key itself (left or right).

@@ -179,6 +179,10 @@ impl State {
                 self.fake_pointer((x, y).into(), press)
             }
             Request::FakePointer { .. } => {}
+            Request::FakeMediaKey { key } if cfg!(debug_assertions) => {
+                self.ipc.broadcast(&Event::MediaKey { key })
+            }
+            Request::FakeMediaKey { .. } => {}
             Request::CancelScreenshot => {
                 if self.screenshot.active {
                     self.cancel_screenshot();
