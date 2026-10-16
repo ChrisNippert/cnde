@@ -251,6 +251,12 @@ Every default listed here can be rebound or reconfigured.
   (`power-profiles-daemon` or `tuned-ppd`, hidden if absent), dark mode
   toggle, do-not-disturb.
 - **Battery** percentage, time remaining and low-battery warning (UPower).
+- **Look:** GNOME's restraint, iOS Control Center's visuals. A translucent
+  (later frosted) card, big rounded tile groups, circular toggles that fill
+  with the accent colour, and **fat sliders** with the icon inside. A small
+  arrow on a tile expands it in place (Wi-Fi networks, audio devices).
+- **Audio output switching:** expanding the volume slider lists output
+  devices (speakers, headphones, DACs) to switch between.
 - **Media controls** (MPRIS) in the notification area.
 - **Privacy indicators:** a small, minimal icon in the panel while the mic,
   camera, or screen capture is active. Sources: PipeWire stream state and our
