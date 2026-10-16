@@ -150,17 +150,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
 
     p.canvas.clear(Color::rgba(0, 0, 0, 0.0));
     p.canvas
-        .rounded_rect(0.0, 0.0, w, h, radius, t.window_sidebar);
-    p.canvas.rounded_rect(
-        sw - radius,
-        0.0,
-        w - sw + radius,
-        h,
-        radius,
-        t.window_background,
-    );
-    p.canvas
-        .rounded_rect(sw, 0.0, radius, h, 0.0, t.window_background);
+        .rounded_rect(0.0, 0.0, w, h, radius, t.window_background);
 
     // The page first: it scrolls under the header bar drawn after it.
     let content = Rect::new(sw, hh, w - sw, h - hh);
@@ -173,7 +163,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
             .rounded_rect(content.x, content.y, content.w, content.h, 0.0, veil);
     }
 
-    // Content header bar.
+    // Content header bar (the page scrolls under it).
     p.canvas
         .rounded_rect(sw, 0.0, w - sw - radius, hh, 0.0, t.window_background);
     p.canvas.rounded_rect(
@@ -189,10 +179,10 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     // The page's title on the left, the window buttons on the right.
     p.label_v(
         ui.page.title(),
-        sw + 20.0,
-        hh / 2.0,
+        sw + 14.0,
+        hh / 2.0 + 2.0,
         w - sw - 140.0,
-        t.window_title_size,
+        t.window_title_size + 4.0,
         Weight::Bold,
         t.window_text,
     );
@@ -261,10 +251,23 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     out
 }
 
+/// The sidebar floats as a card inset from the window's edges, its
+/// highlight inside it.
+const SIDEBAR_INSET: f32 = 6.0;
+
 fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h: f32) {
     let t = p.theme;
     let sw = t.sidebar_width;
     let hh = t.window_header_height;
+    let inset = SIDEBAR_INSET;
+    p.canvas.rounded_rect(
+        inset,
+        inset,
+        sw - 2.0 * inset,
+        h - 2.0 * inset,
+        CORNER - inset / 2.0,
+        t.window_sidebar,
+    );
     out.hits.push((Rect::new(0.0, 0.0, sw, hh), Target::Header));
     let title = "Settings";
     p.label_v(
@@ -281,7 +284,12 @@ fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h:
         if y + t.sidebar_row_height > h {
             break;
         }
-        let rect = Rect::new(8.0, y, sw - 16.0, t.sidebar_row_height);
+        let rect = Rect::new(
+            inset + 6.0,
+            y,
+            sw - 2.0 * (inset + 6.0),
+            t.sidebar_row_height,
+        );
         let selected = a.get(
             AnimKey::Selected(page),
             if ui.page == page { 1.0 } else { 0.0 },
@@ -342,12 +350,12 @@ fn page(
         }
         if !group.title.is_empty() {
             p.label(
-                &group.title,
-                x + 4.0,
-                y,
-                t.group_title_size,
+                &group.title.to_uppercase(),
+                x + t.row_padding,
+                y + 2.0,
+                t.subtitle_size - 1.5,
                 Weight::Bold,
-                t.window_text,
+                t.window_dim,
             );
             y += 24.0;
         }
@@ -375,8 +383,14 @@ fn page(
         let count = rows.len();
         for (i, (row, rh)) in rows.into_iter().zip(heights).enumerate() {
             if i > 0 {
-                p.canvas
-                    .rounded_rect(x, ry, col_w, 1.0, 0.0, t.card_separator);
+                p.canvas.rounded_rect(
+                    x + t.row_padding,
+                    ry,
+                    col_w - 2.0 * t.row_padding,
+                    1.0,
+                    0.0,
+                    t.card_separator,
+                );
             }
             let index = out.rows.len();
             let rect = Rect::new(x, ry, col_w, rh);

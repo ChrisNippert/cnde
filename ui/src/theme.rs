@@ -235,7 +235,7 @@ impl Theme {
             sidebar_selected: Color::rgba(0xff, 0xff, 0xff, 0.10),
             hover: Color::rgba(0xff, 0xff, 0xff, 0.05),
             card_background: Color::rgba(0xff, 0xff, 0xff, 0.08),
-            card_radius: 12.0,
+            card_radius: 14.0,
             card_separator: Color::rgba(0x00, 0x00, 0x06, 0.36),
             row_height: 42.0,
             row_subtitle_height: 54.0,
