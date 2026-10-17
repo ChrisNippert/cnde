@@ -109,6 +109,8 @@ pub struct Ui {
     pub wifi_join: Option<crate::wifi::Join>,
     /// The network whose details were opened (a sub-page of Wi-Fi).
     pub wifi_details: Option<String>,
+    /// The Bluetooth worker's last report (once the page has been opened).
+    pub bluetooth: Option<crate::bluetooth::State>,
     /// Where the arrangement shows each display while one's dragged (and
     /// until the compositor reports the result).
     pub arranged: Option<Vec<(i32, i32)>>,
@@ -404,6 +406,7 @@ fn page(
             join: ui.wifi_join.as_ref(),
             details: ui.sub_page(),
         },
+        ui.bluetooth.as_ref(),
     );
     let show_advanced = ui.advanced.contains(&ui.page);
     let has_advanced = groups.iter().flat_map(|g| &g.rows).any(|r| r.advanced);
@@ -1221,6 +1224,7 @@ mod tests {
             wifi: None,
             wifi_join: None,
             wifi_details: None,
+            bluetooth: None,
             arranged: None,
             arranging: None,
         }
@@ -1397,6 +1401,76 @@ mod tests {
         let painted = render(&ui, "wifi-hidden");
         assert!(has(&painted, Key::Wifi(WifiKey::Join(JoinField::Ssid))));
         assert!(has(&painted, Key::Wifi(WifiKey::Join(JoinField::Security))));
+    }
+
+    #[test]
+    fn bluetooth_page_shows_devices_and_pairing() {
+        use crate::bluetooth::{Availability, Busy, Device, State};
+        use pages::BluetoothKey;
+        let mut ui = ui(Page::Bluetooth);
+        render(&ui, "bluetooth-looking");
+        let device = |address: &str, name: &str, icon: &str, paired, connected| Device {
+            address: address.into(),
+            name: name.into(),
+            icon: icon.into(),
+            paired,
+            connected,
+            battery: None,
+            rssi: None,
+        };
+        let mut state = State {
+            availability: Availability::Ready,
+            powered: true,
+            discovering: true,
+            devices: vec![
+                Device {
+                    battery: Some(70),
+                    ..device("01", "Buds", "audio-headphones", true, true)
+                },
+                device("02", "Trackball", "input-mouse", true, false),
+                device("03", "Speaker", "audio-card", false, false),
+                device("04", "Keys", "input-keyboard", false, false),
+            ],
+            busy: Some(("04".into(), Busy::Pairing)),
+            code: Some("123456".into()),
+            error: None,
+        };
+        ui.bluetooth = Some(state.clone());
+        let has = |painted: &Painted, key: BluetoothKey| {
+            painted
+                .rows
+                .iter()
+                .find(|r| r.key == Key::Bluetooth(key.clone()))
+                .cloned()
+        };
+        let painted = render(&ui, "bluetooth");
+        assert!(has(&painted, BluetoothKey::Powered).is_some());
+        let buds = has(&painted, BluetoothKey::Device("01".into())).unwrap();
+        assert_eq!(buds.subtitle, "Connected · Headphones · 70% battery");
+        let labels = |row: &Row| match &row.control {
+            Control::Segmented(c) => c.iter().map(|c| c.label.clone()).collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        assert_eq!(labels(&buds), ["Disconnect", "Forget"]);
+        let ball = has(&painted, BluetoothKey::Device("02".into())).unwrap();
+        assert_eq!(labels(&ball), ["Connect", "Forget"]);
+        let speaker = has(&painted, BluetoothKey::Device("03".into())).unwrap();
+        assert_eq!(labels(&speaker), ["Pair"]);
+        let keys = has(&painted, BluetoothKey::Device("04".into())).unwrap();
+        assert!(keys.subtitle.starts_with("Pairing…"));
+        let code = has(&painted, BluetoothKey::Code).unwrap();
+        assert_eq!(code.value, Value::Str("123456".into()));
+
+        // Off: just the switch.
+        state.powered = false;
+        ui.bluetooth = Some(state.clone());
+        let painted = render(&ui, "bluetooth-off");
+        assert_eq!(painted.rows.len(), 1);
+
+        state.availability = Availability::NoAdapter;
+        ui.bluetooth = Some(state);
+        let painted = render(&ui, "bluetooth-none");
+        assert!(painted.rows.is_empty());
     }
 
     #[test]
