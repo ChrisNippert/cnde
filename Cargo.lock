@@ -444,6 +444,7 @@ dependencies = [
 name = "cnde-config"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "toml",
  "toml_edit",

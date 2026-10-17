@@ -273,6 +273,13 @@ impl State {
             {
                 elements.insert(0, render::OutputElement::Wallpaper(fade));
             }
+            // The night light filter goes on top of everything but is
+            // left out of screen captures.
+            let night = self.night_light.element(renderer, &backend.output, now);
+            let filtered = night.is_some();
+            if let Some(night) = night {
+                elements.insert(0, render::OutputElement::Night(night));
+            }
             let damage = match backend.damage_tracker.render_output(
                 renderer,
                 &mut framebuffer,
@@ -287,6 +294,9 @@ impl State {
                 }
             };
             drop(framebuffer);
+            if filtered {
+                elements.remove(0);
+            }
             crate::capture::capture_output(
                 &mut self.capture,
                 renderer,
@@ -321,7 +331,8 @@ impl State {
             self.workspaces.is_moving()
                 || self.overview.is_animating(now)
                 || self.popup_anims.is_animating(now)
-                || self.crossfade.is_animating(),
+                || self.crossfade.is_animating()
+                || self.night_light.is_animating(now),
             now,
         ) {
             self.queue_redraw();

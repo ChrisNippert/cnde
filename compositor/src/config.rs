@@ -167,6 +167,7 @@ impl State {
             publish_window_buttons(self.config.appearance.window_buttons);
             publish_accent(&self.config.appearance);
         }
+        self.schedules_config_changed(old);
     }
 
     /// Apply mouse/touchpad settings to one libinput device.

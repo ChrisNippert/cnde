@@ -95,6 +95,7 @@ render_elements! {
     Wallpaper = TextureRenderElement<GlesTexture>,
     Shader = PixelShaderElement,
     Frost = crate::frost::Frost,
+    Night = crate::night_light::Filter,
     Titlebar = RescaleRenderElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
 }
 
