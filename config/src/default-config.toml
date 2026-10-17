@@ -65,7 +65,7 @@
 # outer_gap = 8            # px between tiled windows and the screen's edges (0-128)
 
 [panel]
-# enabled = true          # false: hide the top bar (e.g. to use waybar via autostart)
+# enabled = true           # false: hide the top bar (e.g. to use waybar via autostart)
 # all_monitors = false     # true: a panel on every monitor, not just the main one
 # height = 32
 # rounded = false          # rounded bottom corners and a soft shadow
