@@ -509,12 +509,14 @@ fn mode_rows(display: &Display, config: Option<cnde_config::ModeConfig>) -> Vec<
     ]
 }
 
-/// What the Wi-Fi page shows: the worker's last report, and the network
-/// being joined (its form shows under it).
+/// What the Wi-Fi page shows: the worker's last report, the network
+/// being joined (its form shows under it), and the connected network whose
+/// details are open instead of the list.
 #[derive(Clone, Copy, Default)]
 pub struct WifiView<'a> {
     pub state: Option<&'a crate::wifi::State>,
     pub join: Option<&'a crate::wifi::Join>,
+    pub details: Option<&'a str>,
 }
 
 pub fn build(page: Page, c: &Config, displays: &[Display], wifi: WifiView<'_>) -> Vec<Group> {
@@ -592,6 +594,14 @@ fn wifi_page(view: WifiView<'_>) -> Vec<Group> {
     if !state.enabled {
         return vec![top];
     }
+    if let Some(network) = view.details.and_then(|ssid| {
+        state
+            .networks
+            .iter()
+            .find(|n| n.connected && n.ssid == ssid)
+    }) {
+        return details_page(network, state.details.as_ref());
+    }
     let mut groups = vec![top];
     let join = view.join;
     let joining = |ssid: &str| join.is_some_and(|j| !j.hidden && j.ssid == ssid);
@@ -624,21 +634,9 @@ fn wifi_page(view: WifiView<'_>) -> Vec<Group> {
         row
     };
 
+    // Clicking it opens its details.
     if let Some(network) = state.networks.iter().find(|n| n.connected) {
-        let mut rows = vec![network_row(network)];
-        if let Some(details) = &state.details {
-            rows.extend(detail_rows(network, details));
-        }
-        rows.push(wifi_row(
-            WifiKey::Actions(network.ssid.clone()),
-            "",
-            Control::Segmented(choices(&[
-                ("Disconnect", s("disconnect")),
-                ("Forget", s("forget")),
-            ])),
-            Value::Unset,
-        ));
-        groups.push(group("Connected", rows));
+        groups.push(group("Connected", vec![network_row(network)]));
     }
 
     let mut rows = Vec::new();
@@ -672,6 +670,28 @@ fn wifi_page(view: WifiView<'_>) -> Vec<Group> {
         rows,
     });
     groups
+}
+
+/// The connected network's own page: how the connection's doing, and
+/// disconnecting or forgetting it.
+fn details_page(
+    network: &crate::wifi::Network,
+    details: Option<&crate::wifi::Details>,
+) -> Vec<Group> {
+    let mut rows = Vec::new();
+    if let Some(details) = details {
+        rows.extend(detail_rows(network, details));
+    }
+    rows.push(wifi_row(
+        WifiKey::Actions(network.ssid.clone()),
+        "",
+        Control::Segmented(choices(&[
+            ("Disconnect", s("disconnect")),
+            ("Forget", s("forget")),
+        ])),
+        Value::Unset,
+    ));
+    vec![group("Connection", rows)]
 }
 
 /// Read-only rows about the connection that's up.

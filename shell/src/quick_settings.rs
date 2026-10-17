@@ -44,6 +44,8 @@ pub enum Hit {
     Power,
     /// Opens cnde-settings.
     Settings,
+    /// Opens cnde-settings on a page (a section's label or arrow).
+    SettingsPage(&'static str),
     Lock,
     Suspend,
     Reboot,
@@ -80,13 +82,28 @@ pub struct Layout {
     pub footer_y: f32,
     pub power_button: Rect,
     pub settings_button: Rect,
+    /// What opens a section's page in cnde-settings: the labels under
+    /// toggles that have one, the arrow beside the brightness slider.
+    pub settings_links: Vec<(Rect, &'static str)>,
     pub power_menu: Option<Vec<(Rect, Hit)>>,
+}
+
+/// The cnde-settings page for a section of the card, if it has one.
+fn settings_page(hit: Hit) -> Option<&'static str> {
+    match hit {
+        Hit::Wifi => Some("wifi"),
+        Hit::DarkMode => Some("appearance"),
+        Hit::Brightness => Some("displays"),
+        _ => None,
+    }
 }
 
 const FOOTER_HEIGHT: f32 = 40.0;
 const POWER_TILE_HEIGHT: f32 = 64.0;
 const LABEL_GAP: f32 = 6.0;
 const PROFILE_TILE_HEIGHT: f32 = 64.0;
+/// The arrow after a label that opens a settings page.
+const LINK_ARROW: f32 = 10.0;
 
 /// Which optional parts the card has, from what the machine offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -109,6 +126,9 @@ impl Features {
 }
 
 pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layout {
+    // No ways into cnde-settings when it isn't installed.
+    let settings = cfg!(test) || crate::apps::settings_installed();
+    let mut settings_links = Vec::new();
     let width = theme.qs_width;
     let pad = theme.qs_padding;
     let inner = width - 2.0 * pad;
@@ -130,6 +150,15 @@ pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layou
         .enumerate()
         .map(|(i, &hit)| {
             let cx = pad + slot * (i as f32 + 0.5);
+            if settings && let Some(page) = settings_page(hit) {
+                let label = Rect {
+                    x: pad + slot * i as f32,
+                    y: y + 14.0 + toggle + LABEL_GAP - 3.0,
+                    w: slot,
+                    h: theme.qs_label_size * 1.4 + 6.0,
+                };
+                settings_links.push((label, page));
+            }
             (
                 Rect {
                     x: cx - toggle / 2.0,
@@ -152,12 +181,24 @@ pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layou
     y += theme.qs_slider_height + theme.qs_gap;
 
     let brightness = features.brightness.then(|| {
-        let rect = Rect {
+        let h = theme.qs_slider_height;
+        let mut rect = Rect {
             x: pad,
             y,
             w: inner,
-            h: theme.qs_slider_height,
+            h,
         };
+        // A round arrow to the Displays page at its end.
+        if settings && let Some(page) = settings_page(Hit::Brightness) {
+            rect.w -= h + theme.qs_gap;
+            let arrow = Rect {
+                x: pad + inner - h,
+                y,
+                w: h,
+                h,
+            };
+            settings_links.push((arrow, page));
+        }
         y += theme.qs_slider_height + theme.qs_gap;
         rect
     });
@@ -214,7 +255,7 @@ pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layou
         h: FOOTER_HEIGHT,
     };
     // No gear when cnde-settings isn't installed.
-    let settings_button = if cfg!(test) || crate::apps::settings_installed() {
+    let settings_button = if settings {
         Rect {
             x: power_button.x - theme.qs_gap - FOOTER_HEIGHT,
             ..power_button
@@ -239,6 +280,7 @@ pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layou
         footer_y,
         power_button,
         settings_button,
+        settings_links,
         power_menu,
     }
 }
@@ -256,6 +298,9 @@ impl Layout {
             } else {
                 Hit::Volume
             });
+        }
+        if let Some((_, page)) = self.settings_links.iter().find(|(r, _)| r.contains(point)) {
+            return Some(Hit::SettingsPage(page));
         }
         if self.brightness.is_some_and(|b| b.contains(point)) {
             return Some(Hit::Brightness);
@@ -471,6 +516,10 @@ impl QuickSettings {
             Some(Hit::Power) => self.toggle_power_menu(xdg_shell, theme, anchor),
             Some(Hit::Settings) => {
                 crate::apps::open_settings(None);
+                return true;
+            }
+            Some(Hit::SettingsPage(page)) => {
+                crate::apps::open_settings(Some(page));
                 return true;
             }
             Some(hit @ (Hit::Lock | Hit::Suspend | Hit::Reboot | Hit::PowerOff)) => {
@@ -737,9 +786,13 @@ fn paint(
                 fg.with_alpha(fg.a * fade)
             },
         );
+        // A label that opens the section's settings page ends in an arrow.
+        let linked = settings_page(*hit)
+            .is_some_and(|page| layout.settings_links.iter().any(|(_, p)| *p == page));
+        let arrow = if linked { LINK_ARROW + 2.0 } else { 0.0 };
         // Fit the label under its toggle: a little smaller if need be,
         // shortened only as a last resort (long network names).
-        let room = layout.toggle_tile.w / layout.toggles.len() as f32 - 4.0;
+        let room = layout.toggle_tile.w / layout.toggles.len() as f32 - 4.0 - arrow;
         let mut text = fonts.layout(&label, theme.qs_label_size, Weight::Normal, s);
         let mut size = theme.qs_label_size;
         while text.width > room && size > theme.qs_label_size - 1.5 {
@@ -749,14 +802,20 @@ fn paint(
         if text.width > room {
             text = fonts.layout(&ellipsize(&label, 13), size, Weight::Normal, s);
         }
-        let tx = (rect.x + rect.w / 2.0 - text.width / 2.0).round();
-        canvas.text(
-            fonts,
-            &mut text,
-            tx,
-            rect.y + rect.h + LABEL_GAP,
-            theme.qs_dim.with_alpha(theme.qs_dim.a * fade),
-        );
+        let tx = (rect.x + rect.w / 2.0 - (text.width + arrow) / 2.0).round();
+        let ty = rect.y + rect.h + LABEL_GAP;
+        let dim = theme.qs_dim.with_alpha(theme.qs_dim.a * fade);
+        if linked {
+            canvas.icon(
+                icons,
+                "go-next-symbolic",
+                tx + text.width + 2.0,
+                ty + (text.height - LINK_ARROW) / 2.0,
+                LINK_ARROW,
+                dim,
+            );
+        }
+        canvas.text(fonts, &mut text, tx, ty, dim);
     }
 
     // Volume: the fat slider, speaker icon inside.
@@ -824,6 +883,28 @@ fn paint(
             } else {
                 theme.popup_text
             },
+        );
+    }
+
+    // The arrow beside the brightness slider, to the Displays page.
+    if let Some((rect, _)) = layout
+        .settings_links
+        .iter()
+        .find(|(_, page)| Some(*page) == settings_page(Hit::Brightness))
+    {
+        canvas.circle(
+            rect.x + rect.w / 2.0,
+            rect.y + rect.h / 2.0,
+            rect.w / 2.0,
+            theme.qs_slider_track,
+        );
+        canvas.icon(
+            icons,
+            "go-next-symbolic",
+            rect.x + (rect.w - 16.0) / 2.0,
+            rect.y + (rect.h - 16.0) / 2.0,
+            16.0,
+            theme.popup_text,
         );
     }
 
@@ -1062,6 +1143,35 @@ mod tests {
             Some(Hit::PowerProfile(2))
         );
         assert!(l.height > layout(&Theme::dark(), false, Features::default()).height);
+    }
+
+    #[test]
+    fn sections_open_their_settings_pages() {
+        let features = Features {
+            brightness: true,
+            power_profiles: 0,
+        };
+        let l = layout(&Theme::dark(), false, features);
+        let (wifi, _) = l.toggles[0];
+        let label = (
+            (wifi.x + wifi.w / 2.0) as f64,
+            (wifi.y + wifi.h + LABEL_GAP + 4.0) as f64,
+        );
+        assert_eq!(l.hit(label), Some(Hit::SettingsPage("wifi")));
+        let b = l.brightness.unwrap();
+        let end = l.toggle_tile.x + l.toggle_tile.w;
+        assert!(b.x + b.w < end - b.h);
+        assert_eq!(
+            l.hit(((end - b.h / 2.0) as f64, (b.y + b.h / 2.0) as f64)),
+            Some(Hit::SettingsPage("displays"))
+        );
+        // Bluetooth has no page.
+        let (bt, _) = l.toggles[1];
+        let label = (
+            (bt.x + bt.w / 2.0) as f64,
+            (bt.y + bt.h + LABEL_GAP + 4.0) as f64,
+        );
+        assert_eq!(l.hit(label), None);
     }
 
     #[test]

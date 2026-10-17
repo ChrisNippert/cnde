@@ -44,6 +44,8 @@ pub enum Target {
     /// A colour row's swatch: the row, and which of `SWATCHES` (row-major).
     Swatch(usize, usize),
     Advanced,
+    /// The header's back button, on a sub-page.
+    Back,
 }
 
 /// What's animating.
@@ -105,11 +107,28 @@ pub struct Ui {
     /// The network whose password is being asked for.
     /// The network being joined, whose form shows.
     pub wifi_join: Option<crate::wifi::Join>,
+    /// The network whose details were opened (a sub-page of Wi-Fi).
+    pub wifi_details: Option<String>,
     /// Where the arrangement shows each display while one's dragged (and
     /// until the compositor reports the result).
     pub arranged: Option<Vec<(i32, i32)>>,
     /// The display being dragged.
     pub arranging: Option<usize>,
+}
+
+impl Ui {
+    /// The sub-page showing, by its title: the Wi-Fi network whose details
+    /// are open, while it's still the connected one.
+    pub fn sub_page(&self) -> Option<&str> {
+        let ssid = self.wifi_details.as_deref()?;
+        let connected = self
+            .wifi
+            .as_ref()?
+            .networks
+            .iter()
+            .any(|n| n.connected && n.ssid == ssid);
+        (self.page == Page::Wifi && connected).then_some(ssid)
+    }
 }
 
 /// The result of a paint, for hit-testing.
@@ -194,12 +213,33 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     );
     out.hits
         .push((Rect::new(sw, 0.0, w - sw, hh), Target::Header));
-    // The page's title on the left, the window buttons on the right.
+    // The page's title on the left, the window buttons on the right. A
+    // sub-page's title has a back button before it.
+    let mut title_x = sw + 14.0;
+    let title = ui.sub_page().unwrap_or(ui.page.title());
+    if ui.sub_page().is_some() {
+        let size = 28.0;
+        let back = Rect::new(sw + 10.0, (hh - size) / 2.0, size, size);
+        let fill = t
+            .button_background
+            .mix(t.button_hover, hover(a, ui, Target::Back));
+        p.canvas
+            .circle(back.x + size / 2.0, back.y + size / 2.0, size / 2.0, fill);
+        p.icon(
+            "go-previous-symbolic",
+            back.x + size / 2.0,
+            back.y + size / 2.0,
+            16.0,
+            t.window_text,
+        );
+        out.hits.push((back, Target::Back));
+        title_x = back.right() + 10.0;
+    }
     p.label_v(
-        ui.page.title(),
-        sw + 14.0,
+        title,
+        title_x,
         hh / 2.0 + 2.0,
-        w - sw - 140.0,
+        w - title_x - 140.0,
         t.window_title_size + 4.0,
         Weight::Bold,
         t.window_text,
@@ -362,6 +402,7 @@ fn page(
         pages::WifiView {
             state: ui.wifi.as_ref(),
             join: ui.wifi_join.as_ref(),
+            details: ui.sub_page(),
         },
     );
     let show_advanced = ui.advanced.contains(&ui.page);
@@ -666,9 +707,13 @@ fn paint_row(
             secured,
             connected,
         } => {
-            // Right to left: a check if connected, the lock, the signal.
+            // Right to left: if connected, an arrow to its details and a
+            // check; the lock, the signal.
             let mut x = right;
             if *connected {
+                x -= 16.0;
+                p.icon("go-next-symbolic", x + 8.0, cy, 14.0, t.window_dim);
+                x -= 10.0;
                 x -= 18.0;
                 p.icon("object-select-symbolic", x + 9.0, cy, 16.0, t.accent);
                 x -= 10.0;
@@ -1175,6 +1220,7 @@ mod tests {
             dragging: None,
             wifi: None,
             wifi_join: None,
+            wifi_details: None,
             arranged: None,
             arranging: None,
         }
@@ -1297,12 +1343,29 @@ mod tests {
         });
         let painted = render(&ui, "wifi");
         assert!(has(&painted, Key::Wifi(WifiKey::Join(JoinField::Password))));
-        assert!(has(&painted, Key::Wifi(WifiKey::Actions("Home".into()))));
-        assert!(has(&painted, Key::Wifi(WifiKey::Detail("Band".into()))));
+        assert!(has(&painted, Key::Wifi(WifiKey::Network("Home".into()))));
+        assert!(!has(&painted, Key::Wifi(WifiKey::Detail("Band".into()))));
         assert!(!has(
             &painted,
             Key::Wifi(WifiKey::Join(JoinField::Identity))
         ));
+        assert!(!painted.hits.iter().any(|(_, t)| *t == Target::Back));
+
+        // The connected network's details are a page of their own.
+        ui.wifi_details = Some("Home".into());
+        let painted = render(&ui, "wifi-details");
+        assert!(has(&painted, Key::Wifi(WifiKey::Actions("Home".into()))));
+        assert!(has(&painted, Key::Wifi(WifiKey::Detail("Band".into()))));
+        assert!(!has(
+            &painted,
+            Key::Wifi(WifiKey::Network("Cafe Guest".into()))
+        ));
+        assert!(painted.hits.iter().any(|(_, t)| *t == Target::Back));
+        // Not for a network that isn't the connected one.
+        ui.wifi_details = Some("Cafe Guest".into());
+        let painted = render(&ui, "wifi-not-connected");
+        assert!(!painted.hits.iter().any(|(_, t)| *t == Target::Back));
+        ui.wifi_details = None;
 
         ui.wifi_join = Some(Join {
             ssid: "eduroam".into(),
