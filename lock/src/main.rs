@@ -65,6 +65,17 @@ struct Surface {
     size: (u32, u32),
     scale: i32,
     configured: bool,
+    /// Everything but the password band, ready to copy in.
+    base: Option<Base>,
+}
+
+/// A screen's unchanging layer (the background, clock, date and name), in
+/// the buffer's pixel order. Redrawn when the minute or the size changes,
+/// so a key press only paints the password band over a copy of it.
+struct Base {
+    pixels: Vec<u8>,
+    size: (i32, i32),
+    minute: String,
 }
 
 /// What's been typed; wiped when dropped or cleared.
@@ -356,6 +367,7 @@ impl App {
             size: (0, 0),
             scale,
             configured: false,
+            base: None,
         });
     }
 
@@ -366,7 +378,7 @@ impl App {
     }
 
     fn draw(&mut self, index: usize) {
-        let Some(surface) = self.surfaces.get(index) else {
+        let Some(surface) = self.surfaces.get_mut(index) else {
             return;
         };
         if !surface.configured || surface.size.0 == 0 || surface.size.1 == 0 {
@@ -375,6 +387,46 @@ impl App {
         let scale = surface.scale;
         let (lw, lh) = surface.size;
         let (w, h) = (lw as i32 * scale, lh as i32 * scale);
+        let size = (lw as f32, lh as f32);
+        let swizzle = self.shm_format == wl_shm::Format::Argb8888;
+        let view = View {
+            twelve_hour: self.twelve_hour,
+            user: &self.user,
+            typed: self.password.0.len(),
+            checking: self.checking,
+            message: self.message.as_deref(),
+            caps_lock: self.modifiers.caps_lock,
+        };
+
+        let minute = Local::now().format("%Y%m%d%H%M").to_string();
+        let fresh = surface
+            .base
+            .as_ref()
+            .is_some_and(|b| b.size == (w, h) && b.minute == minute);
+        if !fresh {
+            let mut pixels = vec![0; (w * h * 4) as usize];
+            if let Some(mut canvas) = Canvas::new(&mut pixels, w as u32, h as u32, scale as f32) {
+                let mut p = Painter {
+                    canvas: &mut canvas,
+                    fonts: &mut self.fonts,
+                    icons: &mut self.icons,
+                    theme: &self.theme,
+                };
+                paint_base(&mut p, size, self.background.as_ref(), &view);
+            }
+            if swizzle {
+                swap_red_blue(&mut pixels);
+            }
+            surface.base = Some(Base {
+                pixels,
+                size: (w, h),
+                minute,
+            });
+        }
+        let Some(base) = &surface.base else {
+            return;
+        };
+
         let (buffer, pixels) = match self.pool.create_buffer(w, h, w * 4, self.shm_format) {
             Ok(created) => created,
             Err(err) => {
@@ -382,6 +434,16 @@ impl App {
                 return;
             }
         };
+        pixels.copy_from_slice(&base.pixels);
+        // Only the password band changes from key to key: paint it in the
+        // canvas's byte order and damage just that.
+        let (top, bottom) = band(size);
+        let y0 = ((top * scale as f32).floor() as i32).clamp(0, h);
+        let y1 = ((bottom * scale as f32).ceil() as i32).clamp(y0, h);
+        let rows = (y0 * w * 4) as usize..(y1 * w * 4) as usize;
+        if swizzle {
+            swap_red_blue(&mut pixels[rows.clone()]);
+        }
         if let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) {
             let mut p = Painter {
                 canvas: &mut canvas,
@@ -389,28 +451,18 @@ impl App {
                 icons: &mut self.icons,
                 theme: &self.theme,
             };
-            paint(
-                &mut p,
-                (lw as f32, lh as f32),
-                self.background.as_ref(),
-                &View {
-                    twelve_hour: self.twelve_hour,
-                    user: &self.user,
-                    typed: self.password.0.len(),
-                    checking: self.checking,
-                    message: self.message.as_deref(),
-                    caps_lock: self.modifiers.caps_lock,
-                },
-            );
+            paint_band(&mut p, size, &view);
         }
-        if self.shm_format == wl_shm::Format::Argb8888 {
-            for pixel in pixels.as_chunks_mut::<4>().0 {
-                pixel.swap(0, 2);
-            }
+        if swizzle {
+            swap_red_blue(&mut pixels[rows]);
         }
         let wl = surface.lock_surface.wl_surface();
         wl.set_buffer_scale(scale);
-        wl.damage_buffer(0, 0, w, h);
+        if fresh {
+            wl.damage_buffer(0, y0, w, y1 - y0);
+        } else {
+            wl.damage_buffer(0, 0, w, h);
+        }
         if buffer.attach_to(wl).is_ok() {
             wl.commit();
         }
@@ -522,9 +574,46 @@ struct View<'a> {
     caps_lock: bool,
 }
 
-/// The lock screen: the blurred wallpaper (or the theme's colours), the
-/// time and date, and the password pill.
-fn paint(p: &mut Painter<'_, '_>, (w, h): (f32, f32), background: Option<&Pixmap>, v: &View<'_>) {
+/// Canvas RGBA to the buffer's BGRA, or back.
+fn swap_red_blue(pixels: &mut [u8]) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+}
+
+/// Where the password pill sits.
+fn pill_rect((w, h): (f32, f32)) -> (f32, f32, f32, f32) {
+    let pill_w = 300.0_f32.min(w - 32.0);
+    (w / 2.0 - pill_w / 2.0, h * 0.62, pill_w, 44.0)
+}
+
+/// The rows `paint_band` paints: the pill and the message under it.
+fn band(size: (f32, f32)) -> (f32, f32) {
+    let (_, py, _, pill_h) = pill_rect(size);
+    (py - 2.0, py + pill_h + 40.0)
+}
+
+fn centered(
+    p: &mut Painter<'_, '_>,
+    text: &str,
+    cx: f32,
+    cy: f32,
+    size: f32,
+    weight: Weight,
+    color: Color,
+) {
+    let tw = p.measure(text, size, weight);
+    p.label_v(text, cx - tw / 2.0, cy, tw + 1.0, size, weight, color);
+}
+
+/// The lock screen but for the password band: the blurred wallpaper (or
+/// the theme's colours), the time and date, and the user's name.
+fn paint_base(
+    p: &mut Painter<'_, '_>,
+    (w, h): (f32, f32),
+    background: Option<&Pixmap>,
+    v: &View<'_>,
+) {
     let t = p.theme;
     match background {
         Some(image) => p.canvas.image(image.as_ref(), 0.0, 0.0, w, h, 0.0),
@@ -557,21 +646,21 @@ fn paint(p: &mut Painter<'_, '_>, (w, h): (f32, f32), background: Option<&Pixmap
     let date = now.format("%A, %B %-d").to_string();
     let cx = w / 2.0;
     let top = h * 0.3;
-    let centered = |p: &mut Painter<'_, '_>, text: &str, cy: f32, size: f32, weight, color| {
-        let tw = p.measure(text, size, weight);
-        p.label_v(text, cx - tw / 2.0, cy, tw + 1.0, size, weight, color);
-    };
-    centered(p, &time, top, 84.0, Weight::Bold, white);
-    centered(p, &date, top + 64.0, 20.0, Weight::Normal, soft);
-
-    // The password pill.
-    let pill_w = 300.0_f32.min(w - 32.0);
-    let pill_h = 44.0;
-    let py = h * 0.62;
-    let px = cx - pill_w / 2.0;
+    centered(p, &time, cx, top, 84.0, Weight::Bold, white);
+    centered(p, &date, cx, top + 64.0, 20.0, Weight::Normal, soft);
     if !v.user.is_empty() {
-        centered(p, v.user, py - 22.0, 15.0, Weight::Bold, white);
+        let (_, py, _, _) = pill_rect((w, h));
+        centered(p, v.user, cx, py - 22.0, 15.0, Weight::Bold, white);
     }
+}
+
+/// The password pill and the message under it, over `paint_base`.
+fn paint_band(p: &mut Painter<'_, '_>, size: (f32, f32), v: &View<'_>) {
+    let t = p.theme;
+    let white = Color::rgb(0xff, 0xff, 0xff);
+    let soft = Color::rgba(0xff, 0xff, 0xff, 0.75);
+    let (px, py, pill_w, pill_h) = pill_rect(size);
+    let cx = size.0 / 2.0;
     p.canvas.rounded_rect(
         px,
         py,
@@ -591,9 +680,9 @@ fn paint(p: &mut Painter<'_, '_>, (w, h): (f32, f32), background: Option<&Pixmap
         .stroke_rounded_rect(px, py, pill_w, pill_h, pill_h / 2.0, 1.5, ring);
     let cy = py + pill_h / 2.0;
     if v.checking {
-        centered(p, "Checking…", cy, 15.0, Weight::Normal, soft);
+        centered(p, "Checking…", cx, cy, 15.0, Weight::Normal, soft);
     } else if v.typed == 0 {
-        centered(p, "Password", cy, 15.0, Weight::Normal, soft);
+        centered(p, "Password", cx, cy, 15.0, Weight::Normal, soft);
     } else {
         // A dot per byte typed, capped to fit.
         let dots = v.typed.min(((pill_w - 40.0) / 14.0) as usize);
@@ -606,9 +695,9 @@ fn paint(p: &mut Painter<'_, '_>, (w, h): (f32, f32), background: Option<&Pixmap
 
     let below = py + pill_h + 24.0;
     if let Some(message) = v.message {
-        centered(p, message, below, 14.0, Weight::Normal, white);
+        centered(p, message, cx, below, 14.0, Weight::Normal, white);
     } else if v.caps_lock {
-        centered(p, "Caps Lock is on", below, 14.0, Weight::Normal, soft);
+        centered(p, "Caps Lock is on", cx, below, 14.0, Weight::Normal, soft);
     }
 }
 
