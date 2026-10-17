@@ -19,7 +19,6 @@ use smithay::{
         allocator::Fourcc,
         renderer::{
             Bind, ExportMem, Offscreen, TextureMapping,
-            utils::with_renderer_surface_state,
             damage::OutputDamageTracker,
             element::{
                 AsRenderElements, RenderElement,
@@ -27,10 +26,11 @@ use smithay::{
                 texture::{TextureBuffer, TextureRenderElement},
             },
             gles::{GlesRenderer, GlesTexture},
+            utils::with_renderer_surface_state,
         },
     },
-    output::Output,
     desktop::layer_map_for_output,
+    output::Output,
     reexports::calloop::{
         RegistrationToken, channel,
         timer::{TimeoutAction, Timer},
@@ -160,16 +160,16 @@ impl State {
     }
 
     fn start_screenshot_watchdog(&mut self) {
-        let timer = self
-            .loop_handle
-            .insert_source(Timer::from_duration(WATCHDOG), |_, _, state| {
-                state.screenshot.watchdog = None;
-                if state.screenshot.active && !state.screenshot_tool_shown() {
-                    warn!("the screenshot tool didn't appear; unfreezing");
-                    state.cancel_screenshot();
-                }
-                TimeoutAction::Drop
-            });
+        let timer =
+            self.loop_handle
+                .insert_source(Timer::from_duration(WATCHDOG), |_, _, state| {
+                    state.screenshot.watchdog = None;
+                    if state.screenshot.active && !state.screenshot_tool_shown() {
+                        warn!("the screenshot tool didn't appear; unfreezing");
+                        state.cancel_screenshot();
+                    }
+                    TimeoutAction::Drop
+                });
         match timer {
             Ok(token) => self.screenshot.watchdog = Some(token),
             Err(err) => warn!(?err, "can't start the screenshot watchdog"),
@@ -181,10 +181,8 @@ impl State {
         self.space.outputs().any(|output| {
             layer_map_for_output(output).layers().any(|layer| {
                 layer.namespace() == "cnde-screenshot"
-                    && with_renderer_surface_state(layer.wl_surface(), |s| {
-                        s.buffer().is_some()
-                    })
-                    .unwrap_or(false)
+                    && with_renderer_surface_state(layer.wl_surface(), |s| s.buffer().is_some())
+                        .unwrap_or(false)
             })
         })
     }

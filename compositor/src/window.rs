@@ -216,6 +216,7 @@ impl State {
     pub fn unmap_window(&mut self, window: &Window) {
         self.space.unmap_elem(window);
         self.capture.window_unmapped(window);
+        self.overview_before_relayout();
         self.remove_window_from_workspaces(window);
         let topmost = self.space.elements().last().cloned();
         self.focus_window(topmost.as_ref());

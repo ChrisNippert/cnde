@@ -60,7 +60,9 @@ impl CompositorHandler for State {
             let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) else {
                 return;
             };
-            let Some(client) = surface.client() else { return };
+            let Some(client) = surface.client() else {
+                return;
+            };
             let inserted = state.loop_handle.insert_source(source, move |_, _, state| {
                 let dh = state.display_handle.clone();
                 state

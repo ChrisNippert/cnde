@@ -95,7 +95,13 @@ pub struct Overview {
     grid_anim: Option<Animation>,
     /// A three-finger swipe is moving it: how open it is follows the fingers.
     drag: Option<OverviewDrag>,
+    /// A window closed while open: the others slide from where they were
+    /// spread (card fractions per monitor) to their new places.
+    relayout: Option<(Animation, Vec<SpreadWas>)>,
 }
+
+/// A monitor's name, a window, and the card fraction it was spread to.
+type SpreadWas = (String, Window, Rectangle<f64, Logical>);
 
 #[derive(Debug, Clone, Copy)]
 struct OverviewDrag {
@@ -167,6 +173,7 @@ impl Overview {
             app_grid: false,
             grid_anim: None,
             drag: None,
+            relayout: None,
         }
     }
 
@@ -198,6 +205,7 @@ impl Overview {
         self.drag.is_some()
             || self.anim.as_ref().is_some_and(|a| !a.is_done(now))
             || self.grid_anim.as_ref().is_some_and(|a| !a.is_done(now))
+            || self.relayout.as_ref().is_some_and(|(a, _)| !a.is_done(now))
     }
 
     pub fn app_grid(&self) -> bool {
@@ -416,6 +424,123 @@ impl State {
         {
             self.overview.grid_anim = None;
         }
+        if self
+            .overview
+            .relayout
+            .as_ref()
+            .is_some_and(|(a, _)| a.is_done(now))
+        {
+            self.overview.relayout = None;
+        }
+    }
+
+    /// Before a window leaves the open overview: note where everything is
+    /// spread now, so the rest can slide into the new layout.
+    pub fn overview_before_relayout(&mut self) {
+        if !self.overview.is_open() {
+            return;
+        }
+        let now = Instant::now();
+        let (outputs, main) = self.strip_outputs();
+        let position = self.workspaces.position(now);
+        let mut old = Vec::new();
+        for output in &outputs {
+            let Some(geo) = self.space.output_geometry(output) else {
+                continue;
+            };
+            let full_card = Size::from((geo.size.w as f64 * ZOOM, geo.size.h as f64 * ZOOM));
+            for (index, workspace) in self.workspaces.list.iter().enumerate() {
+                let slot = index as f64 - position + main as f64;
+                for (window, _, _, to) in self.spread_fractions(
+                    output,
+                    &workspace.windows,
+                    &outputs,
+                    slot,
+                    full_card,
+                    None,
+                    now,
+                ) {
+                    old.push((output.name(), window, to));
+                }
+            }
+        }
+        self.overview.relayout = Some((Animation::new(0.0, 1.0, presets::OVERVIEW), old));
+    }
+
+    /// `windows` (one workspace's) on `output`'s card at `slot`: where each
+    /// really is, and its card fractions closed (`from`) and spread (`to`).
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn spread_fractions(
+        &self,
+        output: &Output,
+        windows: &[Window],
+        outputs: &[Output],
+        slot: f64,
+        full_card: Size<f64, Logical>,
+        carried: Option<&Window>,
+        now: Instant,
+    ) -> Vec<(
+        Window,
+        Rectangle<f64, Logical>,
+        Rectangle<f64, Logical>,
+        Rectangle<f64, Logical>,
+    )> {
+        let (from, t) = (slot.floor() as isize, slot - slot.floor());
+        let Some(home) = self
+            .slot_areas(outputs, from)
+            .zip(self.slot_areas(outputs, from + 1))
+            .map(|((a, _), (b, _))| lerp_rect(a.to_f64(), b.to_f64(), t))
+        else {
+            return Vec::new();
+        };
+        // Each window as a fraction of its own monitor, so it maps onto
+        // a card of any shape.
+        let mut placed = Vec::new();
+        for window in windows {
+            if carried == Some(window) || crate::window::with_state(window, |s| s.minimized) {
+                continue;
+            }
+            let (Some(a), Some(b)) = (
+                self.rest_rect(window, outputs, from),
+                self.rest_rect(window, outputs, from + 1),
+            ) else {
+                continue;
+            };
+            let real = lerp_rect(a.to_f64(), b.to_f64(), t);
+            placed.push((window.clone(), real, fraction_of(real, home)));
+        }
+        let sizes: Vec<Size<f64, Logical>> = placed
+            .iter()
+            .map(|(_, _, f)| Size::from((f.size.w * full_card.w, f.size.h * full_card.h)))
+            .collect();
+        let centres: Vec<Point<f64, Logical>> = placed
+            .iter()
+            .map(|(_, _, f)| f.loc + Point::from((f.size.w / 2.0, f.size.h / 2.0)))
+            .collect();
+        let spread = spread(&sizes, &centres, full_card, SPREAD_PADDING, SPREAD_GAP);
+        let relayout = self
+            .overview
+            .relayout
+            .as_ref()
+            .map(|(anim, old)| (anim.value_at(now), old));
+        placed
+            .into_iter()
+            .zip(spread)
+            .map(|((window, real, from), to)| {
+                let mut to = Rectangle::new(
+                    Point::from((to.loc.x / full_card.w, to.loc.y / full_card.h)),
+                    Size::from((to.size.w / full_card.w, to.size.h / full_card.h)),
+                );
+                if let Some((t, old)) = relayout
+                    && let Some((_, _, was)) = old
+                        .iter()
+                        .find(|(name, w, _)| *w == window && *name == output.name())
+                {
+                    to = lerp_rect(*was, to, t);
+                }
+                (window, real, from, to)
+            })
+            .collect()
     }
 
     /// The windows (and, in the overview, workspace cards) `output` shows
@@ -486,46 +611,15 @@ impl State {
                 index,
                 rect: card,
             });
-            let (from, t) = (slot.floor() as isize, slot - slot.floor());
-            let Some(home) = self
-                .slot_areas(&outputs, from)
-                .zip(self.slot_areas(&outputs, from + 1))
-                .map(|((a, _), (b, _))| lerp_rect(a.to_f64(), b.to_f64(), t))
-            else {
-                continue;
-            };
-            // Each window as a fraction of its own monitor, so it maps onto
-            // a card of any shape.
-            let mut windows = Vec::new();
-            for window in &workspace.windows {
-                if carried.as_ref() == Some(window)
-                    || crate::window::with_state(window, |s| s.minimized)
-                {
-                    continue;
-                }
-                let (Some(a), Some(b)) = (
-                    self.rest_rect(window, &outputs, from),
-                    self.rest_rect(window, &outputs, from + 1),
-                ) else {
-                    continue;
-                };
-                let real = lerp_rect(a.to_f64(), b.to_f64(), t);
-                windows.push((window.clone(), real, fraction_of(real, home)));
-            }
-            let sizes: Vec<Size<f64, Logical>> = windows
-                .iter()
-                .map(|(_, _, f)| Size::from((f.size.w * full_card.w, f.size.h * full_card.h)))
-                .collect();
-            let centres: Vec<Point<f64, Logical>> = windows
-                .iter()
-                .map(|(_, _, f)| f.loc + Point::from((f.size.w / 2.0, f.size.h / 2.0)))
-                .collect();
-            let spread = spread(&sizes, &centres, full_card, SPREAD_PADDING, SPREAD_GAP);
-            for ((window, real, from), to) in windows.into_iter().zip(spread) {
-                let to = Rectangle::new(
-                    Point::from((to.loc.x / full_card.w, to.loc.y / full_card.h)),
-                    Size::from((to.size.w / full_card.w, to.size.h / full_card.h)),
-                );
+            for (window, real, from, to) in self.spread_fractions(
+                output,
+                &workspace.windows,
+                &outputs,
+                slot,
+                full_card,
+                carried.as_ref(),
+                now,
+            ) {
                 let fraction = lerp_rect(from, to, progress);
                 let target = Rectangle::new(
                     card.loc
