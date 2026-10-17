@@ -937,7 +937,12 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     scheme(c.appearance.color_scheme),
                     scheme(d.appearance.color_scheme),
                 )
-                .sub("Menus, quick settings and this window; also picks the wallpaper"),
+                .sub(match c.dark_mode.schedule {
+                    cnde_config::DarkSchedule::Off => {
+                        "Menus, quick settings and this window; also picks the wallpaper"
+                    }
+                    _ => "Switches by itself on the schedule below",
+                }),
                 Row::new(
                     "appearance.palette",
                     "Colours",
@@ -1044,6 +1049,7 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
             ],
         ),
     ];
+    groups.insert(1, dark_schedule(c, d));
     // Custom colours: the two the palette is worked out from.
     if c.appearance.palette == cnde_config::Palette::Custom
         && let Some(style) = groups.first_mut()
@@ -1076,6 +1082,100 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
         );
     }
     groups
+}
+
+/// Switching to the dark style and back by the time of day.
+fn dark_schedule(c: &Config, d: &Config) -> Group {
+    use cnde_config::DarkSchedule;
+    let schedule = |v: DarkSchedule| {
+        s(match v {
+            DarkSchedule::Off => "off",
+            DarkSchedule::Sunset => "sunset",
+            DarkSchedule::Custom => "custom",
+        })
+    };
+    let dark = &c.dark_mode;
+    let located = c.location.coordinates().is_some();
+    let subtitle = match dark.schedule {
+        DarkSchedule::Off => "Only when you switch it".to_string(),
+        DarkSchedule::Sunset if !located => {
+            "No location set: the times below are used until you add one".to_string()
+        }
+        DarkSchedule::Sunset => match sun_today(c) {
+            Some(text) => format!("{text}; a switch by hand lasts until the next one"),
+            None => "A switch by hand lasts until the next sunrise or sunset".to_string(),
+        },
+        DarkSchedule::Custom => "A switch by hand lasts until the next scheduled one".to_string(),
+    };
+    let mut rows = vec![
+        Row::new(
+            "dark_mode.schedule",
+            "Switch automatically",
+            Control::Segmented(choices(&[
+                ("Off", s("off")),
+                ("Sunset to sunrise", s("sunset")),
+                ("Custom", s("custom")),
+            ])),
+            schedule(dark.schedule),
+            schedule(d.dark_mode.schedule),
+        )
+        .sub(&subtitle),
+    ];
+    let times = match dark.schedule {
+        DarkSchedule::Off => false,
+        DarkSchedule::Sunset => !located,
+        DarkSchedule::Custom => true,
+    };
+    if times {
+        rows.push(
+            Row::new(
+                "dark_mode.from",
+                "Dark from",
+                Control::text("19:00"),
+                s(&dark.from),
+                s(&d.dark_mode.from),
+            )
+            .sub("24-hour time, like 19:30"),
+        );
+        rows.push(Row::new(
+            "dark_mode.to",
+            "Light from",
+            Control::text("07:00"),
+            s(&dark.to),
+            s(&d.dark_mode.to),
+        ));
+    }
+    if dark.schedule == DarkSchedule::Sunset {
+        rows.push(location_row(c));
+    }
+    group("Dark style schedule", rows)
+}
+
+/// Where sunset and sunrise are worked out for (dark style, night light).
+fn location_row(c: &Config) -> Row {
+    Row::new(
+        "location.coordinates",
+        "Location",
+        Control::text("Latitude, longitude"),
+        s(&c.location.coordinates),
+        s(""),
+    )
+    .sub("In degrees, e.g. 52.52, 13.40. Worked out here: nothing goes online")
+}
+
+/// "Sunset 18:42, sunrise 07:21" today at the configured location.
+fn sun_today(c: &Config) -> Option<String> {
+    use cnde_config::schedule::{Clock, Sun, format_time, sun};
+    let (lat, lon) = c.location.coordinates()?;
+    Some(match sun(lat, lon, &Clock::now()) {
+        Sun::Rises { sunrise, sunset } => format!(
+            "Sunset {}, sunrise {}",
+            format_time(sunset),
+            format_time(sunrise)
+        ),
+        Sun::AlwaysUp => "The sun doesn't set today".into(),
+        Sun::AlwaysDown => "The sun doesn't rise today".into(),
+    })
 }
 
 fn displays_page(c: &Config, displays: &[Display]) -> Vec<Group> {
@@ -1932,6 +2032,39 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn dark_schedule_rows() {
+        let mut config = Config::default();
+        let titles = |config: &Config| -> Vec<String> {
+            dark_schedule(config, &Config::default())
+                .rows
+                .into_iter()
+                .map(|r| r.title)
+                .collect()
+        };
+        assert_eq!(titles(&config), ["Switch automatically"]);
+        // Sunset with no location: the custom times stand in.
+        config.dark_mode.schedule = cnde_config::DarkSchedule::Sunset;
+        assert_eq!(
+            titles(&config),
+            [
+                "Switch automatically",
+                "Dark from",
+                "Light from",
+                "Location"
+            ]
+        );
+        config.location.coordinates = "52.52, 13.40".into();
+        assert_eq!(titles(&config), ["Switch automatically", "Location"]);
+        let group = dark_schedule(&config, &Config::default());
+        assert!(group.rows[0].subtitle.starts_with("Sunset "));
+        for row in group.rows {
+            let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();
+            row.key.write(&mut file, &config, &row.value);
+            assert!(file.config().is_ok(), "{}", row.title);
         }
     }
 

@@ -46,6 +46,17 @@
 # titlebars = "cnde"       # "cnde" draws title bars for apps that allow it; "app" leaves them to the app
 # corner_radius = 12       # window corners in px (0-48); the dock, bar and menus scale with it
 
+[dark_mode]
+# Switch appearance.color_scheme by the time of day. Switching by hand
+# (quick settings, Settings) lasts until the next scheduled switch.
+# schedule = "off"         # "off" (by hand only), "sunset" (dark from sunset to sunrise), "custom"
+# from = "19:00"           # "custom": dark from this time (24-hour)...
+# to = "07:00"             # ...until this one; also used by "sunset" until [location] is set
+
+[location]
+# For sunset and sunrise, worked out on this computer: nothing is looked up online.
+# coordinates = ""         # "latitude, longitude" in degrees, north and east positive, e.g. "52.52, 13.40"
+
 [wallpaper]
 # light = ""               # image path (PNG, JPEG, WebP), e.g. "~/Pictures/day.jpg"
 # dark = ""                # used in dark mode; empty uses `light` for both

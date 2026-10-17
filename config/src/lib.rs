@@ -11,6 +11,8 @@ use serde::Deserialize;
 
 mod edit;
 pub use edit::ConfigFile;
+pub mod schedule;
+pub use schedule::{DarkMode, DarkSchedule, Location};
 // The value type `ConfigFile::set` takes.
 pub use toml_edit;
 
@@ -32,6 +34,10 @@ pub struct Config {
     pub launcher: Launcher,
     pub autostart: Autostart,
     pub lock: Lock,
+    /// Switching to the dark style and back by the time of day.
+    pub dark_mode: DarkMode,
+    /// For sunset and sunrise (schedule.rs).
+    pub location: Location,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -681,6 +687,7 @@ impl Config {
                 )?;
             }
         }
+        schedule::validate(self)?;
         Ok(())
     }
 

@@ -23,6 +23,7 @@ mod overview;
 mod popup_anim;
 mod portals;
 mod render;
+mod schedule;
 mod screenshot;
 mod shaders;
 mod snap;
@@ -114,6 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = state.config_path.clone() {
         config::watch(&event_loop.handle(), path);
     }
+    schedule::start(&event_loop.handle());
     // Before autostart, so launched apps get DISPLAY.
     xwayland::setup(&mut state, &event_loop.handle());
     if !nested {

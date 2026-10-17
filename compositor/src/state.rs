@@ -90,6 +90,8 @@ pub struct State {
     pub wallpapers: crate::wallpaper::Wallpapers,
     pub dock_frost: crate::frost::DockFrost,
     pub crossfade: crate::crossfade::Crossfade,
+    /// Dark mode on a timer.
+    pub schedules: crate::schedule::Schedules,
     pub decorations: crate::decorations::Decorations,
     pub bar_input: crate::decorations::BarInput,
     pub overview: crate::overview::Overview,
@@ -199,6 +201,7 @@ impl State {
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
             dock_frost: Default::default(),
             crossfade: Default::default(),
+            schedules: Default::default(),
             decorations: Default::default(),
             bar_input: Default::default(),
             overview: crate::overview::Overview::new(),
@@ -270,6 +273,9 @@ impl State {
         self.finish_workspace_motion(Instant::now());
         self.finish_overview_animation(Instant::now());
         self.popup_anims.finish(Instant::now());
+        if self.schedules.dirty {
+            self.update_schedules();
+        }
         if self.pointer_focus_dirty {
             self.pointer_focus_dirty = false;
             // Windows dragged to another monitor join its workspace.
