@@ -31,6 +31,8 @@ use crate::{
 
 /// How long the app grid takes to fade in.
 const GRID_APPEAR: std::time::Duration = std::time::Duration::from_millis(220);
+/// Sliding from one grid page to the next.
+const PAGE_SLIDE: std::time::Duration = std::time::Duration::from_millis(320);
 
 /// Gap between the panel and the search pill.
 const TOP_MARGIN: i32 = 20;
@@ -85,6 +87,21 @@ pub struct GridLayout {
     pub per_page: usize,
     pub pages: usize,
     pub page: usize,
+    /// Top-left of the first cell, and each cell's size (every page alike).
+    pub origin: (f32, f32),
+    pub cell: (f32, f32),
+}
+
+impl GridLayout {
+    /// Where the `i`th app of any page sits, on that page.
+    pub fn slot(&self, i: usize) -> Rect {
+        Rect {
+            x: self.origin.0 + (i % self.columns) as f32 * self.cell.0,
+            y: self.origin.1 + (i / self.columns) as f32 * self.cell.1,
+            w: self.cell.0,
+            h: self.cell.1,
+        }
+    }
 }
 
 /// Everything the layout depends on.
@@ -187,6 +204,8 @@ pub fn layout(theme: &Theme, input: &LayoutInput) -> Layout {
             per_page,
             pages,
             page,
+            origin: (x0, y0),
+            cell: (theme.grid_cell_width, theme.grid_cell_height),
         });
         return out;
     }
@@ -247,6 +266,8 @@ pub struct Launcher {
     pub bottom_reserve: f32,
     /// When the grid was opened, for its fade-in.
     grid_opened: Option<std::time::Instant>,
+    /// A page flip under way: the (fractional) page it started from, and when.
+    page_slide: Option<(f32, std::time::Instant)>,
 }
 
 impl Launcher {
@@ -296,6 +317,7 @@ impl Launcher {
             scroll: 0.0,
             bottom_reserve: 0.0,
             grid_opened: None,
+            page_slide: None,
         };
         launcher.request_size(theme, 0);
         launcher.layer.commit();
@@ -332,6 +354,7 @@ impl Launcher {
         self.results.clear();
         self.grid_selected = 0;
         self.page = 0;
+        self.page_slide = None;
         self.request_size(theme, apps);
     }
 
@@ -467,7 +490,7 @@ impl Launcher {
             }
         };
         self.grid_selected = next.min(last);
-        self.page = self.grid_selected / grid.per_page.max(1);
+        self.flip_to(self.grid_selected / grid.per_page.max(1));
         Some(Outcome::Redraw)
     }
 
@@ -516,6 +539,29 @@ impl Launcher {
             .map_or(Outcome::Nothing, |id| Outcome::Launch(id.clone()))
     }
 
+    /// Show grid page `page`, sliding over from wherever it is now.
+    fn flip_to(&mut self, page: usize) {
+        if page != self.page {
+            self.page_slide = Some((self.page_shown(), std::time::Instant::now()));
+            self.page = page;
+        }
+    }
+
+    /// The page in view, fractional mid-slide.
+    fn page_shown(&self) -> f32 {
+        let Some((from, at)) = self.page_slide else {
+            return self.page as f32;
+        };
+        let duration = cnde_ui::anim::scaled(PAGE_SLIDE).as_secs_f32();
+        let t = if duration > 0.0 {
+            (at.elapsed().as_secs_f32() / duration).min(1.0)
+        } else {
+            1.0
+        };
+        let eased = 1.0 - (1.0 - t).powi(3);
+        from + (self.page as f32 - from) * eased
+    }
+
     /// The scroll wheel flips grid pages (one notch, one page). Returns
     /// true if the page changed.
     pub fn scroll(&mut self, notches: f64, theme: &Theme, apps: usize) -> bool {
@@ -529,7 +575,7 @@ impl Launcher {
             self.scroll -= step;
             let page = (self.page as isize + step as isize).clamp(0, grid.pages as isize - 1);
             if page as usize != self.page {
-                self.page = page as usize;
+                self.flip_to(page as usize);
                 self.grid_selected = self.page * grid.per_page;
                 changed = true;
             }
@@ -556,6 +602,13 @@ impl Launcher {
         self.request_size(theme, apps.len());
         let layout = self.layout(theme, apps.len());
         let scale = self.scale;
+        let page_shown = self.page_shown();
+        if page_shown == self.page as f32 {
+            self.page_slide = None;
+        } else {
+            // Draw again next frame.
+            self.dirty = true;
+        }
         let (w, h) = (
             (layout.width * scale as f32) as i32,
             (layout.height * scale as f32) as i32,
@@ -602,6 +655,7 @@ impl Launcher {
                 apps,
                 grid_selected: self.grid_selected,
                 appear,
+                page_shown,
             };
             paint(
                 &mut canvas,
@@ -647,6 +701,8 @@ struct PaintState<'a> {
     grid_selected: usize,
     /// The grid's fade-in, 0-1.
     appear: f32,
+    /// The grid page in view, fractional while sliding between pages.
+    page_shown: f32,
 }
 
 /// Draw everything. Separate from Wayland so tests can render it.
@@ -842,30 +898,45 @@ fn paint_grid(
     let card = grid.card;
     let text = Color::rgb(0xff, 0xff, 0xff);
     let shadow = Color::rgba(0, 0, 0, 0.55);
-    let first = grid.page * grid.per_page;
-    for (i, cell) in grid.cells.iter().enumerate() {
-        let Some(app) = state.apps.get(first + i) else {
-            break;
-        };
-        if first + i == state.grid_selected {
-            canvas.rounded_rect(
-                cell.x + 6.0,
-                cell.y + 4.0,
-                cell.w - 12.0,
-                cell.h - 8.0,
-                theme.search_row_radius,
-                Color::rgba(0xff, 0xff, 0xff, 0.16),
-            );
+    // Mid-slide the pages either side of the one in view show, a card
+    // width apart.
+    let shown = state.page_shown.clamp(0.0, (grid.pages - 1) as f32);
+    let near = [shown.floor() as usize, shown.ceil() as usize];
+    for page in near
+        .into_iter()
+        .take(if near[0] == near[1] { 1 } else { 2 })
+    {
+        let dx = (page as f32 - shown) * card.w;
+        let first = page * grid.per_page;
+        for i in 0..grid.per_page {
+            let Some(app) = state.apps.get(first + i) else {
+                break;
+            };
+            let mut cell = grid.slot(i);
+            cell.x += dx;
+            if cell.x + cell.w < card.x || cell.x > card.x + card.w {
+                continue;
+            }
+            if first + i == state.grid_selected {
+                canvas.rounded_rect(
+                    cell.x + 6.0,
+                    cell.y + 4.0,
+                    cell.w - 12.0,
+                    cell.h - 8.0,
+                    theme.search_row_radius,
+                    Color::rgba(0xff, 0xff, 0xff, 0.16),
+                );
+            }
+            let size = theme.grid_icon_size;
+            let icon_x = cell.x + (cell.w - size) / 2.0;
+            let icon_y = cell.y + 16.0;
+            app_icon(canvas, icons, theme, &app.icon, icon_x, icon_y, size);
+            let mut name = fit(fonts, &app.name, 13.0, Weight::Normal, scale, cell.w - 16.0);
+            let x = (cell.x + (cell.w - name.width) / 2.0).round();
+            let y = icon_y + size + 10.0;
+            canvas.text(fonts, &mut name, x + 1.0, y + 1.0, shadow);
+            canvas.text(fonts, &mut name, x, y, text);
         }
-        let size = theme.grid_icon_size;
-        let icon_x = cell.x + (cell.w - size) / 2.0;
-        let icon_y = cell.y + 16.0;
-        app_icon(canvas, icons, theme, &app.icon, icon_x, icon_y, size);
-        let mut name = fit(fonts, &app.name, 13.0, Weight::Normal, scale, cell.w - 16.0);
-        let x = (cell.x + (cell.w - name.width) / 2.0).round();
-        let y = icon_y + size + 10.0;
-        canvas.text(fonts, &mut name, x + 1.0, y + 1.0, shadow);
-        canvas.text(fonts, &mut name, x, y, text);
     }
     // Page dots.
     if grid.pages > 1 {
@@ -875,11 +946,9 @@ fn paint_grid(
         let mut x = card.x + (card.w - total) / 2.0;
         let y = card.y + card.h - theme.grid_padding / 2.0 - dot;
         for page in 0..grid.pages {
-            let color = if page == grid.page {
-                text
-            } else {
-                text.with_alpha(0.4)
-            };
+            // The bright dot follows the slide.
+            let near = (1.0 - (page as f32 - shown).abs()).max(0.0);
+            let color = text.with_alpha(0.4 + 0.6 * near);
             canvas.circle(x + dot / 2.0, y + dot / 2.0, dot / 2.0, color);
             x += dot + gap;
         }
@@ -1013,7 +1082,8 @@ mod tests {
     /// renders the search at 1x as a PNG, over a dark grey like the
     /// overview's dimmed wallpaper. `CNDE_SEARCH_QUERY` sets the query;
     /// `CNDE_SEARCH_GRID` shows the grid, `CNDE_SEARCH_APPEAR` (0-1) partway
-    /// through fading in.
+    /// through fading in, `CNDE_SEARCH_PAGE` (e.g. 0.4) partway between
+    /// grid pages.
     #[test]
     #[ignore]
     fn search_preview() {
@@ -1065,6 +1135,10 @@ mod tests {
                 apps: &all,
                 grid_selected: 0,
                 appear,
+                page_shown: std::env::var("CNDE_SEARCH_PAGE")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or(0.0),
             };
             paint(
                 &mut canvas,

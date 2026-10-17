@@ -208,12 +208,7 @@ pub fn layout(
     for (shown, &i) in order.iter().enumerate() {
         // Room between the apps button and the icons, and separators
         // before the first non-favorite and before the edit controls.
-        let next_to_apps = !items.is_empty()
-            && if launcher.first {
-                i == 0
-            } else {
-                i == apps
-            };
+        let next_to_apps = !items.is_empty() && if launcher.first { i == 0 } else { i == apps };
         if next_to_apps {
             along += launcher.gap;
         } else if (separated && i == favorites) || (shown > 0 && i == apps + 1) {
