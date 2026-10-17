@@ -49,6 +49,16 @@ use tracing::{error, info, warn};
 /// back to).
 const SERVICES: [&str; 2] = ["cnde-lock", "login"];
 
+/// The PAM service to check passwords with, if there is one. Without one
+/// PAM refuses every password, so locking would mean never unlocking.
+fn pam_service() -> Option<&'static str> {
+    SERVICES.into_iter().find(|s| {
+        ["/etc/pam.d", "/usr/lib/pam.d"]
+            .iter()
+            .any(|dir| std::path::Path::new(dir).join(s).exists())
+    })
+}
+
 struct Surface {
     lock_surface: SessionLockSurface,
     output: wl_output::WlOutput,
@@ -114,6 +124,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    if pam_service().is_none() && test_password().is_none() {
+        error!(
+            "not locking: no PAM service to check passwords with \
+             (install /etc/pam.d/cnde-lock from cnde's data/pam.d)"
+        );
+        std::process::exit(1);
+    }
 
     let config = cnde_config::default_path()
         .and_then(|path| std::fs::read_to_string(path).ok())
@@ -471,12 +489,17 @@ impl App {
     }
 }
 
+/// Testing aid, debug builds only: `CNDE_LOCK_TEST_PASSWORD`.
+fn test_password() -> Option<String> {
+    cfg!(debug_assertions)
+        .then(|| std::env::var("CNDE_LOCK_TEST_PASSWORD").ok())
+        .flatten()
+}
+
 fn check(user: &str, password: &[u8]) -> Result<(), String> {
     // Testing aid for debug builds only: a fixed password, never PAM (a
     // test typing wrong passwords could otherwise lock the account).
-    if cfg!(debug_assertions)
-        && let Ok(test) = std::env::var("CNDE_LOCK_TEST_PASSWORD")
-    {
+    if let Some(test) = test_password() {
         std::thread::sleep(Duration::from_millis(300));
         return if test.as_bytes() == password {
             Ok(())
@@ -484,10 +507,9 @@ fn check(user: &str, password: &[u8]) -> Result<(), String> {
             Err("Authentication failure".into())
         };
     }
-    let service = SERVICES
-        .into_iter()
-        .find(|s| std::path::Path::new("/etc/pam.d").join(s).exists())
-        .unwrap_or("login");
+    let Some(service) = pam_service() else {
+        return Err("No PAM service to check passwords with".into());
+    };
     pam::authenticate(service, user, password)
 }
 

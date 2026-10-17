@@ -1,2 +1,5 @@
-# cnde-lock checks your password the way the console login does.
-auth include login
+# cnde-lock: check the user's own password. pam_unix directly rather than
+# including another service, so it works whether or not the system has a
+# PAM-based login (Alpine's busybox login, for one, has none).
+auth     required  pam_unix.so
+account  required  pam_unix.so

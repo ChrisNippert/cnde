@@ -46,7 +46,8 @@ being absent:
 - Without `cnde-lock`, Super+L and the quick-settings Lock button do
   nothing unless `lock.command` names another ext-session-lock locker
   (swaylock, ...). `cnde-lock` checks passwords through PAM: its own
-  `/etc/pam.d/cnde-lock` if installed, else the `login` service.
+  `/etc/pam.d/cnde-lock` if installed, else the `login` service; with
+  neither, it refuses to lock rather than lock you out.
 - Without `cnde-icons`, symbolic icons come from Adwaita (and an
   uninstalled build finds them in the source tree's `icons/`).
 
