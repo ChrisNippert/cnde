@@ -966,6 +966,20 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                         cnde_config::WindowButtons::Close => "close",
                     }),
                 ),
+                Row::new(
+                    "appearance.corner_radius",
+                    "Corner radius",
+                    Control::Slider {
+                        min: 0.0,
+                        max: 32.0,
+                        step: 1.0,
+                        int: true,
+                        format: |v| format!("{v:.0} px"),
+                    },
+                    Value::Int(c.appearance.corner_radius as i64),
+                    Value::Int(d.appearance.corner_radius as i64),
+                )
+                .sub("Windows; the dock, top bar and menus round in step"),
             ],
         ),
         group(
@@ -1372,6 +1386,20 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
                     Value::Bool(dk.natural_workspace_keys),
                 )
                 .sub("Super+Alt+Left shows the next workspace, as the content moves left"),
+            ],
+        ),
+        group(
+            "Screen Lock",
+            vec![
+                Row::new(
+                    "lock.command",
+                    "Lock program",
+                    Control::text("cnde-lock"),
+                    s(&c.lock.command),
+                    s(&d.lock.command),
+                )
+                .sub("Run by Super+L and the Lock button, like swaylock or gtklock")
+                .advanced(),
             ],
         ),
     ]

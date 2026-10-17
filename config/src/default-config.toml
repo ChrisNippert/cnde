@@ -44,6 +44,7 @@
 # palette = "cnde"         # "cnde" (Dusk when dark, Blossom when light) or "adwaita" (GNOME's)
 # window_buttons = "all"   # "all" (minimize, maximize, close) or "close"
 # titlebars = "cnde"       # "cnde" draws title bars for apps that allow it; "app" leaves them to the app
+# corner_radius = 12       # window corners in px (0-48); the dock, bar and menus scale with it
 
 [wallpaper]
 # light = ""               # image path (PNG, JPEG, WebP), e.g. "~/Pictures/day.jpg"

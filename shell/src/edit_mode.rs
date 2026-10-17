@@ -309,7 +309,7 @@ impl App {
             let radius = if self.config.dock.extend {
                 0.0
             } else {
-                cnde_ipc::dock::RADIUS as f32
+                self.theme.dock_radius
             };
             canvas.clear(Color::rgba(0, 0, 0, 0.0));
             canvas.rounded_rect(0.0, 0.0, lw, lh, radius, accent.with_alpha(0.22));

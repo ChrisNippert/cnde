@@ -98,7 +98,6 @@ impl Entry {
 
 const ROW: f32 = 34.0;
 const PAD: f32 = 6.0;
-const RADIUS: f32 = 14.0;
 /// Room on the left for check marks, when any item has one.
 const CHECK_SPACE: f32 = 24.0;
 const MIN_WIDTH: f32 = 200.0;
@@ -366,7 +365,14 @@ fn paint(
 ) {
     let s = canvas.scale();
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
-    canvas.rounded_rect(0.0, 0.0, width, height, RADIUS, theme.search_background);
+    canvas.rounded_rect(
+        0.0,
+        0.0,
+        width,
+        height,
+        theme.menu_radius,
+        theme.search_background,
+    );
     let check_space = if has_checks(entries) {
         CHECK_SPACE
     } else {
@@ -407,7 +413,7 @@ fn paint(
                         y,
                         width - 2.0 * PAD,
                         h,
-                        RADIUS - PAD,
+                        (theme.menu_radius - PAD).max(0.0),
                         fill.with_alpha(fill.a * lit),
                     );
                 }

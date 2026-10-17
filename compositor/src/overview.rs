@@ -101,7 +101,38 @@ pub struct Overview {
     /// Every window, bottom to top, as stacked when it opened: the spread
     /// keeps this order, so a clicked window being raised doesn't move it.
     order: Vec<Window>,
+    /// A window thumbnail held down: a click when let go, unless it was
+    /// dragged, maybe onto another workspace's card.
+    grab: Option<WindowGrab>,
+    /// A dragged window let go: it glides from there (global) to its place.
+    landing: Option<(Animation, Window, Rectangle<f64, Logical>)>,
 }
+
+struct WindowGrab {
+    window: Window,
+    /// Its workspace's index when picked up.
+    workspace: usize,
+    /// Its real geometry, and its thumbnail when picked up (global).
+    real: Rectangle<f64, Logical>,
+    thumb: Rectangle<f64, Logical>,
+    press: Point<f64, Logical>,
+    pointer: Point<f64, Logical>,
+    /// Moved far enough from the press to be a drag, not a click.
+    dragging: bool,
+}
+
+impl WindowGrab {
+    /// The thumbnail where the pointer has carried it.
+    fn carried(&self) -> Rectangle<f64, Logical> {
+        Rectangle::new(
+            self.thumb.loc + (self.pointer - self.press),
+            self.thumb.size,
+        )
+    }
+}
+
+/// How far a held thumbnail moves before it's a drag (logical pixels).
+const DRAG_THRESHOLD: f64 = 6.0;
 
 /// A monitor's name, a window, and the card fraction it was spread to.
 type SpreadWas = (String, Window, Rectangle<f64, Logical>);
@@ -136,6 +167,8 @@ pub struct Scene {
     pub cards: Vec<Card>,
     /// The window under the pointer, once it's fully open (GNOME-style).
     pub close: Option<CloseButton>,
+    /// `appearance.roundness()`: the cards' corners scale with it.
+    pub roundness: f64,
 }
 
 pub struct CloseButton {
@@ -178,6 +211,8 @@ impl Overview {
             drag: None,
             relayout: None,
             order: Vec::new(),
+            grab: None,
+            landing: None,
         }
     }
 
@@ -210,6 +245,10 @@ impl Overview {
             || self.anim.as_ref().is_some_and(|a| !a.is_done(now))
             || self.grid_anim.as_ref().is_some_and(|a| !a.is_done(now))
             || self.relayout.as_ref().is_some_and(|(a, _)| !a.is_done(now))
+            || self
+                .landing
+                .as_ref()
+                .is_some_and(|(a, _, _)| !a.is_done(now))
     }
 
     pub fn app_grid(&self) -> bool {
@@ -362,6 +401,7 @@ impl State {
             return;
         }
         debug!(open, "overview");
+        self.overview.grab = None;
         // The overview zooms each window from (and back to) its position
         // local to its monitor, saved otherwise only when it opened or a
         // workspace slide began: one moved since would jump at the end.
@@ -447,6 +487,14 @@ impl State {
             .is_some_and(|(a, _)| a.is_done(now))
         {
             self.overview.relayout = None;
+        }
+        if self
+            .overview
+            .landing
+            .as_ref()
+            .is_some_and(|(a, _, _)| a.is_done(now))
+        {
+            self.overview.landing = None;
         }
     }
 
@@ -578,6 +626,7 @@ impl State {
                 windows,
                 cards: Vec::new(),
                 close: None,
+                roundness: 1.0,
             });
         }
 
@@ -619,6 +668,7 @@ impl State {
             windows: Vec::new(),
             cards: Vec::new(),
             close: None,
+            roundness: self.config.appearance.roundness() as f64,
         };
         for (index, workspace) in self.workspaces.list.iter().enumerate() {
             let slot = index as f64 - position + main as f64;
@@ -675,9 +725,32 @@ impl State {
                 workspace,
             });
         }
+        // A dragged window rides on top of everything, on whichever
+        // monitors it's over.
+        let dragged = self.overview.grab.as_ref().filter(|g| g.dragging);
+        if let Some(grab) = dragged {
+            scene.windows.retain(|p| p.window != grab.window);
+            let carried = grab.carried();
+            if carried.overlaps(geo) {
+                scene.windows.push(Placed {
+                    window: grab.window.clone(),
+                    rect: grab.real,
+                    zoom: Zoom::mapping(grab.real, carried),
+                    workspace: grab.workspace,
+                });
+            }
+        }
+        if let Some((anim, window, from)) = &self.overview.landing {
+            let t = anim.value_at(now);
+            for placed in scene.windows.iter_mut().filter(|p| p.window == *window) {
+                let to = placed.zoom.apply(placed.rect);
+                placed.zoom = Zoom::mapping(placed.rect, lerp_rect(*from, to, t));
+            }
+        }
         let settled = progress >= 1.0
             && grid <= 0.0
             && self.overview.drag.is_none()
+            && dragged.is_none()
             && self.workspaces.motion.is_none();
         if settled && let Some(pointer) = self.seat.get_pointer() {
             scene.close = close_button(&scene.windows, pointer.current_location());
@@ -694,18 +767,115 @@ impl State {
 
     /// What's under `pos` in the open overview.
     fn overview_hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
+        if let Some(placed) = self.overview_thumb_at(pos) {
+            return Some(Hit::Window(placed.window, placed.workspace));
+        }
+        self.overview_card_at(pos)
+            .map(|card| Hit::Workspace(card.index))
+    }
+
+    /// The window thumbnail under `pos`.
+    fn overview_thumb_at(&self, pos: Point<f64, Logical>) -> Option<Placed> {
         let output = self.space.output_under(pos).next()?.clone();
         let scene = self.scene(&output, Instant::now())?;
-        for placed in scene.windows.iter().rev() {
-            if placed.zoom.apply(placed.rect).contains(pos) {
-                return Some(Hit::Window(placed.window.clone(), placed.workspace));
-            }
-        }
         scene
-            .cards
-            .iter()
-            .find(|card| card.rect.contains(pos))
-            .map(|card| Hit::Workspace(card.index))
+            .windows
+            .into_iter()
+            .rev()
+            .find(|placed| placed.zoom.apply(placed.rect).contains(pos))
+    }
+
+    /// The workspace card under `pos`.
+    fn overview_card_at(&self, pos: Point<f64, Logical>) -> Option<Card> {
+        let output = self.space.output_under(pos).next()?.clone();
+        let scene = self.scene(&output, Instant::now())?;
+        scene.cards.into_iter().find(|card| card.rect.contains(pos))
+    }
+
+    /// Left button down in the overview: a window's thumbnail is picked up
+    /// (a click if let go where it was); anything else is clicked now.
+    pub fn overview_press(&mut self, pos: Point<f64, Logical>) {
+        let now = Instant::now();
+        let still = self.overview.progress(now) >= 1.0
+            && self.overview.grid_progress(now) <= 0.0
+            && self.workspaces.motion.is_none();
+        if still
+            && self.overview_close_hit(pos).is_none()
+            && let Some(placed) = self.overview_thumb_at(pos)
+        {
+            self.overview.grab = Some(WindowGrab {
+                thumb: placed.zoom.apply(placed.rect),
+                window: placed.window,
+                workspace: placed.workspace,
+                real: placed.rect,
+                press: pos,
+                pointer: pos,
+                dragging: false,
+            });
+            return;
+        }
+        self.overview_click(pos);
+    }
+
+    /// The pointer moved with a thumbnail held: once far enough, drag it.
+    pub fn overview_motion(&mut self, pos: Point<f64, Logical>) {
+        if let Some(grab) = &mut self.overview.grab {
+            grab.pointer = pos;
+            let (dx, dy) = (pos.x - grab.press.x, pos.y - grab.press.y);
+            grab.dragging |= dx.hypot(dy) > DRAG_THRESHOLD;
+        }
+    }
+
+    /// Whether a thumbnail is held, so the button's release is ours.
+    pub fn overview_holding(&self) -> bool {
+        self.overview.grab.is_some()
+    }
+
+    /// Left button up with a thumbnail held: a click, or a drop. Dropped on
+    /// another workspace's card (on any monitor), the window moves there.
+    pub fn overview_release(&mut self, pos: Point<f64, Logical>) {
+        let Some(mut grab) = self.overview.grab.take() else {
+            return;
+        };
+        if !grab.dragging {
+            self.overview_click(grab.press);
+            return;
+        }
+        grab.pointer = pos;
+        let dropped = grab.carried();
+        let output = self.space.output_under(pos).next().cloned();
+        if let Some(card) = self.overview_card_at(pos)
+            && card.index != grab.workspace
+            && !self.workspaces.is_moving()
+            && let Some(geo) = output.and_then(|o| self.space.output_geometry(&o))
+        {
+            // Where on the card it was let go, on that monitor's scale.
+            let local = Point::from((
+                (dropped.loc.x - card.rect.loc.x) / card.rect.size.w * geo.size.w as f64,
+                (dropped.loc.y - card.rect.loc.y) / card.rect.size.h * geo.size.h as f64,
+            ))
+            .to_i32_round();
+            self.move_to_workspace(&grab.window, card.index, local);
+        }
+        let anim = Animation::new(0.0, 1.0, presets::OVERVIEW);
+        self.overview.landing = Some((anim, grab.window, dropped));
+        self.queue_redraw();
+    }
+
+    /// From the overview: put `window` on workspace `dest`, at `local` on
+    /// the monitor showing it. The windows left behind slide together.
+    fn move_to_workspace(&mut self, window: &Window, dest: usize, local: Point<i32, Logical>) {
+        self.store_local_positions();
+        self.overview_before_relayout();
+        if let Some((_, old)) = &mut self.overview.relayout {
+            old.retain(|(_, w, _)| w != window);
+        }
+        self.workspaces.remove_window(window);
+        self.workspaces.list[dest].windows.push(window.clone());
+        crate::window::with_state(window, |s| s.local = local);
+        self.normalize_workspaces();
+        self.rebuild_space();
+        debug!(dest, "overview: window moved to another workspace");
     }
 
     /// A click in the overview: go to the window or workspace under it.
@@ -832,6 +1002,7 @@ pub fn backdrop(
     };
     let scale = output.current_scale().fractional_scale();
     let progress = scene.progress as f32;
+    let roundness = scene.roundness;
     let mut elements = Vec::new();
 
     if overview.tile_shader.is_none() {
@@ -857,7 +1028,7 @@ pub fn backdrop(
                         element: crate::shaders::rounded_rect(
                             shader.clone(),
                             area,
-                            TILE_RADIUS,
+                            TILE_RADIUS * roundness,
                             TILE_COLOR,
                             TILE_BORDER,
                             scale,
@@ -873,7 +1044,7 @@ pub fn backdrop(
                         element: crate::shaders::rounded_rect(
                             shader.clone(),
                             area,
-                            TILE_RADIUS,
+                            TILE_RADIUS * roundness,
                             TILE_COLOR,
                             TILE_BORDER,
                             scale,

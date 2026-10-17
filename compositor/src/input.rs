@@ -358,6 +358,7 @@ impl State {
         );
         pointer.frame(self);
         if !self.lock.is_locked() {
+            self.overview_motion(location);
             self.bar_motion(location);
             self.check_hot_corner(location);
         }
@@ -391,6 +392,10 @@ impl State {
         }
         debug!(button, ?button_state, location = ?pointer.current_location(), "pointer button");
 
+        if button_state == ButtonState::Released && button == BTN_LEFT && self.overview_holding() {
+            self.overview_release(pointer.current_location());
+            return;
+        }
         if button_state == ButtonState::Released
             && !pointer.is_grabbed()
             && self.bar_release(pointer.current_location())
@@ -425,7 +430,7 @@ impl State {
             }
             if self.overview.is_open() {
                 if button == BTN_LEFT {
-                    self.overview_click(location);
+                    self.overview_press(location);
                 }
                 return;
             }

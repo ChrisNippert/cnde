@@ -48,8 +48,6 @@ use crate::{
 
 /// Logical pixels, like a GNOME title bar.
 pub const HEIGHT: i32 = 38;
-/// Rounded top corners of a floating window's bar.
-const RADIUS: f32 = 12.0;
 /// The round buttons at the right end.
 const BUTTON: f32 = 24.0;
 const BUTTON_GAP: f32 = 8.0;
@@ -353,9 +351,10 @@ fn paint(canvas: &mut Canvas<'_>, fonts: &mut Fonts, icons: &mut Icons, key: &Ke
     };
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
     if key.rounded {
-        canvas.rounded_rect(0.0, 0.0, width, height, RADIUS, background);
+        let radius = theme.window_radius.min(height);
+        canvas.rounded_rect(0.0, 0.0, width, height, radius, background);
         // Square at the bottom, where the window's contents start.
-        canvas.rounded_rect(0.0, height - RADIUS, width, RADIUS, 0.0, background);
+        canvas.rounded_rect(0.0, height - radius, width, radius, 0.0, background);
     } else {
         canvas.rounded_rect(0.0, 0.0, width, height, 0.0, background);
     }

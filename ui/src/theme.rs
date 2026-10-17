@@ -204,6 +204,12 @@ pub struct Theme {
     pub focus_ring: Color,
     pub popover_background: Color,
     pub popover_radius: f32,
+    /// Window title bars' top corners.
+    pub window_radius: f32,
+    /// Right-click menus.
+    pub menu_radius: f32,
+    /// A dock that doesn't stretch across its edge.
+    pub dock_radius: f32,
     pub error: Color,
 
     // Text
@@ -310,6 +316,10 @@ impl Theme {
             focus_ring: Color::rgba(0x35, 0x84, 0xe4, 0.6),
             popover_background: Color::rgb(0x38, 0x38, 0x3c),
             popover_radius: 12.0,
+            window_radius: cnde_config::Appearance::CORNER_RADIUS as f32,
+            menu_radius: 14.0,
+            // cnde_ipc::dock::RADIUS: the compositor frosts behind it.
+            dock_radius: 24.0,
             error: Color::rgb(0xff, 0x7b, 0x63),
 
             font_size: 14.0,
@@ -376,6 +386,30 @@ impl Theme {
 
     /// The theme the config's appearance asks for.
     pub fn for_appearance(appearance: &cnde_config::Appearance) -> Self {
+        Self::colours_for(appearance).rounded(appearance.roundness())
+    }
+
+    /// Every corner radius times `k` (1: as designed, 0: square).
+    pub fn rounded(mut self, k: f32) -> Self {
+        for r in [
+            &mut self.panel_radius,
+            &mut self.qs_radius,
+            &mut self.qs_tile_radius,
+            &mut self.search_results_radius,
+            &mut self.search_row_radius,
+            &mut self.card_radius,
+            &mut self.button_radius,
+            &mut self.popover_radius,
+            &mut self.window_radius,
+            &mut self.menu_radius,
+            &mut self.dock_radius,
+        ] {
+            *r *= k;
+        }
+        self
+    }
+
+    fn colours_for(appearance: &cnde_config::Appearance) -> Self {
         let dark = appearance.color_scheme == cnde_config::ColorScheme::Dark;
         match (appearance.palette, dark) {
             (cnde_config::Palette::Adwaita, dark) => Self::for_dark(dark),

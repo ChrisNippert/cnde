@@ -435,12 +435,8 @@ impl Dock {
     }
 
     /// Corner radius of the background: square when it meets both ends.
-    fn radius(&self) -> f32 {
-        if self.extend {
-            0.0
-        } else {
-            cnde_ipc::dock::RADIUS as f32
-        }
+    fn radius(&self, theme: &Theme) -> f32 {
+        if self.extend { 0.0 } else { theme.dock_radius }
     }
 
     /// Recompute the size after starting or finishing editing.
@@ -674,7 +670,7 @@ impl Dock {
                 self.vertical(),
                 self.edit.as_ref(),
                 Look {
-                    radius: self.radius(),
+                    radius: self.radius(theme),
                     frosted: self.frosted,
                     solid,
                 },

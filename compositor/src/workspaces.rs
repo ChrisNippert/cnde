@@ -308,7 +308,7 @@ impl State {
         }
     }
 
-    fn normalize_workspaces(&mut self) {
+    pub(crate) fn normalize_workspaces(&mut self) {
         let (outputs, main) = self.strip_outputs();
         let right_of_main = outputs.len().saturating_sub(main + 1);
         self.workspaces.normalize(main, right_of_main);

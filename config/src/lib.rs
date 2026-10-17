@@ -174,6 +174,19 @@ pub struct Appearance {
     /// is what matters, lightness is chosen per style) and the accent.
     pub base_color: String,
     pub accent_color: String,
+    /// Window corners, logical px. Everything else rounded (dock, bar,
+    /// menus, cards) scales with it: 0 squares them all.
+    pub corner_radius: u32,
+}
+
+impl Appearance {
+    /// The default corner radius.
+    pub const CORNER_RADIUS: u32 = 12;
+
+    /// How much rounder than the default: multiply a built-in radius by it.
+    pub fn roundness(&self) -> f32 {
+        self.corner_radius as f32 / Self::CORNER_RADIUS as f32
+    }
 }
 
 impl Default for Appearance {
@@ -186,6 +199,7 @@ impl Default for Appearance {
             icon_theme: "cnde".into(),
             base_color: "#2b1a40".into(),
             accent_color: "#f4a7c6".into(),
+            corner_radius: Self::CORNER_RADIUS,
         }
     }
 }
@@ -585,6 +599,12 @@ impl Config {
         in_range("input.mouse.speed", self.input.mouse.speed, -1.0, 1.0)?;
         in_range("input.touchpad.speed", self.input.touchpad.speed, -1.0, 1.0)?;
         in_range("animations.speed", self.animations.speed, 0.0, 10.0)?;
+        in_range(
+            "appearance.corner_radius",
+            self.appearance.corner_radius as f64,
+            0.0,
+            48.0,
+        )?;
         in_range(
             "input.touchpad.workspace_swipe_distance",
             self.input.touchpad.workspace_swipe_distance,
