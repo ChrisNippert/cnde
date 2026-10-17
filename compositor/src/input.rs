@@ -162,6 +162,12 @@ impl State {
                 let Some(sym) = handle.raw_latin_sym_or_raw_current_sym() else {
                     return FilterResult::Forward;
                 };
+                // Escape always ends a screenshot, even when the shell's
+                // tool never showed up to take the key.
+                if sym.raw() == keysyms::KEY_Escape && state.screenshot.active {
+                    state.suppressed_keys.push(keycode);
+                    return FilterResult::Intercept(Some(Action::CancelScreenshot));
+                }
                 // Escape leaves the overview, unless the shell's search box
                 // has the keyboard (it decides: clear the text, then close).
                 if sym.raw() == keysyms::KEY_Escape
@@ -274,6 +280,7 @@ impl State {
                 }
             }
             Action::CloseOverview => self.set_overview(false),
+            Action::CancelScreenshot => self.cancel_screenshot(),
             Action::AppGrid => {
                 self.set_overview(true);
                 self.ipc.broadcast(&cnde_ipc::Event::ToggleAppGrid);

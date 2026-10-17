@@ -27,6 +27,8 @@ pub enum Action {
     /// Tapping the mod key alone: the overview, or a configured launcher.
     Launcher,
     CloseOverview,
+    /// Escape while the screen is frozen for a screenshot.
+    CancelScreenshot,
     /// Super+A: the overview's app grid.
     AppGrid,
     /// Super+Shift+S or Print Screen.

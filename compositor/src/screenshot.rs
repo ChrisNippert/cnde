@@ -19,6 +19,7 @@ use smithay::{
         allocator::Fourcc,
         renderer::{
             Bind, ExportMem, Offscreen, TextureMapping,
+            utils::with_renderer_surface_state,
             damage::OutputDamageTracker,
             element::{
                 AsRenderElements, RenderElement,
@@ -29,7 +30,11 @@ use smithay::{
         },
     },
     output::Output,
-    reexports::calloop::channel,
+    desktop::layer_map_for_output,
+    reexports::calloop::{
+        RegistrationToken, channel,
+        timer::{TimeoutAction, Timer},
+    },
     utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
     wayland::selection::data_device::set_data_device_selection,
 };
@@ -55,7 +60,13 @@ pub struct Screenshot {
     /// The last screenshot, offered on the clipboard as image/png.
     pub clipboard: Option<Arc<Vec<u8>>>,
     saved: Option<channel::Sender<Saved>>,
+    /// Ends the freeze if the tool hasn't appeared in time (see `WATCHDOG`).
+    watchdog: Option<RegistrationToken>,
 }
+
+/// How long the shell has to show its tool before the freeze is dropped, so
+/// a stuck shell can't leave the screen frozen for good.
+const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(2);
 
 struct Saved {
     path: Option<PathBuf>,
@@ -133,6 +144,7 @@ impl State {
                 self.screenshot.freezing = vec![output.name()];
                 self.screenshot.ready = false;
                 self.pending_quick_shot = Some(output.name());
+                self.start_screenshot_watchdog();
                 self.queue_redraw();
             }
             return;
@@ -142,8 +154,39 @@ impl State {
         self.screenshot.ready = false;
         self.screenshot.freezing = self.space.outputs().map(|o| o.name()).collect();
         self.screenshot.frozen.clear();
+        self.start_screenshot_watchdog();
         self.queue_pointer_refresh();
         self.queue_redraw();
+    }
+
+    fn start_screenshot_watchdog(&mut self) {
+        let timer = self
+            .loop_handle
+            .insert_source(Timer::from_duration(WATCHDOG), |_, _, state| {
+                state.screenshot.watchdog = None;
+                if state.screenshot.active && !state.screenshot_tool_shown() {
+                    warn!("the screenshot tool didn't appear; unfreezing");
+                    state.cancel_screenshot();
+                }
+                TimeoutAction::Drop
+            });
+        match timer {
+            Ok(token) => self.screenshot.watchdog = Some(token),
+            Err(err) => warn!(?err, "can't start the screenshot watchdog"),
+        }
+    }
+
+    /// The shell's tool has drawn on some monitor.
+    fn screenshot_tool_shown(&self) -> bool {
+        self.space.outputs().any(|output| {
+            layer_map_for_output(output).layers().any(|layer| {
+                layer.namespace() == "cnde-screenshot"
+                    && with_renderer_surface_state(layer.wl_surface(), |s| {
+                        s.buffer().is_some()
+                    })
+                    .unwrap_or(false)
+            })
+        })
     }
 
     /// Every loop iteration: once everything is frozen, open the tool (or
@@ -181,7 +224,11 @@ impl State {
     }
 
     fn end_screenshot(&mut self) {
+        if let Some(token) = self.screenshot.watchdog.take() {
+            self.loop_handle.remove(token);
+        }
         self.screenshot.active = false;
+        self.pending_quick_shot = None;
         self.screenshot.freezing.clear();
         self.screenshot.frozen.clear();
         self.queue_pointer_refresh();
