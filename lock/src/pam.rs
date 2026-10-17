@@ -36,7 +36,9 @@ struct PamConv {
     appdata_ptr: *mut c_void,
 }
 
-#[link(name = "pam")]
+// The runtime library by its full name, so building needs no PAM
+// development package (Alpine keeps libpam.so in linux-pam-dev).
+#[link(name = "libpam.so.0", kind = "dylib", modifiers = "+verbatim")]
 unsafe extern "C" {
     fn pam_start(
         service: *const c_char,
