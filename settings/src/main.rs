@@ -1099,8 +1099,12 @@ impl WindowHandler for App {
             self.size = (w.get().max(MIN_SIZE.0), h.get().max(MIN_SIZE.1));
         }
         self.maximized = configure.is_maximized();
-        self.ui.rounded =
-            !(configure.is_maximized() || configure.is_fullscreen() || configure.is_tiled());
+        // is_tiled() wants all four edges; snapped to a side is three.
+        self.ui.rounded = !(configure.is_maximized()
+            || configure.is_fullscreen()
+            || configure
+                .state
+                .intersects(smithay_client_toolkit::reexports::csd_frame::WindowState::TILED));
         if !self.configured {
             self.configured = true;
             self.choose_shm_format();
