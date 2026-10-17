@@ -337,7 +337,7 @@ fn layer_elements(
 }
 
 /// One live window, top element first: the crossfading snapshot (if a
-/// resize is running) above the window's own surfaces.
+/// resize or a refit is running) above the window's own surfaces.
 #[allow(clippy::too_many_arguments)]
 fn window_elements(
     renderer: &mut GlesRenderer,
@@ -360,10 +360,9 @@ fn window_elements(
         let rect = Rectangle::new(zoomed.loc - output_loc, zoomed.size);
         let mut elements = Vec::new();
 
-        if let (Some(alpha), Some(snapshot)) = (
-            frame.snapshot_alpha,
-            state.resize_anim.as_ref().and_then(|r| r.snapshot.as_ref()),
-        ) {
+        if let (Some(alpha), Some(snapshot)) =
+            (frame.snapshot_alpha, effects::fading_snapshot(state))
+        {
             elements.push(snapshot_element(snapshot, rect, scale, alpha * frame.alpha));
         }
 

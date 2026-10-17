@@ -1,6 +1,7 @@
 //! System status for the panel: battery (UPower), network (NetworkManager or
 //! iwd, ARCHITECTURE.md §5.2), volume (PipeWire via `pactl`), power mode
-//! (power-profiles-daemon) and screen brightness (the kernel's backlight).
+//! (power-profiles-daemon), Bluetooth (BlueZ) and screen brightness (the
+//! kernel's backlight).
 //!
 //! Each source runs on its own thread, blocked on change notifications (no
 //! polling), and sends `Update`s to the main loop only when its value
@@ -33,6 +34,8 @@ pub enum Update {
     WifiEnabled(Option<bool>),
     Volume(Option<Volume>),
     PowerProfiles(Option<PowerProfiles>),
+    /// `None` without BlueZ or an adapter.
+    Bluetooth(Option<Bluetooth>),
 }
 
 /// power-profiles-daemon's modes, in the order they're shown.
@@ -94,11 +97,36 @@ pub struct Volume {
     pub muted: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Bluetooth {
+    /// The adapter is on.
+    pub powered: bool,
+    /// Paired devices: connected first, then by name.
+    pub devices: Vec<BluetoothDevice>,
+}
+
+impl Bluetooth {
+    /// The device to name on the toggle.
+    pub fn connected(&self) -> Option<&BluetoothDevice> {
+        self.devices.iter().find(|d| d.connected)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BluetoothDevice {
+    pub address: String,
+    pub name: String,
+    /// BlueZ's freedesktop icon name ("audio-headphones"), or empty.
+    pub icon: String,
+    pub connected: bool,
+}
+
 pub fn start(tx: Sender<Update>) {
     spawn("status-battery", tx.clone(), battery);
     spawn("status-network", tx.clone(), network);
     spawn("status-volume", tx.clone(), volume);
-    spawn("status-power-profiles", tx, power_profiles);
+    spawn("status-power-profiles", tx.clone(), power_profiles);
+    spawn("status-bluetooth", tx, bluetooth);
 }
 
 fn spawn(name: &str, tx: Sender<Update>, run: fn(&Sender<Update>) -> zbus::Result<()>) {
@@ -406,6 +434,118 @@ fn power_profiles(tx: &Sender<Update>) -> zbus::Result<()> {
     Ok(())
 }
 
+// --- Bluetooth: BlueZ's first adapter and its paired devices.
+
+/// BlueZ's objects: path -> interface -> properties.
+pub type BluezObjects = HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>>;
+
+fn bluetooth(tx: &Sender<Update>) -> zbus::Result<()> {
+    let conn = Connection::system()?;
+    let dbus = DBusProxy::new(&conn)?;
+    // Everything BlueZ announces, and BlueZ starting or stopping.
+    dbus.add_match_rule(
+        zbus::MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .sender("org.bluez")?
+            .build(),
+    )?;
+    dbus.add_match_rule(
+        zbus::MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .interface("org.freedesktop.DBus")?
+            .member("NameOwnerChanged")?
+            .add_arg("org.bluez")?
+            .build(),
+    )?;
+    let messages = zbus::blocking::MessageIterator::from(&conn);
+    let read = || -> Option<Bluetooth> {
+        let reply = conn
+            .call_method(
+                Some("org.bluez"),
+                "/",
+                Some("org.freedesktop.DBus.ObjectManager"),
+                "GetManagedObjects",
+                &(),
+            )
+            .ok()?;
+        read_bluez(&reply.body().deserialize().ok()?)
+    };
+    let mut out = Dedup::new(tx);
+    out.send(Update::Bluetooth(read()));
+    for message in messages {
+        let Ok(message) = message else {
+            continue;
+        };
+        if message.message_type() == zbus::message::Type::Signal && !only_signal_strength(&message)
+        {
+            out.send(Update::Bluetooth(read()));
+        }
+    }
+    Ok(())
+}
+
+/// A device's signal strength or advertising changing (many times a second
+/// while something's looking for devices): nothing we show.
+fn only_signal_strength(message: &zbus::Message) -> bool {
+    if message.header().member().map(|m| m.as_str()) != Some("PropertiesChanged") {
+        return false;
+    }
+    let Ok((interface, changed, invalidated)) =
+        message
+            .body()
+            .deserialize::<(String, HashMap<String, OwnedValue>, Vec<String>)>()
+    else {
+        return false;
+    };
+    const NOISE: [&str; 5] = [
+        "RSSI",
+        "TxPower",
+        "ManufacturerData",
+        "ServiceData",
+        "AdvertisingData",
+    ];
+    interface == "org.bluez.Device1"
+        && changed.keys().all(|k| NOISE.contains(&k.as_str()))
+        && invalidated.iter().all(|k| NOISE.contains(&k.as_str()))
+}
+
+/// The first adapter (hci0 before hci1) and its paired devices.
+pub fn read_bluez(objects: &BluezObjects) -> Option<Bluetooth> {
+    let (adapter, props) = objects
+        .iter()
+        .filter_map(|(path, ifaces)| Some((path, ifaces.get("org.bluez.Adapter1")?)))
+        .min_by(|a, b| a.0.as_str().cmp(b.0.as_str()))?;
+    let mut devices: Vec<BluetoothDevice> = objects
+        .values()
+        .filter_map(|ifaces| {
+            let device = ifaces.get("org.bluez.Device1")?;
+            let paired = value::<bool>(device, "Paired").unwrap_or(false)
+                || value::<bool>(device, "Bonded").unwrap_or(false);
+            if !paired || value::<OwnedObjectPath>(device, "Adapter").as_ref() != Some(adapter) {
+                return None;
+            }
+            let address: String = value(device, "Address")?;
+            Some(BluetoothDevice {
+                name: value::<String>(device, "Alias")
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| address.clone()),
+                address,
+                icon: value(device, "Icon").unwrap_or_default(),
+                connected: value(device, "Connected").unwrap_or(false),
+            })
+        })
+        .collect();
+    devices.sort_by(|a, b| {
+        b.connected
+            .cmp(&a.connected)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Some(Bluetooth {
+        powered: value(props, "Powered").unwrap_or(false),
+        devices,
+    })
+}
+
 // --- Brightness: /sys/class/backlight. Read on demand (when quick settings
 // opens, and after we change it); there's no change notification to wait on.
 
@@ -480,6 +620,52 @@ fn read_volume() -> Option<Volume> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bluez_paired_devices() {
+        use zbus::zvariant::{ObjectPath, Value};
+        let v = |value: Value<'_>| OwnedValue::try_from(value).unwrap();
+        let path = |p: &str| OwnedObjectPath::try_from(p).unwrap();
+        let mut objects: BluezObjects = HashMap::new();
+        assert_eq!(read_bluez(&objects), None);
+        objects.insert(
+            path("/org/bluez/hci0"),
+            HashMap::from([(
+                "org.bluez.Adapter1".to_string(),
+                HashMap::from([("Powered".to_string(), v(Value::from(true)))]),
+            )]),
+        );
+        for (address, alias, paired, connected) in [
+            ("00:00:00:00:00:01", "Mouse", true, false),
+            ("00:00:00:00:00:02", "Buds", true, true),
+            ("00:00:00:00:00:03", "Stranger", false, false),
+        ] {
+            let props = HashMap::from([
+                ("Address".to_string(), v(Value::from(address))),
+                ("Alias".to_string(), v(Value::from(alias))),
+                ("Paired".to_string(), v(Value::from(paired))),
+                ("Connected".to_string(), v(Value::from(connected))),
+                (
+                    "Adapter".to_string(),
+                    v(Value::from(
+                        ObjectPath::try_from("/org/bluez/hci0").unwrap(),
+                    )),
+                ),
+            ]);
+            objects.insert(
+                path(&format!(
+                    "/org/bluez/hci0/dev_{}",
+                    address.replace(':', "_")
+                )),
+                HashMap::from([("org.bluez.Device1".to_string(), props)]),
+            );
+        }
+        let bt = read_bluez(&objects).unwrap();
+        assert!(bt.powered);
+        let names: Vec<&str> = bt.devices.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["Buds", "Mouse"]);
+        assert_eq!(bt.connected().map(|d| d.name.as_str()), Some("Buds"));
+    }
 
     #[test]
     fn signal_strength_mapping() {

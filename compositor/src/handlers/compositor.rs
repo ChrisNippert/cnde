@@ -113,8 +113,8 @@ impl CompositorHandler for State {
                         resize.on_commit(acked);
                     }
                     if s.pending_size
-                        .as_ref()
-                        .is_some_and(|p| p.is_resolved(acked, size))
+                        .as_mut()
+                        .is_some_and(|p| p.on_commit(acked, size))
                     {
                         s.pending_size = None;
                     }

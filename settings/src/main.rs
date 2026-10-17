@@ -5,6 +5,7 @@
 //! edits. Usage: `cnde-settings [page]`, e.g. `cnde-settings displays`.
 
 mod arrange;
+mod bluetooth;
 mod pages;
 mod view;
 mod wallpapers;
@@ -65,7 +66,7 @@ use smithay_client_toolkit::{
 use tracing::{info, warn};
 
 use crate::{
-    pages::{Control, Display, JoinField, Key, Page, Value, WifiKey},
+    pages::{BluetoothKey, Control, Display, JoinField, Key, Page, Value, WifiKey},
     view::{Edit, Painted, Res, Target, Ui},
 };
 
@@ -125,6 +126,8 @@ struct App {
     error_timer: Option<RegistrationToken>,
     /// Commands for the Wi-Fi worker, started when its page first opens.
     wifi: Option<std::sync::mpsc::Sender<wifi::Command>>,
+    /// Commands for the Bluetooth worker, started when its page first opens.
+    bluetooth: Option<std::sync::mpsc::Sender<bluetooth::Command>>,
     /// Where a picture chosen through "Add" arrives.
     picked: Option<channel::Sender<Result<Option<wallpapers::Thumb>, String>>>,
 }
@@ -255,6 +258,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wifi: None,
             wifi_join: None,
             wifi_details: None,
+            bluetooth: None,
             arranged: None,
             arranging: None,
         },
@@ -285,12 +289,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_header_click: None,
         error_timer: None,
         wifi: None,
+        bluetooth: None,
         picked: Some(picked_tx),
     };
     WaylandSource::new(conn.clone(), queue).insert(event_loop.handle())?;
     watch_config(&mut app);
     if app.ui.page == Page::Wifi {
         app.open_wifi();
+    }
+    if app.ui.page == Page::Bluetooth {
+        app.open_bluetooth();
     }
 
     let mut lost = None;
@@ -345,6 +353,53 @@ impl App {
         if inserted.is_ok() {
             self.wifi = Some(wifi::start(tx));
         }
+    }
+
+    /// The Bluetooth page is showing: start the worker (once), and look for
+    /// nearby devices until it's left.
+    fn open_bluetooth(&mut self) {
+        if self.bluetooth.is_none() {
+            let (tx, rx) = channel::channel::<bluetooth::State>();
+            let inserted = self
+                .loop_handle
+                .insert_source(rx, |event, _, app: &mut App| {
+                    if let channel::Event::Msg(state) = event {
+                        app.ui.bluetooth = Some(state);
+                        if app.ui.page == Page::Bluetooth {
+                            app.redraw();
+                        }
+                    }
+                });
+            if inserted.is_ok() {
+                self.bluetooth = Some(bluetooth::start(tx));
+            }
+        }
+        self.bluetooth_command(bluetooth::Command::Discover(true));
+    }
+
+    fn bluetooth_command(&mut self, command: bluetooth::Command) {
+        if let Some(tx) = &self.bluetooth {
+            let _ = tx.send(command);
+        }
+    }
+
+    /// The Bluetooth switch and device buttons go to the worker.
+    fn write_bluetooth(&mut self, key: &BluetoothKey, value: &Value) {
+        let command = match (key, value) {
+            (BluetoothKey::Powered, Value::Bool(on)) => bluetooth::Command::SetPowered(*on),
+            (BluetoothKey::Device(address), value) => {
+                let address = address.clone();
+                match value.as_str() {
+                    "pair" => bluetooth::Command::Pair(address),
+                    "connect" => bluetooth::Command::Connect(address),
+                    "disconnect" => bluetooth::Command::Disconnect(address),
+                    "forget" => bluetooth::Command::Forget(address),
+                    _ => return,
+                }
+            }
+            _ => return,
+        };
+        self.bluetooth_command(command);
     }
 
     /// "Add" in the wallpaper grid: choose a picture.
@@ -553,6 +608,7 @@ impl App {
         for (key, value) in changes {
             match key {
                 Key::Wifi(wifi) => self.write_wifi(wifi, value),
+                Key::Bluetooth(key) => self.write_bluetooth(key, value),
                 _ => config_changes.push((key.clone(), value.clone())),
             }
         }
@@ -728,6 +784,10 @@ impl App {
         match target {
             Target::Page(page) => {
                 if self.ui.page != page {
+                    // Stop looking for devices once their page is left.
+                    if self.ui.page == Page::Bluetooth {
+                        self.bluetooth_command(bluetooth::Command::Discover(false));
+                    }
                     self.ui.page = page;
                     self.ui.wifi_details = None;
                     self.res
@@ -736,6 +796,9 @@ impl App {
                     self.ui.scroll = 0.0;
                     if page == Page::Wifi {
                         self.open_wifi();
+                    }
+                    if page == Page::Bluetooth {
+                        self.open_bluetooth();
                     }
                 }
             }
