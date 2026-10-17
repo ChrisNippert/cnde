@@ -157,6 +157,9 @@ impl State {
         if old.is_none_or(|old| old.outputs != self.config.outputs) {
             self.apply_output_layout();
         }
+        if let Some(old) = old.filter(|old| old.tiling != self.config.tiling) {
+            self.tiling_config_changed(&old.tiling);
+        }
         // Nested in another desktop, gsettings belongs to that desktop.
         let nested = matches!(self.backend, crate::backend::Backend::Winit(_));
         if !nested && old.is_none_or(|old| old.appearance != self.config.appearance) {

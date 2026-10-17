@@ -125,6 +125,7 @@ impl CompositorHandler for State {
         if !self.handle_layer_commit(surface) {
             self.handle_toplevel_mapping(surface);
         }
+        self.size_new_tile(surface);
         xdg_shell::handle_commit(&mut self.popups, &self.space, &self.unmapped, surface);
         resize_grab::handle_commit(&mut self.space, surface);
         self.queue_commit_redraw(only_window);

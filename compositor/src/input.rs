@@ -259,6 +259,12 @@ impl State {
             Action::SnapLeft => self.set_focused_placement(Placement::SnappedLeft),
             Action::SnapRight => self.set_focused_placement(Placement::SnappedRight),
             Action::ToggleFullscreen => self.toggle_focused_fullscreen(),
+            Action::ToggleTiling => self.toggle_tiling(),
+            Action::ToggleFloating => self.toggle_focused_floating(),
+            Action::SwapMaster => self.swap_with_master(),
+            Action::MasterRatio(step) => {
+                self.adjust_master_ratio(f64::from(step) * crate::layout::RATIO_STEP)
+            }
             Action::SwitchVt(vt) => self.switch_vt(vt),
             Action::Workspace { step, carry } => {
                 let step = if self.config.input.keyboard.natural_workspace_keys {
@@ -542,6 +548,9 @@ impl State {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
+        // On a tiling workspace the window leaves its tile while dragged;
+        // where it's dropped decides what happens (see `drop_window`).
+        let tile = self.lift_for_move(&window);
         if Self::placement_of(&window) != Placement::Floating {
             let Some(geo) = self.space.element_geometry(&window) else {
                 return;
@@ -593,6 +602,7 @@ impl State {
             start_data,
             window,
             initial_window_location,
+            tile,
         };
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }
@@ -613,6 +623,8 @@ impl State {
         let Some(geo) = self.space.element_geometry(&window) else {
             return;
         };
+        // Resizing a tiled window floats it at its current size, too.
+        self.float_for_resize(&window);
         // Resizing a maximized/snapped window turns it floating at its current size.
         if Self::placement_of(&window) != Placement::Floating {
             with_state(&window, |s| s.restore = Some(geo));

@@ -33,6 +33,24 @@ pub struct Workspace<W = Window> {
     pub id: WorkspaceId,
     /// Bottom to top.
     pub windows: Vec<W>,
+    /// Floating or tiling (Super+T); `None` follows `tiling.layout`.
+    pub layout: Option<cnde_config::WindowLayout>,
+    /// Main window share set with Super+[ / ]; `None` uses the config's.
+    pub master_ratio: Option<f64>,
+    /// Tiling order, main window first; see layout.rs.
+    pub tiles: Vec<W>,
+}
+
+impl<W> Workspace<W> {
+    pub fn new(id: WorkspaceId, windows: Vec<W>) -> Self {
+        Self {
+            id,
+            windows,
+            layout: None,
+            master_ratio: None,
+            tiles: Vec::new(),
+        }
+    }
 }
 
 pub struct Workspaces<W = Window> {
@@ -83,22 +101,14 @@ impl<W: PartialEq + Clone> Workspaces<W> {
     /// Insert an empty workspace at the start of the strip, keeping the
     /// same workspace active.
     fn push_empty_front(&mut self) {
-        self.list.insert(
-            0,
-            Workspace {
-                id: self.next_id,
-                windows: Vec::new(),
-            },
-        );
+        self.list
+            .insert(0, Workspace::new(self.next_id, Vec::new()));
         self.next_id += 1;
         self.active += 1;
     }
 
     fn push_empty(&mut self) {
-        self.list.push(Workspace {
-            id: self.next_id,
-            windows: Vec::new(),
-        });
+        self.list.push(Workspace::new(self.next_id, Vec::new()));
         self.next_id += 1;
     }
 
@@ -118,19 +128,22 @@ impl<W: PartialEq + Clone> Workspaces<W> {
         self.motion.is_some()
     }
 
-    fn index_of(&self, window: &W) -> Option<usize> {
+    pub(crate) fn index_of(&self, window: &W) -> Option<usize> {
         self.list.iter().position(|ws| ws.windows.contains(window))
     }
 
     pub fn remove_window(&mut self, window: &W) {
         for ws in &mut self.list {
             ws.windows.retain(|w| w != window);
+            ws.tiles.retain(|w| w != window);
         }
     }
 
     /// Move `window` to the top of its workspace's stacking order.
     pub fn raise(&mut self, window: &W) {
         if let Some(index) = self.index_of(window) {
+            // Pin the tiling order first: it mustn't follow the stacking.
+            self.list[index].sync_tiles();
             let windows = &mut self.list[index].windows;
             windows.retain(|w| w != window);
             windows.push(window.clone());
@@ -527,8 +540,9 @@ impl State {
     }
 
     /// Where `window` would rest if its workspace were shown on `slot`:
-    /// floating windows at their local position (kept reachable on a smaller
-    /// monitor), maximized/snapped/fullscreen ones fitted to that monitor.
+    /// floating windows where their workspace's layout puts them (floating:
+    /// their local position, kept reachable on a smaller monitor; tiling:
+    /// their tile), maximized/snapped/fullscreen ones fitted to that monitor.
     pub(crate) fn rest_rect(
         &self,
         window: &Window,
@@ -537,17 +551,9 @@ impl State {
     ) -> Option<Rectangle<i32, Logical>> {
         let (geo, area) = self.slot_areas(outputs, slot)?;
         Some(match Self::placement_of(window) {
-            Placement::Floating => {
-                let size = window.geometry().size;
-                let local = with_state(window, |s| s.local);
-                let local = Point::from((
-                    local
-                        .x
-                        .clamp(-(size.w - 64).max(0), (geo.size.w - 64).max(0)),
-                    local.y.clamp(0, (geo.size.h - 32).max(0)),
-                ));
-                Rectangle::new(geo.loc + local, size)
-            }
+            Placement::Floating => self
+                .layout_rest(window, geo, area)
+                .unwrap_or_else(|| floating_rest(window, geo)),
             Placement::Fullscreen => geo,
             placement => crate::decorations::content_rect(
                 placement_rect(placement, area),
@@ -580,14 +586,28 @@ impl State {
                 };
                 self.space.map_element(window.clone(), rest.loc, false);
                 let old_size = window.geometry().size;
-                if Self::placement_of(&window) == Placement::Floating || old_size == rest.size {
-                    continue;
-                }
+                let placement = Self::placement_of(&window);
+                // Tiles are sized by their layout, and may have joined or
+                // left one (the overview moves windows between workspaces).
+                let tiled = self.is_tiled(&window);
+                let resize = (placement != Placement::Floating || tiled) && old_size != rest.size;
                 let Some(toplevel) = window.toplevel() else {
                     continue;
                 };
-                toplevel.with_pending_state(|s| s.size = Some(rest.size));
-                if let Some(serial) = toplevel.send_pending_configure() {
+                toplevel.with_pending_state(|s| {
+                    if placement == Placement::Floating {
+                        crate::layout::set_tiled(&mut s.states, tiled);
+                    }
+                    if resize {
+                        s.size = Some(rest.size);
+                    }
+                });
+                if !toplevel.is_initial_configure_sent() {
+                    continue;
+                }
+                if let Some(serial) = toplevel.send_pending_configure()
+                    && resize
+                {
                     with_state(&window, |s| {
                         s.pending_size = Some(PendingSize::new(rest.size, old_size, serial));
                     });
@@ -656,6 +676,23 @@ impl State {
     }
 }
 
+/// Where a floating `window` rests on a monitor at `geo`: its local
+/// position, kept reachable on a smaller monitor.
+pub(crate) fn floating_rest(
+    window: &Window,
+    geo: Rectangle<i32, Logical>,
+) -> Rectangle<i32, Logical> {
+    let size = window.geometry().size;
+    let local = with_state(window, |s| s.local);
+    let local = Point::from((
+        local
+            .x
+            .clamp(-(size.w - 64).max(0), (geo.size.w - 64).max(0)),
+        local.y.clamp(0, (geo.size.h - 32).max(0)),
+    ));
+    Rectangle::new(geo.loc + local, size)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,10 +702,10 @@ mod tests {
         let mut ws = Workspaces::<u32>::new();
         ws.list.clear();
         for (i, &full) in occupied.iter().enumerate() {
-            ws.list.push(Workspace {
-                id: i as u64,
-                windows: if full { vec![i as u32] } else { vec![] },
-            });
+            ws.list.push(Workspace::new(
+                i as u64,
+                if full { vec![i as u32] } else { vec![] },
+            ));
         }
         ws.active = active;
         ws

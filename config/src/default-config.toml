@@ -55,8 +55,17 @@
 [animations]
 # speed = 1.0              # 0.5 = twice as fast, 0.0 = no animations
 
+[tiling]
+# Super+T switches the current workspace between floating and tiling;
+# Super+Enter swaps the focused window with the main one, Super+[ and
+# Super+] narrow and widen the main window, Super+Shift+T floats one window.
+# layout = "floating"      # how workspaces start: "floating", or "tiling" (main window left, the rest stacked right)
+# master_ratio = 0.55      # share of the width the main window takes (0.1-0.9)
+# gap = 8                  # px between tiled windows (0-64)
+# outer_gap = 8            # px between tiled windows and the screen's edges (0-128)
+
 [panel]
-# enabled = true           # false: hide the top bar (e.g. to use waybar via autostart)
+# enabled = true          # false: hide the top bar (e.g. to use waybar via autostart)
 # all_monitors = false     # true: a panel on every monitor, not just the main one
 # height = 32
 # rounded = false          # rounded bottom corners and a soft shadow

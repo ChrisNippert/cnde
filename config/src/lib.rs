@@ -32,6 +32,7 @@ pub struct Config {
     pub launcher: Launcher,
     pub autostart: Autostart,
     pub lock: Lock,
+    pub tiling: Tiling,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -539,6 +540,42 @@ impl Default for Autostart {
     }
 }
 
+/// Hyprland-style master-stack tiling (ARCHITECTURE.md §4.4). Each
+/// workspace can be switched with Super+T; until then it uses `layout`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Tiling {
+    /// How workspaces arrange their windows unless switched.
+    pub layout: WindowLayout,
+    /// Share of the width the main (master) window takes, 0.1 to 0.9.
+    pub master_ratio: f64,
+    /// Logical pixels between tiled windows.
+    pub gap: u32,
+    /// Logical pixels between tiled windows and the screen's edges.
+    pub outer_gap: u32,
+}
+
+impl Default for Tiling {
+    fn default() -> Self {
+        Self {
+            layout: WindowLayout::Floating,
+            master_ratio: 0.55,
+            gap: 8,
+            outer_gap: 8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowLayout {
+    /// Windows stay where they're put (GNOME).
+    #[default]
+    Floating,
+    /// One main window on the left, the rest stacked on the right.
+    Tiling,
+}
+
 #[derive(Debug)]
 pub enum Error {
     Io(PathBuf, std::io::Error),
@@ -608,6 +645,9 @@ impl Config {
             0.0,
             48.0,
         )?;
+        in_range("tiling.master_ratio", self.tiling.master_ratio, 0.1, 0.9)?;
+        in_range("tiling.gap", self.tiling.gap as f64, 0.0, 64.0)?;
+        in_range("tiling.outer_gap", self.tiling.outer_gap as f64, 0.0, 128.0)?;
         in_range(
             "input.touchpad.workspace_swipe_distance",
             self.input.touchpad.workspace_swipe_distance,
@@ -719,6 +759,19 @@ mod tests {
         assert!(!Config::default().dock.locked);
         let config = Config::parse("[dock]\nlocked = true\n").unwrap();
         assert!(config.dock.locked);
+    }
+
+    #[test]
+    fn tiling_parses_and_validates() {
+        assert_eq!(Config::default().tiling.layout, WindowLayout::Floating);
+        let config =
+            Config::parse("[tiling]\nlayout = \"tiling\"\nmaster_ratio = 0.6\ngap = 0\n").unwrap();
+        assert_eq!(config.tiling.layout, WindowLayout::Tiling);
+        assert_eq!(config.tiling.master_ratio, 0.6);
+        assert_eq!(config.tiling.gap, 0);
+        assert!(Config::parse("[tiling]\nmaster_ratio = 0.95\n").is_err());
+        assert!(Config::parse("[tiling]\ngap = 100\n").is_err());
+        assert!(Config::parse("[tiling]\nlayout = \"spiral\"\n").is_err());
     }
 
     #[test]

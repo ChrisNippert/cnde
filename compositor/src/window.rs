@@ -56,6 +56,13 @@ pub struct WindowState {
     /// Hidden until activated again (the dock, the overview's search).
     /// It stays in its workspace, just not in the space.
     pub minimized: bool,
+    /// On a tiling workspace, kept out of the tiles: floated by the user
+    /// (Super+Shift+T, dropped off the tiles, resized), or lifted while
+    /// being dragged.
+    pub keep_floating: bool,
+    /// Local position and size before its workspace started tiling, to
+    /// return to when it stops.
+    pub untiled: Option<Rectangle<i32, Logical>>,
 }
 
 pub fn with_state<T>(window: &Window, f: impl FnOnce(&mut WindowState) -> T) -> T {
@@ -134,14 +141,14 @@ impl State {
     }
 
     /// Where `window`'s geometry is drawn right now, mid-animation included.
-    fn visual_rect(&self, window: &Window) -> Option<Rectangle<f64, Logical>> {
+    pub(crate) fn visual_rect(&self, window: &Window) -> Option<Rectangle<f64, Logical>> {
         let live = self.space.element_geometry(window)?.to_f64();
         Some(with_state(window, |s| {
             effects::window_frame(s, live, Instant::now()).rect
         }))
     }
 
-    fn snapshot(&mut self, window: &Window) -> Option<Snapshot> {
+    pub(crate) fn snapshot(&mut self, window: &Window) -> Option<Snapshot> {
         let scale = Scale::from(self.output_for(window)?.current_scale().fractional_scale());
         Snapshot::capture(self.backend.renderer()?, window, scale)
     }
@@ -207,6 +214,8 @@ impl State {
         self.launching = None;
         self.capture.window_mapped(&window);
         self.add_window_to_workspace(&window);
+        // On a tiling workspace it grows in its tile and the others make room.
+        self.relayout_visible(true);
         self.focus_window(Some(&window));
         self.queue_redraw();
         self.queue_pointer_refresh();
@@ -218,6 +227,8 @@ impl State {
         self.capture.window_unmapped(window);
         self.overview_before_relayout();
         self.remove_window_from_workspaces(window);
+        // The remaining tiles close the gap.
+        self.relayout_visible(true);
         let topmost = self.space.elements().last().cloned();
         self.focus_window(topmost.as_ref());
         self.queue_redraw();
@@ -283,6 +294,7 @@ impl State {
         self.start_close_animation(window);
         with_state(window, |s| s.minimized = true);
         self.space.unmap_elem(window);
+        self.relayout_visible(true);
         let topmost = self.space.elements().last().cloned();
         self.focus_window(topmost.as_ref());
         self.queue_redraw();
@@ -350,7 +362,10 @@ impl State {
             s.restore
         });
 
+        // On a tiling workspace, back to its tile rather than where it floated.
+        let tiled = target == Placement::Floating && self.is_tiled(window);
         let rect = match target {
+            Placement::Floating if tiled => self.tile_rect_now(window).or(restore),
             Placement::Floating => restore,
             other => Some(content_rect(
                 placement_rect(other, area),
@@ -370,7 +385,7 @@ impl State {
                 s.states.unset(state);
             }
             match target {
-                Placement::Floating => {}
+                Placement::Floating => crate::layout::set_tiled(&mut s.states, tiled),
                 Placement::Maximized => {
                     s.states.set(XdgState::Maximized);
                 }
@@ -411,6 +426,10 @@ impl State {
                     s.pending_size = Some(PendingSize::new(rect.size, old_size, serial));
                 });
             }
+        }
+        // A window joining or leaving the tiles moves the others.
+        if mapped_location.is_some() {
+            self.relayout_visible(animate);
         }
         self.queue_redraw();
         self.queue_pointer_refresh();
@@ -461,6 +480,8 @@ impl State {
             toplevel.send_pending_configure();
             self.move_window(&window, rect.loc);
         }
+        // Tiles refit the new area too.
+        self.relayout_visible(false);
     }
 
     /// Move a mapped window, keeping its place in the stack. Why not just

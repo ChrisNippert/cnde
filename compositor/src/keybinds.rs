@@ -44,6 +44,14 @@ pub enum Action {
     Media(cnde_ipc::MediaKey),
     /// Super+L.
     Lock,
+    /// Super+T: the current workspace floats or tiles.
+    ToggleTiling,
+    /// Super+Shift+T: float the focused tile, or tile it again.
+    ToggleFloating,
+    /// Super+Enter: swap the focused tile with the main one.
+    SwapMaster,
+    /// Super+] widens the main tile (+1), Super+[ narrows it (-1).
+    MasterRatio(i8),
 }
 
 /// The volume and brightness keys, with or without modifiers.
@@ -131,8 +139,13 @@ pub fn action_for(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> Option
         (false, keysyms::KEY_Down) => Action::Restore,
         (false, keysyms::KEY_Left) => Action::SnapLeft,
         (false, keysyms::KEY_Right) => Action::SnapRight,
+        (false, keysyms::KEY_t) => Action::ToggleTiling,
+        (false, keysyms::KEY_Return | keysyms::KEY_KP_Enter) => Action::SwapMaster,
+        (false, keysyms::KEY_bracketleft) => Action::MasterRatio(-1),
+        (false, keysyms::KEY_bracketright) => Action::MasterRatio(1),
         (true, keysyms::KEY_f) => Action::ToggleFullscreen,
         (true, keysyms::KEY_s) => Action::Screenshot,
+        (true, keysyms::KEY_t) => Action::ToggleFloating,
         _ => return None,
     };
     Some(action)
@@ -187,6 +200,29 @@ mod tests {
         // Other keys with Super+Alt don't fall through to window bindings.
         assert_eq!(
             action_for(ModKey::Super, &m, Keysym::from(keysyms::KEY_q)),
+            None
+        );
+    }
+
+    #[test]
+    fn tiling_bindings() {
+        let m = mods(true, false, false, false);
+        let at = |m: &ModifiersState, key| action_for(ModKey::Super, m, Keysym::from(key));
+        assert_eq!(at(&m, keysyms::KEY_t), Some(Action::ToggleTiling));
+        assert_eq!(at(&m, keysyms::KEY_Return), Some(Action::SwapMaster));
+        assert_eq!(
+            at(&m, keysyms::KEY_bracketleft),
+            Some(Action::MasterRatio(-1))
+        );
+        assert_eq!(
+            at(&m, keysyms::KEY_bracketright),
+            Some(Action::MasterRatio(1))
+        );
+        let shifted = mods(true, false, false, true);
+        assert_eq!(at(&shifted, keysyms::KEY_t), Some(Action::ToggleFloating));
+        // Plain Enter is the app's.
+        assert_eq!(
+            at(&mods(false, false, false, false), keysyms::KEY_Return),
             None
         );
     }

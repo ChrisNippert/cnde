@@ -11,18 +11,20 @@ pub enum Page {
     Wifi,
     Mouse,
     Keyboard,
+    Windows,
     Panel,
     Dock,
     Accessibility,
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [
+    pub const ALL: [Page; 9] = [
         Page::Appearance,
         Page::Displays,
         Page::Wifi,
         Page::Mouse,
         Page::Keyboard,
+        Page::Windows,
         Page::Panel,
         Page::Dock,
         Page::Accessibility,
@@ -35,6 +37,7 @@ impl Page {
             Page::Wifi => "Wi-Fi",
             Page::Mouse => "Mouse & Touchpad",
             Page::Keyboard => "Keyboard",
+            Page::Windows => "Windows",
             Page::Panel => "Top Bar",
             Page::Dock => "Dock",
             Page::Accessibility => "Accessibility",
@@ -48,6 +51,7 @@ impl Page {
             Page::Wifi => "network-wireless-symbolic",
             Page::Mouse => "input-mouse-symbolic",
             Page::Keyboard => "input-keyboard-symbolic",
+            Page::Windows => "window-restore-symbolic",
             Page::Panel => "focus-top-bar-symbolic",
             Page::Dock => "view-app-grid-symbolic",
             Page::Accessibility => "preferences-desktop-accessibility-symbolic",
@@ -527,6 +531,7 @@ pub fn build(page: Page, c: &Config, displays: &[Display], wifi: WifiView<'_>) -
         Page::Wifi => wifi_page(wifi),
         Page::Mouse => mouse(c, &d),
         Page::Keyboard => keyboard(c, &d),
+        Page::Windows => windows(c, &d),
         Page::Panel => panel(c, &d),
         Page::Dock => dock(c, &d),
         Page::Accessibility => accessibility(c, &d),
@@ -1423,6 +1428,77 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
             ],
         ),
     ]
+}
+
+fn window_layout(v: cnde_config::WindowLayout) -> Value {
+    s(match v {
+        cnde_config::WindowLayout::Floating => "floating",
+        cnde_config::WindowLayout::Tiling => "tiling",
+    })
+}
+
+fn windows(c: &Config, d: &Config) -> Vec<Group> {
+    let (t, dt) = (&c.tiling, &d.tiling);
+    let px = |v: f64| format!("{v:.0} px");
+    vec![group(
+        "Tiling",
+        vec![
+            Row::new(
+                "tiling.layout",
+                "Arrange windows",
+                Control::Segmented(choices(&[
+                    ("Floating", s("floating")),
+                    ("Tiling", s("tiling")),
+                ])),
+                window_layout(t.layout),
+                window_layout(dt.layout),
+            )
+            .sub("Tiling puts one main window on the left and stacks the rest. Super+T switches one workspace"),
+            Row::new(
+                "tiling.master_ratio",
+                "Main window width",
+                Control::Slider {
+                    min: 0.1,
+                    max: 0.9,
+                    step: 0.05,
+                    int: false,
+                    format: |v| format!("{:.0}%", v * 100.0),
+                },
+                Value::Float(t.master_ratio),
+                Value::Float(dt.master_ratio),
+            )
+            .sub("Super+[ and Super+] change it for one workspace"),
+            Row::new(
+                "tiling.gap",
+                "Gaps",
+                Control::Slider {
+                    min: 0.0,
+                    max: 64.0,
+                    step: 1.0,
+                    int: true,
+                    format: px,
+                },
+                Value::Int(t.gap as i64),
+                Value::Int(dt.gap as i64),
+            )
+            .sub("Space between tiled windows"),
+            Row::new(
+                "tiling.outer_gap",
+                "Screen edge gaps",
+                Control::Slider {
+                    min: 0.0,
+                    max: 128.0,
+                    step: 1.0,
+                    int: true,
+                    format: px,
+                },
+                Value::Int(t.outer_gap as i64),
+                Value::Int(dt.outer_gap as i64),
+            )
+            .sub("Space between tiled windows and the edges of the screen")
+            .advanced(),
+        ],
+    )]
 }
 
 fn clock_position(v: cnde_config::ClockPosition) -> Value {

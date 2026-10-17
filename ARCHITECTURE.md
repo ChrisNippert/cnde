@@ -213,6 +213,10 @@ Every default listed here can be rebound or reconfigured.
 | Super+Up / Down | Maximize / restore |
 | Super+Left / Right | Snap to left / right half (straight across if already snapped to the other side) |
 | Super+Shift+F | Toggle fullscreen |
+| Super+T | Switch the current workspace between floating and tiling (`[tiling]`) |
+| Super+Shift+T | Float the focused tile above the others, or tile it again |
+| Super+Enter | Swap the focused tile with the main one |
+| Super+[ / ] | Narrow / widen the main tile on the current workspace |
 | Super+Alt+Left / Right | Previous / next workspace (`natural_workspace_keys` swaps them; see Workspaces) |
 | Super+Alt+Shift+Left / Right | Same, carrying the focused window along |
 | Super+Shift+S | Screenshot UI |

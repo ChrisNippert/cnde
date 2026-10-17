@@ -10,13 +10,15 @@ use smithay::{
         MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
-    utils::{Logical, Point},
+    utils::{Logical, Point, Rectangle},
 };
 
 pub struct MoveSurfaceGrab {
     pub start_data: PointerGrabStartData<State>,
     pub window: Window,
     pub initial_window_location: Point<i32, Logical>,
+    /// The tile it was lifted from, on a tiling workspace.
+    pub tile: Option<Rectangle<i32, Logical>>,
 }
 
 impl PointerGrab<State> for MoveSurfaceGrab {
@@ -67,9 +69,14 @@ impl PointerGrab<State> for MoveSurfaceGrab {
                 .snap_preview
                 .as_ref()
                 .map(|p| (p.target, p.output.clone()));
+            let pointer = handle.current_location();
             handle.unset_grab(self, data, event.serial, event.time, true);
             if let Some((target, output)) = snap {
+                // Snapped out of the tiles; Super+Down tiles it again.
+                crate::window::with_state(&self.window, |s| s.keep_floating = false);
                 data.set_placement_on(&self.window, target, true, Some(output));
+            } else {
+                data.drop_window(&self.window, pointer, self.tile);
             }
         }
     }

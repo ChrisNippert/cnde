@@ -306,6 +306,9 @@ impl State {
             let step = index as isize - current;
             if step != 0 {
                 self.step_workspace(step, false);
+            } else if minimized && self.is_tiled(&window) {
+                // Back into its tile; the others make room.
+                self.relayout_visible(true);
             } else if minimized {
                 // On screen already: put it back where it was.
                 self.rebuild_space();
