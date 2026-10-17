@@ -98,6 +98,9 @@ pub struct Overview {
     /// A window closed while open: the others slide from where they were
     /// spread (card fractions per monitor) to their new places.
     relayout: Option<(Animation, Vec<SpreadWas>)>,
+    /// Every window, bottom to top, as stacked when it opened: the spread
+    /// keeps this order, so a clicked window being raised doesn't move it.
+    order: Vec<Window>,
 }
 
 /// A monitor's name, a window, and the card fraction it was spread to.
@@ -174,6 +177,7 @@ impl Overview {
             grid_anim: None,
             drag: None,
             relayout: None,
+            order: Vec::new(),
         }
     }
 
@@ -364,6 +368,15 @@ impl State {
         if !self.workspaces.is_moving() {
             self.store_local_positions();
         }
+        // Reopened while still closing, the old order stays: nothing jumps.
+        if open && self.overview.progress(Instant::now()) <= 0.0 {
+            self.overview.order = self
+                .workspaces
+                .list
+                .iter()
+                .flat_map(|ws| ws.windows.iter().cloned())
+                .collect();
+        }
         self.overview.set_open(open);
         // Closing from the grid: the thumbnails zoom back with the rest.
         self.overview.app_grid = false;
@@ -415,6 +428,9 @@ impl State {
     pub fn finish_overview_animation(&mut self, now: Instant) {
         if self.overview.anim.as_ref().is_some_and(|a| a.is_done(now)) {
             self.overview.anim = None;
+            if !self.overview.open {
+                self.overview.order.clear();
+            }
         }
         if self
             .overview
@@ -495,6 +511,10 @@ impl State {
         };
         // Each window as a fraction of its own monitor, so it maps onto
         // a card of any shape.
+        // Stacked as when it opened; windows opened since go on top.
+        let order = &self.overview.order;
+        let mut windows: Vec<&Window> = windows.iter().collect();
+        windows.sort_by_key(|w| order.iter().position(|o| o == *w).unwrap_or(usize::MAX));
         let mut placed = Vec::new();
         for window in windows {
             if carried == Some(window) || crate::window::with_state(window, |s| s.minimized) {
