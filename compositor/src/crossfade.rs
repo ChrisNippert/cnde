@@ -27,7 +27,7 @@ use crate::animation::{Curve, Params};
 
 /// How long the old look is held at least (the shell and apps redraw in
 /// that time), and at most (a wallpaper that won't load).
-const HOLD_MIN: Duration = Duration::from_millis(120);
+const HOLD_MIN: Duration = Duration::from_millis(80);
 const HOLD_MAX: Duration = Duration::from_millis(1500);
 const FADE: Params = Params {
     duration: Duration::from_millis(350),
@@ -108,6 +108,7 @@ impl Crossfade {
         let held = now.saturating_duration_since(fade.captured);
         if fade.fading.is_none() && ((ready && held >= HOLD_MIN) || held >= HOLD_MAX) {
             fade.fading = Some(now);
+            tracing::debug!(output = %name, ?held, ready, "style crossfade: fading");
         }
         let alpha = match fade.fading {
             None => 1.0,

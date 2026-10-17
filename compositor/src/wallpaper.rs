@@ -45,8 +45,20 @@ struct Source {
 impl Source {
     fn from_config(config: &Config) -> Self {
         let scheme = config.appearance.color_scheme;
+        let path = config.wallpaper.path(scheme);
+        if path.is_some() {
+            // The style only colours the built-in gradient: switching it
+            // over an image mustn't decode and scale it all again.
+            return Self {
+                path,
+                fit: config.wallpaper.fit,
+                scheme: ColorScheme::default(),
+                palette: Palette::default(),
+                custom: Default::default(),
+            };
+        }
         Self {
-            path: config.wallpaper.path(scheme),
+            path,
             fit: config.wallpaper.fit,
             scheme,
             palette: config.appearance.palette,
@@ -321,35 +333,49 @@ fn worker(jobs: mpsc::Receiver<Job>, done: channel::Sender<Done>) {
         // Take everything queued, so several monitors share one decode.
         let mut batch = vec![first];
         batch.extend(jobs.try_iter());
-        let mut decoded: Option<(PathBuf, Option<RgbaImage>)> = None;
-        for job in batch {
-            let image = match &job.source.path {
-                Some(path) => {
-                    if decoded.as_ref().is_none_or(|(p, _)| p != path) {
-                        decoded = Some((path.clone(), load(path)));
-                    }
-                    decoded.as_ref().and_then(|(_, image)| image.as_ref())
-                }
-                None => None,
-            };
-            let (w, h) = (job.size.w.max(1) as u32, job.size.h.max(1) as u32);
-            let pixels = match image {
-                Some(image) => scale_to(image, w, h, job.source.fit),
-                None => gradient(w, h, &job.source),
-            };
-            let blurred = frost(&pixels);
-            let blurred_size = Size::from((blurred.width() as i32, blurred.height() as i32));
-            let sent = done.send(Done {
-                output: job.output,
-                size: job.size,
-                generation: job.generation,
-                pixels: pixels.into_raw(),
-                blurred: blurred.into_raw(),
-                blurred_size,
-            });
-            if sent.is_err() {
-                return;
+        let mut decoded: Vec<(PathBuf, Option<RgbaImage>)> = Vec::new();
+        for path in batch.iter().filter_map(|job| job.source.path.as_ref()) {
+            if !decoded.iter().any(|(p, _)| p == path) {
+                decoded.push((path.clone(), load(path)));
             }
+        }
+        // Each monitor's scaling and blurring at once, on its own thread.
+        let sent = thread::scope(|scope| {
+            let handles: Vec<_> = batch
+                .into_iter()
+                .map(|job| {
+                    let image = job.source.path.as_ref().and_then(|path| {
+                        decoded
+                            .iter()
+                            .find(|(p, _)| p == path)
+                            .and_then(|(_, image)| image.as_ref())
+                    });
+                    let done = done.clone();
+                    scope.spawn(move || {
+                        let (w, h) = (job.size.w.max(1) as u32, job.size.h.max(1) as u32);
+                        let pixels = match image {
+                            Some(image) => scale_to(image, w, h, job.source.fit),
+                            None => gradient(w, h, &job.source),
+                        };
+                        let blurred = frost(&pixels);
+                        let blurred_size =
+                            Size::from((blurred.width() as i32, blurred.height() as i32));
+                        done.send(Done {
+                            output: job.output,
+                            size: job.size,
+                            generation: job.generation,
+                            pixels: pixels.into_raw(),
+                            blurred: blurred.into_raw(),
+                            blurred_size,
+                        })
+                        .is_ok()
+                    })
+                })
+                .collect();
+            handles.into_iter().all(|h| h.join().unwrap_or(false))
+        });
+        if !sent {
+            return;
         }
     }
 }
