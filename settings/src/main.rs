@@ -22,6 +22,7 @@ use rustix::{
     fs::inotify::{self, CreateFlags, WatchFlags},
     io::Errno,
 };
+use smithay_client_toolkit::reexports::client::backend::WaylandError;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData},
     delegate_dispatch2, delegate_registry,
@@ -122,6 +123,20 @@ struct App {
     wifi: Option<std::sync::mpsc::Sender<wifi::Command>>,
     /// Where a picture chosen through "Add" arrives.
     picked: Option<channel::Sender<Result<Option<wallpapers::Thumb>, String>>>,
+}
+
+/// Why the Wayland connection is dead, if it is. After a protocol error, or
+/// with the compositor gone, the socket stays readable and the event loop
+/// would spin instead of exiting (the compositor restarts the shell).
+fn connection_lost(conn: &Connection) -> Option<String> {
+    if let Some(err) = conn.protocol_error() {
+        return Some(format!("the compositor closed our connection: {err}"));
+    }
+    match conn.flush() {
+        Err(WaylandError::Io(io)) if io.kind() == std::io::ErrorKind::WouldBlock => None,
+        Err(err) => Some(format!("lost the compositor: {err}")),
+        Ok(()) => None,
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -264,13 +279,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wifi: None,
         picked: Some(picked_tx),
     };
-    WaylandSource::new(conn, queue).insert(event_loop.handle())?;
+    WaylandSource::new(conn.clone(), queue).insert(event_loop.handle())?;
     watch_config(&mut app);
     if app.ui.page == Page::Wifi {
         app.open_wifi();
     }
 
-    event_loop.run(None, &mut app, |_| {})?;
+    let mut lost = None;
+    event_loop.run(None, &mut app, |app| {
+        if lost.is_none()
+            && let Some(err) = connection_lost(&conn)
+        {
+            lost = Some(err);
+            app.exit.stop();
+        }
+    })?;
+    if let Some(err) = lost {
+        return Err(err.into());
+    }
     Ok(())
 }
 

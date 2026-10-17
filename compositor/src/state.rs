@@ -433,5 +433,10 @@ pub struct ClientState {
 
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+    fn disconnected(&self, _client_id: ClientId, reason: DisconnectReason) {
+        // Apps only print the code; the message says what went wrong.
+        if let DisconnectReason::ProtocolError(err) = reason {
+            warn!(%err, "client disconnected for a protocol error");
+        }
+    }
 }

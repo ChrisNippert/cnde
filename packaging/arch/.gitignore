@@ -1,0 +1,5 @@
+# makepkg output
+/cnde/
+/pkg/
+/src/
+*.pkg.tar.*

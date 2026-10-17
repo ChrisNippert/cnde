@@ -15,6 +15,7 @@ use cnde_ui::{
     Canvas, Color, Fonts, Icons, Painter, Theme, Weight,
     tiny_skia::{IntSize, Pixmap},
 };
+use smithay_client_toolkit::reexports::client::backend::WaylandError;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_dispatch2, delegate_registry,
@@ -249,10 +250,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
 
-    event_loop.run(None, &mut app, |_| {})?;
+    let mut lost = None;
+    event_loop.run(None, &mut app, |app| {
+        if lost.is_none()
+            && let Some(err) = connection_lost(&conn)
+        {
+            lost = Some(err);
+            app.exit.stop();
+        }
+    })?;
+    if let Some(err) = lost {
+        return Err(err.into());
+    }
     // Make sure the unlock reaches the compositor before we go.
     let _ = conn.flush();
     Ok(())
+}
+
+/// Why the Wayland connection is dead, if it is. After a protocol error, or
+/// with the compositor gone, the socket stays readable and the event loop
+/// would spin instead of exiting (the compositor restarts the shell).
+fn connection_lost(conn: &Connection) -> Option<String> {
+    if let Some(err) = conn.protocol_error() {
+        return Some(format!("the compositor closed our connection: {err}"));
+    }
+    match conn.flush() {
+        Err(WaylandError::Io(io)) if io.kind() == std::io::ErrorKind::WouldBlock => None,
+        Err(err) => Some(format!("lost the compositor: {err}")),
+        Ok(()) => None,
+    }
 }
 
 fn until_next_minute() -> Duration {

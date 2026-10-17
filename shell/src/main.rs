@@ -24,6 +24,7 @@ use std::{path::PathBuf, time::Duration, time::SystemTime};
 use chrono::{Local, Timelike};
 use cnde_config::Config;
 use cnde_ui::{Fonts, Icons, Theme};
+use smithay_client_toolkit::reexports::client::backend::WaylandError;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_dispatch2, delegate_registry,
@@ -275,7 +276,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // One roundtrip so wl_shm has listed its formats before we draw.
     queue.roundtrip(&mut app)?;
     app.choose_shm_format();
-    WaylandSource::new(conn, queue).insert(event_loop.handle())?;
+    WaylandSource::new(conn.clone(), queue).insert(event_loop.handle())?;
 
     config::watch(&event_loop.handle());
 
@@ -318,6 +319,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         event_loop.dispatch(None, &mut app)?;
+        if let Some(err) = connection_lost(&conn) {
+            return Err(err.into());
+        }
+    }
+}
+
+/// Why the Wayland connection is dead, if it is. After a protocol error, or
+/// with the compositor gone, the socket stays readable and the event loop
+/// would spin instead of exiting (the compositor restarts the shell).
+fn connection_lost(conn: &Connection) -> Option<String> {
+    if let Some(err) = conn.protocol_error() {
+        return Some(format!("the compositor closed our connection: {err}"));
+    }
+    match conn.flush() {
+        Err(WaylandError::Io(io)) if io.kind() == std::io::ErrorKind::WouldBlock => None,
+        Err(err) => Some(format!("lost the compositor: {err}")),
+        Ok(()) => None,
     }
 }
 
@@ -762,6 +780,8 @@ impl App {
         };
         // Brightness can change behind our back (keys, other tools).
         self.status.backlight = status::read_backlight();
+        // Before the new grab, or the compositor disconnects us.
+        self.menu = None;
         self.quick_settings = QuickSettings::open(
             &self.compositor,
             &self.xdg_shell,

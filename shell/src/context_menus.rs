@@ -175,7 +175,10 @@ impl App {
             return;
         };
         let entries = without_settings_if_missing(entries);
+        // Close any open menu first: a grabbing popup that isn't the
+        // child of the topmost one gets the shell disconnected.
         self.quick_settings = None;
+        self.menu = None;
         self.menu = Menu::open(
             &self.compositor,
             &self.xdg_shell,
