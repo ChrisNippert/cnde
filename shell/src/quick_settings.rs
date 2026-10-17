@@ -300,6 +300,8 @@ pub enum Moving {
     Slider(Slider),
     /// The power mode highlight sliding to the active mode.
     Profile,
+    /// The power row opening (1) or closing (0).
+    PowerMenu,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -341,6 +343,9 @@ pub struct QuickSettings {
     /// Something changed since the last draw.
     dirty: bool,
     anim: Animator<Moving>,
+    /// The power row is sliding shut: the open layout to keep painting
+    /// until it's gone, then the smaller size to shrink the popup to.
+    collapsing: Option<(Layout, XdgPositioner)>,
 }
 
 impl QuickSettings {
@@ -384,6 +389,7 @@ impl QuickSettings {
             frame_pending: false,
             dirty: false,
             anim: Animator::new(),
+            collapsing: None,
         })
     }
 
@@ -402,16 +408,26 @@ impl QuickSettings {
         self.popup.wl_surface().set_buffer_scale(self.scale);
     }
 
-    /// Show or hide the power row; the popup grows or shrinks to fit.
+    /// Show or hide the power row. Opening grows the popup at once and the
+    /// row slides out into the room; closing slides it away first and
+    /// shrinks the popup once it's gone (see `draw`).
     fn toggle_power_menu(
         &mut self,
         xdg_shell: &XdgShell,
         theme: &Theme,
         anchor: (i32, i32, i32, i32),
     ) {
-        self.layout = layout(theme, self.layout.power_menu.is_none(), self.features);
-        if let Some(positioner) = positioner(xdg_shell, &self.layout, anchor) {
-            self.popup.reposition(&positioner, 0);
+        let open = self.layout.power_menu.is_none();
+        let new = layout(theme, open, self.features);
+        let positioner = positioner(xdg_shell, &new, anchor);
+        let old = std::mem::replace(&mut self.layout, new);
+        if open {
+            self.collapsing = None;
+            if let Some(positioner) = positioner {
+                self.popup.reposition(&positioner, 0);
+            }
+        } else if let Some(positioner) = positioner {
+            self.collapsing = Some((old, positioner));
         }
     }
 
@@ -519,7 +535,8 @@ impl QuickSettings {
             return;
         }
         self.dirty = false;
-        let layout = &self.layout;
+        // While the power row closes, the popup keeps its open size.
+        let layout = self.collapsing.as_ref().map_or(&self.layout, |(l, _)| l);
         let scale = self.scale;
         let (w, h) = (
             (layout.width * scale as f32) as i32,
@@ -571,7 +588,8 @@ impl QuickSettings {
         };
         paint(
             &mut canvas,
-            &self.layout,
+            layout,
+            self.layout.power_menu.is_some(),
             fonts,
             icons,
             theme,
@@ -584,6 +602,10 @@ impl QuickSettings {
         );
         // Still moving: draw again when this frame is shown.
         if self.anim.running() {
+            self.dirty = true;
+        } else if let Some((_, positioner)) = self.collapsing.take() {
+            // The power row is gone: shrink to fit, drawn next frame.
+            self.popup.reposition(&positioner, 0);
             self.dirty = true;
         }
 
@@ -605,6 +627,7 @@ pub const CONFIRM_WITHIN: Duration = Duration::from_secs(3);
 fn paint(
     canvas: &mut Canvas<'_>,
     layout: &Layout,
+    power_open: bool,
     fonts: &mut Fonts,
     icons: &mut Icons,
     theme: &Theme,
@@ -626,12 +649,24 @@ fn paint(
     };
     let volume_shown = slide(Slider::Volume, volume.0 as f32 / 100.0);
     let brightness_shown = brightness.map(|b| slide(Slider::Brightness, b as f32 / 100.0));
+    // The power row fades in as the footer slides down to make room for it
+    // (`shift` is how much of its room isn't open yet).
+    let reveal = anim.get(
+        Moving::PowerMenu,
+        if power_open { 1.0 } else { 0.0 },
+        MEDIUM,
+    );
+    let shift = if layout.power_menu.is_some() {
+        (1.0 - reveal) * (POWER_TILE_HEIGHT + theme.qs_gap)
+    } else {
+        0.0
+    };
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
     canvas.rounded_rect(
         0.0,
         0.0,
         layout.width,
-        layout.height,
+        layout.height - shift,
         theme.qs_radius,
         theme.qs_background,
     );
@@ -854,14 +889,19 @@ fn paint(
     }
 
     // Power row.
+    let faded = |c: Color| c.with_alpha(c.a * reveal);
     for (rect, hit) in layout.power_menu.iter().flatten() {
+        let rect = Rect {
+            y: rect.y - shift / 2.0,
+            ..*rect
+        };
         canvas.rounded_rect(
             rect.x,
             rect.y,
             rect.w,
             rect.h,
             theme.qs_tile_radius,
-            theme.qs_tile,
+            faded(theme.qs_tile),
         );
         let (icon, label) = match hit {
             Hit::Lock => ("system-lock-screen-symbolic", "Lock"),
@@ -875,11 +915,11 @@ fn paint(
             rect.x + (rect.w - 20.0) / 2.0,
             rect.y + 12.0,
             20.0,
-            theme.popup_text,
+            faded(theme.popup_text),
         );
         let mut text = fonts.layout(label, theme.qs_label_size, Weight::Normal, s);
         let tx = (rect.x + (rect.w - text.width) / 2.0).round();
-        canvas.text(fonts, &mut text, tx, rect.y + 38.0, theme.qs_dim);
+        canvas.text(fonts, &mut text, tx, rect.y + 38.0, faded(theme.qs_dim));
     }
 
     // Footer: battery summary, power button.
@@ -897,7 +937,7 @@ fn paint(
             Weight::Normal,
             s,
         );
-        let ty = (layout.footer_y + (FOOTER_HEIGHT - text.height) / 2.0).round();
+        let ty = (layout.footer_y - shift + (FOOTER_HEIGHT - text.height) / 2.0).round();
         canvas.text(
             fonts,
             &mut text,
@@ -906,7 +946,10 @@ fn paint(
             theme.qs_dim,
         );
     }
-    let g = layout.settings_button;
+    let g = Rect {
+        y: layout.settings_button.y - shift,
+        ..layout.settings_button
+    };
     if g.w > 0.0 {
         canvas.circle(
             g.x + g.w / 2.0,
@@ -923,12 +966,11 @@ fn paint(
             theme.popup_text,
         );
     }
-    let p = layout.power_button;
-    let power_bg = if layout.power_menu.is_some() {
-        theme.qs_toggle_on
-    } else {
-        theme.qs_toggle_off
+    let p = Rect {
+        y: layout.power_button.y - shift,
+        ..layout.power_button
     };
+    let power_bg = theme.qs_toggle_off.mix(theme.qs_toggle_on, reveal);
     canvas.circle(p.x + p.w / 2.0, p.y + p.h / 2.0, p.w / 2.0, power_bg);
     canvas.icon(
         icons,
@@ -936,11 +978,7 @@ fn paint(
         p.x + (p.w - 18.0) / 2.0,
         p.y + (p.h - 18.0) / 2.0,
         18.0,
-        if layout.power_menu.is_some() {
-            theme.on_accent
-        } else {
-            theme.popup_text
-        },
+        theme.popup_text.mix(theme.on_accent, reveal),
     );
 }
 
@@ -1070,11 +1108,8 @@ mod tests {
         };
         let mut fonts = Fonts::new(theme.font_families);
         let mut icons = Icons::new();
-        let layout = layout(
-            &theme,
-            std::env::var_os("CNDE_QS_POWER").is_some(),
-            Features::of(&status),
-        );
+        let power_open = std::env::var_os("CNDE_QS_POWER").is_some();
+        let layout = layout(&theme, power_open, Features::of(&status));
         let scale = 2.0;
         let (w, h) = (
             (layout.width * scale) as u32,
@@ -1086,6 +1121,7 @@ mod tests {
             paint(
                 &mut canvas,
                 &layout,
+                power_open,
                 &mut fonts,
                 &mut icons,
                 &theme,
