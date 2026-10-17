@@ -67,15 +67,7 @@ pub fn supervise_shell(env: &ClientEnv, shell: &str) {
         info!("no shell configured (autostart.shell)");
         return;
     }
-    // Ours: next to our own binary first (a dev build), then $PATH.
-    if argv[0] == "cnde-shell"
-        && let Some(sibling) = std::env::current_exe()
-            .ok()
-            .and_then(|exe| Some(exe.parent()?.join("cnde-shell")))
-            .filter(|path| path.is_file())
-    {
-        argv[0] = sibling.to_string_lossy().into_owned();
-    }
+    prefer_sibling(&mut argv);
     let (program, args) = (argv[0].clone(), argv[1..].to_vec());
     thread::spawn(move || {
         let mut backoff = std::time::Duration::from_secs(1);
@@ -112,9 +104,25 @@ pub fn supervise_shell(env: &ClientEnv, shell: &str) {
     });
 }
 
+/// One of ours (cnde-shell, cnde-lock, ...): next to our own binary first
+/// (a dev build run from target/), then $PATH.
+fn prefer_sibling(argv: &mut [String]) {
+    let Some(name) = argv.first().filter(|name| name.starts_with("cnde-")) else {
+        return;
+    };
+    if let Some(sibling) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join(name)))
+        .filter(|path| path.is_file())
+    {
+        argv[0] = sibling.to_string_lossy().into_owned();
+    }
+}
+
 pub fn spawn_command_line(command: &str, env: &ClientEnv) {
     let env = env.clone();
-    let argv = split_command_line(command);
+    let mut argv = split_command_line(command);
+    prefer_sibling(&mut argv);
     thread::spawn(move || run_first_available(vec![argv], &env));
 }
 
