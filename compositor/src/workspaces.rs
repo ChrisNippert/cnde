@@ -316,7 +316,7 @@ impl State {
 
     /// Record every visible window's position relative to its monitor, so
     /// it can be drawn (and later re-placed) wherever its workspace goes.
-    fn store_local_positions(&mut self) {
+    pub(crate) fn store_local_positions(&mut self) {
         let windows: Vec<Window> = self.space.elements().cloned().collect();
         for window in windows {
             let (Some(loc), Some(output)) = (

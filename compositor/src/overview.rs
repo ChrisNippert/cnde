@@ -350,6 +350,12 @@ impl State {
             return;
         }
         debug!(open, "overview");
+        // The overview zooms each window from (and back to) its position
+        // local to its monitor, saved otherwise only when it opened or a
+        // workspace slide began: one moved since would jump at the end.
+        if !self.workspaces.is_moving() {
+            self.store_local_positions();
+        }
         self.overview.set_open(open);
         // Closing from the grid: the thumbnails zoom back with the rest.
         self.overview.app_grid = false;
