@@ -624,6 +624,24 @@ impl State {
         }
     }
 
+    /// Ask just these monitors for a frame.
+    pub fn udev_queue_redraw_outputs(&mut self, outputs: &[Output]) {
+        let crtcs: Vec<crtc::Handle> = self
+            .udev()
+            .and_then(|u| u.gpu.as_ref())
+            .map(|gpu| {
+                gpu.surfaces
+                    .iter()
+                    .filter(|(_, s)| outputs.contains(&s.output))
+                    .map(|(crtc, _)| *crtc)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for crtc in crtcs {
+            self.queue_output_redraw(crtc);
+        }
+    }
+
     /// Mark `crtc` as needing a frame. Rendering happens in
     /// [`udev_render_queued`](Self::udev_render_queued) at the end of the
     /// loop iteration, so several requests cost one frame.

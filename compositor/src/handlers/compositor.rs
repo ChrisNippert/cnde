@@ -3,16 +3,22 @@
 use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     delegate_compositor, delegate_shm,
-    reexports::wayland_server::{
-        Client,
-        protocol::{wl_buffer, wl_surface::WlSurface},
+    desktop::Window,
+    reexports::{
+        calloop::Interest,
+        wayland_server::{
+            Client, Resource,
+            protocol::{wl_buffer, wl_surface::WlSurface},
+        },
     },
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            CompositorClientState, CompositorHandler, CompositorState, get_parent,
-            is_sync_subsurface, with_states,
+            BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
+            SurfaceAttributes, add_blocker, add_pre_commit_hook, get_parent, is_sync_subsurface,
+            with_states,
         },
+        dmabuf::get_dmabuf,
         shell::xdg::XdgToplevelSurfaceData,
         shm::{ShmHandler, ShmState},
     },
@@ -37,9 +43,43 @@ impl CompositorHandler for State {
             .compositor_state
     }
 
+    /// Implicit sync: a client's dmabuf may still be rendering when it
+    /// commits. Hold the commit until the GPU is done with it, or our own
+    /// frame stalls behind the client's and misses vblank (games stutter).
+    fn new_surface(&mut self, surface: &WlSurface) {
+        add_pre_commit_hook::<Self, _>(surface, |state, _dh, surface| {
+            let dmabuf = with_states(surface, |states| {
+                let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+                match attrs.pending().buffer.as_ref() {
+                    Some(BufferAssignment::NewBuffer(buffer)) => get_dmabuf(buffer).cloned().ok(),
+                    _ => None,
+                }
+            });
+            let Some(dmabuf) = dmabuf else { return };
+            // Err means it's already ready: nothing to wait for.
+            let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) else {
+                return;
+            };
+            let Some(client) = surface.client() else { return };
+            let inserted = state.loop_handle.insert_source(source, move |_, _, state| {
+                let dh = state.display_handle.clone();
+                state
+                    .client_compositor_state(&client)
+                    .blocker_cleared(state, &dh);
+                Ok(())
+            });
+            if inserted.is_ok() {
+                add_blocker(surface, blocker);
+            }
+        });
+    }
+
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
 
+        // A window that only drew a new frame (same size, still mapped)
+        // needs just the monitors it's on redrawn.
+        let mut only_window = None;
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();
             while let Some(parent) = get_parent(&root) {
@@ -53,6 +93,8 @@ impl CompositorHandler for State {
                 let size = window.geometry().size;
                 if with_state(&window, |s| std::mem::replace(&mut s.last_size, size)) != size {
                     self.queue_pointer_refresh();
+                } else {
+                    only_window = Some(window.clone());
                 }
                 // A pending maximize/snap animation starts once the client has
                 // drawn at the size we asked for.
@@ -83,11 +125,30 @@ impl CompositorHandler for State {
         }
         xdg_shell::handle_commit(&mut self.popups, &self.space, &self.unmapped, surface);
         resize_grab::handle_commit(&mut self.space, surface);
-        self.queue_redraw();
+        self.queue_commit_redraw(only_window);
     }
 }
 
 impl State {
+    fn queue_commit_redraw(&mut self, window: Option<Window>) {
+        // Animations, the overview and a grab draw windows away from their
+        // own monitor, or over several: redraw them all then.
+        let simple = window.filter(|_| {
+            !self.overview.is_open()
+                && self.workspaces.motion.is_none()
+                && !self.seat.get_pointer().is_some_and(|p| p.is_grabbed())
+        });
+        let outputs = simple
+            .map(|w| self.space.outputs_for_element(&w))
+            .unwrap_or_default();
+        if outputs.is_empty() {
+            self.queue_redraw();
+        }
+        for output in &outputs {
+            self.queue_redraw_output(output);
+        }
+    }
+
     /// A toplevel becomes visible on its first buffer and hidden again if it
     /// attaches a null buffer.
     fn handle_toplevel_mapping(&mut self, surface: &WlSurface) {

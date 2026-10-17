@@ -63,6 +63,9 @@ pub struct State {
     pub config_path: Option<PathBuf>,
     /// Set whenever something on screen changed; the backend renders once per request.
     pub redraw_queued: bool,
+    /// Monitors that need a frame when only some do (a window's own commit);
+    /// `redraw_queued` overrides it with every monitor.
+    pub redraw_outputs: Vec<Output>,
     /// Set when windows moved or resized under the pointer; see `refresh_pointer_focus`.
     pub pointer_focus_dirty: bool,
 
@@ -181,6 +184,7 @@ impl State {
             config: Config::default(),
             config_path: None,
             redraw_queued: true,
+            redraw_outputs: Vec::new(),
             pointer_focus_dirty: false,
 
             space: Space::default(),
@@ -272,11 +276,17 @@ impl State {
             self.sync_workspace_membership();
             self.refresh_pointer_focus();
         }
+        let outputs = std::mem::take(&mut self.redraw_outputs);
         if self.redraw_queued {
             self.redraw_queued = false;
             match &self.backend {
                 Backend::Winit(winit) => winit.request_redraw(),
                 Backend::Udev(_) => self.udev_queue_redraw_all(),
+            }
+        } else if !outputs.is_empty() {
+            match &self.backend {
+                Backend::Winit(winit) => winit.request_redraw(),
+                Backend::Udev(_) => self.udev_queue_redraw_outputs(&outputs),
             }
         }
         // Why render here and not in an idle callback: calloop runs idles
@@ -331,6 +341,14 @@ impl State {
 
     pub fn queue_redraw(&mut self) {
         self.redraw_queued = true;
+    }
+
+    /// Only `output` changed, e.g. a game on one monitor drew a frame: the
+    /// other monitors needn't redraw.
+    pub fn queue_redraw_output(&mut self, output: &Output) {
+        if !self.redraw_outputs.contains(output) {
+            self.redraw_outputs.push(output.clone());
+        }
     }
 
     /// Window layout changed: re-check what's under the pointer at the next
