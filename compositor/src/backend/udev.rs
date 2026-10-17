@@ -735,7 +735,10 @@ impl State {
         let cursor_count = elements.len();
         // A screenshot being framed: the frozen screen, the tool on top.
         let frozen = self.screenshot.frozen_element(&output);
-        if let (Some(frozen), Some(geo)) = (frozen, self.space.output_geometry(&output)) {
+        if self.lock.is_locked() {
+            // Locked: the locker, and nothing else.
+            elements.extend(self.lock.elements(&mut gpu.renderer, &output));
+        } else if let (Some(frozen), Some(geo)) = (frozen, self.space.output_geometry(&output)) {
             elements.extend(render::overlay_elements(
                 &mut gpu.renderer,
                 &mut self.popup_anims,
@@ -786,12 +789,14 @@ impl State {
 
         // A style or wallpaper change: the old look, fading out on top
         // (under the pointer).
-        if self.crossfade.wants_capture(&output) {
+        if self.crossfade.wants_capture(&output) && !self.lock.is_locked() {
             self.crossfade
                 .capture(&mut gpu.renderer, &output, &elements[cursor_count..]);
         }
         let ready = self.wallpapers.ready(&output);
-        if let Some(fade) = self.crossfade.element(&output, ready, now) {
+        if let Some(fade) = self.crossfade.element(&output, ready, now)
+            && !self.lock.is_locked()
+        {
             elements.insert(cursor_count, render::OutputElement::Wallpaper(fade));
         }
 
@@ -822,6 +827,9 @@ impl State {
                 Ok(()) => {
                     surface.redraw = RedrawState::WaitingForVblank {
                         redraw_needed: false,
+                    };
+                    if self.lock.is_locked() {
+                        self.lock.frame_drawn();
                     }
                 }
                 Err(err) => warn!(?err, "failed to queue frame"),

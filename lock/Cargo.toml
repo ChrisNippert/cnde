@@ -1,0 +1,14 @@
+[package]
+name = "cnde-lock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cnde-ui = { path = "../ui" }
+cnde-config = { path = "../config" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "xkbcommon"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

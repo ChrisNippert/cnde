@@ -93,6 +93,7 @@ pub struct State {
     pub ipc: crate::ipc::IpcClients,
     pub popup_anims: crate::popup_anim::PopupAnims,
     pub capture: crate::capture::CaptureState,
+    pub lock: crate::lock::Lock,
     pub screenshot: crate::screenshot::Screenshot,
     /// Super+Shift+S without a shell: capture this monitor once frozen.
     pub pending_quick_shot: Option<String>,
@@ -152,6 +153,9 @@ impl State {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(&dh);
+        let lock = crate::lock::Lock::new(
+            smithay::wayland::session_lock::SessionLockManagerState::new::<Self, _>(&dh, |_| true),
+        );
         crate::ext_workspace::init(&dh);
         let capture = crate::capture::CaptureState::new(&dh);
         let mut seat_state = SeatState::new();
@@ -197,6 +201,7 @@ impl State {
             ipc: Default::default(),
             popup_anims: Default::default(),
             capture,
+            lock,
             screenshot: Default::default(),
             pending_quick_shot: None,
             snap_preview: None,
@@ -310,6 +315,11 @@ impl State {
                 Some(output.clone())
             });
         }
+        if let Some(surface) = self.lock.surface(output) {
+            send_frames_surface_tree(surface, output, elapsed, Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            });
+        }
     }
 
     pub fn client_env(&self) -> crate::spawn::ClientEnv {
@@ -365,6 +375,9 @@ impl State {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        if self.lock.is_locked() {
+            return self.lock_surface_under(pos);
+        }
         if let Some((_, surface, loc)) =
             self.layer_surface_under(self.layers_above_windows(pos), pos)
         {

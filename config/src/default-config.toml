@@ -89,3 +89,9 @@
 # Start PipeWire (sound) when nothing else does, e.g. on Alpine without
 # systemd. Skipped if PipeWire is already running.
 # audio = true
+
+[lock]
+# The program that locks the screen (Super+L). Any locker using the
+# ext-session-lock protocol works, e.g. "swaylock" or "gtklock". If it
+# crashes while locked, the screen stays locked and it's started again.
+# command = "cnde-lock"

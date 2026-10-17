@@ -49,6 +49,8 @@ icon("actions", "system-search", '<circle cx="7" cy="7" r="4.25"/><path d="M10.2
 icon("actions", "media-playback-pause", '<path d="M5.5 4v8M10.5 4v8"/>')
 icon("actions", "system-shutdown", '<path d="M8 2.5v5"/><path d="M4.6 4.6a5 5 0 1 0 6.8 0"/>')
 icon("actions", "system-reboot", '<path d="M12.5 8a4.5 4.5 0 1 1-1.3-3.2"/><path d="M11.75 2v3h-3"/>')
+icon("actions", "system-lock-screen",
+     '<rect x="3.5" y="7" width="9" height="7" rx="2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/><path d="M8 10v1.25"/>')
 # Four rounded tiles rather than GNOME's nine dots.
 icon("actions", "view-app-grid",
      fill("M3 4.5A1.5 1.5 0 0 1 4.5 3h1A1.5 1.5 0 0 1 7 4.5v1A1.5 1.5 0 0 1 5.5 7h-1A1.5 1.5 0 0 1 3 5.5z"

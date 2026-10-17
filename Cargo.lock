@@ -458,6 +458,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cnde-lock"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "cnde-config",
+ "cnde-ui",
+ "image",
+ "smithay-client-toolkit 0.21.1",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cnde-settings"
 version = "0.1.0"
 dependencies = [

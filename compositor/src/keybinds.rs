@@ -39,6 +39,8 @@ pub enum Action {
     },
     /// Volume and brightness keys, passed to the shell.
     Media(cnde_ipc::MediaKey),
+    /// Super+L.
+    Lock,
 }
 
 /// The volume and brightness keys, with or without modifiers.
@@ -121,6 +123,7 @@ pub fn action_for(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> Option
         (false, keysyms::KEY_f) => Action::SpawnBrowser,
         (false, keysyms::KEY_c) => Action::CloseWindow,
         (false, keysyms::KEY_a) => Action::AppGrid,
+        (false, keysyms::KEY_l) => Action::Lock,
         (false, keysyms::KEY_Up) => Action::Maximize,
         (false, keysyms::KEY_Down) => Action::Restore,
         (false, keysyms::KEY_Left) => Action::SnapLeft,

@@ -172,6 +172,9 @@ impl State {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
+        if self.lock.is_locked() {
+            return;
+        }
         if keyboard.current_focus().as_ref() != Some(layer.wl_surface()) {
             keyboard.set_focus(
                 self,

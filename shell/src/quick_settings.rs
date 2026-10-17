@@ -44,6 +44,7 @@ pub enum Hit {
     Power,
     /// Opens cnde-settings.
     Settings,
+    Lock,
     Suspend,
     Reboot,
     PowerOff,
@@ -185,8 +186,8 @@ pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layou
 
     let power_menu = power_menu_open.then(|| {
         let gap = theme.qs_gap;
-        let tile_w = (inner - 2.0 * gap) / 3.0;
-        let items = [Hit::Suspend, Hit::Reboot, Hit::PowerOff]
+        let tile_w = (inner - 3.0 * gap) / 4.0;
+        let items = [Hit::Lock, Hit::Suspend, Hit::Reboot, Hit::PowerOff]
             .iter()
             .enumerate()
             .map(|(i, &hit)| {
@@ -456,8 +457,9 @@ impl QuickSettings {
                 crate::apps::open_settings(None);
                 return true;
             }
-            Some(hit @ (Hit::Suspend | Hit::Reboot | Hit::PowerOff)) => {
+            Some(hit @ (Hit::Lock | Hit::Suspend | Hit::Reboot | Hit::PowerOff)) => {
                 actions.run(match hit {
+                    Hit::Lock => Action::Lock,
                     Hit::Suspend => Action::Suspend,
                     Hit::Reboot => Action::Reboot,
                     _ => Action::PowerOff,
@@ -862,6 +864,7 @@ fn paint(
             theme.qs_tile,
         );
         let (icon, label) = match hit {
+            Hit::Lock => ("system-lock-screen-symbolic", "Lock"),
             Hit::Suspend => ("media-playback-pause-symbolic", "Suspend"),
             Hit::Reboot => ("system-reboot-symbolic", "Restart"),
             _ => ("system-shutdown-symbolic", "Power Off"),
@@ -995,7 +998,7 @@ mod tests {
         let closed = layout(&theme, false, Features::default());
         let open = layout(&theme, true, Features::default());
         assert!(open.height > closed.height);
-        let reboot = open.power_menu.as_ref().unwrap()[1].0;
+        let reboot = open.power_menu.as_ref().unwrap()[2].0;
         assert_eq!(
             open.hit(((reboot.x + 5.0) as f64, (reboot.y + 5.0) as f64)),
             Some(Hit::Reboot)

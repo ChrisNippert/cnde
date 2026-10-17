@@ -211,7 +211,11 @@ impl State {
                 None => Vec::new(),
             };
             let frozen = self.screenshot.frozen_element(&backend.output);
-            let mut elements = if let (Some(frozen), Some(geo)) = (frozen, output_geo) {
+            let locked = self.lock.is_locked();
+            let mut elements = if locked {
+                // Locked: the locker, and nothing else.
+                self.lock.elements(renderer, &backend.output)
+            } else if let (Some(frozen), Some(geo)) = (frozen, output_geo) {
                 let mut elements = render::overlay_elements(
                     renderer,
                     &mut self.popup_anims,
@@ -236,7 +240,7 @@ impl State {
                     now,
                 )
             };
-            if self.screenshot.frozen_element(&backend.output).is_none() {
+            if self.screenshot.frozen_element(&backend.output).is_none() && !locked {
                 if let Some(wallpaper) = self.wallpapers.element(renderer, &backend.output) {
                     elements.push(render::OutputElement::Wallpaper(wallpaper));
                 }
@@ -245,11 +249,13 @@ impl State {
                 }
             }
             // A style or wallpaper change: the old look, fading out on top.
-            if self.crossfade.wants_capture(&backend.output) {
+            if self.crossfade.wants_capture(&backend.output) && !locked {
                 self.crossfade.capture(renderer, &backend.output, &elements);
             }
             let ready = self.wallpapers.ready(&backend.output);
-            if let Some(fade) = self.crossfade.element(&backend.output, ready, now) {
+            if let Some(fade) = self.crossfade.element(&backend.output, ready, now)
+                && !locked
+            {
                 elements.insert(0, render::OutputElement::Wallpaper(fade));
             }
             let damage = match backend.damage_tracker.render_output(
@@ -285,6 +291,9 @@ impl State {
         }
 
         let output = backend.output.clone();
+        if self.lock.is_locked() {
+            self.lock.frame_drawn();
+        }
         self.send_frame_callbacks(&output);
 
         self.closing.retain(|c| !c.is_done(now));

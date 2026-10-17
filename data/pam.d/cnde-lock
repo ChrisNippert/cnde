@@ -1,0 +1,2 @@
+# cnde-lock checks your password the way the console login does.
+auth include login

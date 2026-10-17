@@ -25,6 +25,7 @@ pub enum Action {
     /// Percent of the panel's maximum brightness.
     SetBrightness(u32),
     SetPowerProfile(crate::status::PowerProfile),
+    Lock,
     Suspend,
     Reboot,
     PowerOff,
@@ -79,6 +80,7 @@ fn perform(action: Action) {
         Action::SetWifi(enabled) => set_wifi(*enabled),
         Action::SetBrightness(percent) => set_brightness(*percent),
         Action::SetPowerProfile(profile) => set_power_profile(*profile),
+        Action::Lock => compositor(&cnde_ipc::Request::LockScreen),
         Action::Suspend => login1("Suspend"),
         Action::Reboot => login1("Reboot"),
         Action::PowerOff => login1("PowerOff"),
@@ -100,6 +102,15 @@ fn pactl(args: &[&str]) -> Result<(), String> {
         .success()
         .then_some(())
         .ok_or_else(|| format!("pactl exited with {status}"))
+}
+
+/// A one-off request to the compositor, on a connection of its own.
+fn compositor(request: &cnde_ipc::Request) -> Result<(), String> {
+    use std::io::Write;
+    let path = std::env::var_os(cnde_ipc::SOCKET_ENV).ok_or("no CNDE_SOCKET")?;
+    std::os::unix::net::UnixStream::connect(path)
+        .and_then(|mut stream| stream.write_all(&cnde_ipc::encode(request)))
+        .map_err(|err| err.to_string())
 }
 
 /// systemd-logind, or elogind on non-systemd systems (same bus name).

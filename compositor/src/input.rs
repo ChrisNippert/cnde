@@ -77,7 +77,7 @@ impl State {
             // fingers have moved a little.
             // TODO: forward other gestures to clients (pointer-gestures).
             InputEvent::GestureSwipeBegin { event, .. } => {
-                if event.fingers() == 3 {
+                if event.fingers() == 3 && !self.lock.is_locked() {
                     self.swipe_active = true;
                     self.swipe_sideways = None;
                     self.swipe_pending = (0.0, 0.0);
@@ -152,6 +152,12 @@ impl State {
                     state.suppressed_keys.push(keycode);
                     state.start_media_repeat(keycode, key);
                     return FilterResult::Intercept(Some(Action::Media(key)));
+                }
+                // Locked: every other key is the locker's (no bindings,
+                // not even quitting, which would drop to a logged-in TTY).
+                if state.lock.is_locked() {
+                    state.mod_tap_armed = false;
+                    return FilterResult::Forward;
                 }
                 let Some(sym) = handle.raw_latin_sym_or_raw_current_sym() else {
                     return FilterResult::Forward;
@@ -233,7 +239,11 @@ impl State {
     }
 
     fn run_action(&mut self, action: Action) {
+        if self.lock.is_locked() && !matches!(action, Action::Media(_) | Action::SwitchVt(_)) {
+            return;
+        }
         match action {
+            Action::Lock => self.lock_screen(),
             Action::Quit => self.loop_signal.stop(),
             Action::SpawnTerminal => spawn::spawn_terminal(&self.client_env()),
             Action::SpawnBrowser => spawn::spawn_browser(&self.client_env()),
@@ -333,8 +343,10 @@ impl State {
             },
         );
         pointer.frame(self);
-        self.bar_motion(location);
-        self.check_hot_corner(location);
+        if !self.lock.is_locked() {
+            self.bar_motion(location);
+            self.check_hot_corner(location);
+        }
         // We draw the cursor ourselves on real hardware.
         if self.backend.draws_cursor() {
             self.queue_redraw();
@@ -348,6 +360,20 @@ impl State {
         let serial = SERIAL_COUNTER.next_serial();
         // Mod+click (e.g. Super+drag) is not a tap.
         self.mod_tap_armed = false;
+        // Locked: clicks are only for the locker.
+        if self.lock.is_locked() {
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    button,
+                    state: button_state,
+                    serial,
+                    time,
+                },
+            );
+            pointer.frame(self);
+            return;
+        }
         debug!(button, ?button_state, location = ?pointer.current_location(), "pointer button");
 
         if button_state == ButtonState::Released
@@ -365,6 +391,7 @@ impl State {
             {
                 if layer.can_receive_keyboard_focus()
                     && self.exclusive_layer().is_none()
+                    && !self.lock.is_locked()
                     && let Some(keyboard) = self.seat.get_keyboard()
                 {
                     keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);

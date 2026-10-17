@@ -3,6 +3,7 @@
 #   cnde-compositor  the session itself (required by the rest)
 #   cnde-shell       top bar, dock, overview search, quick settings
 #   cnde-settings    the Settings app
+#   cnde-lock        the lock screen (Super+L)
 #   cnde-icons       cnde's own symbolic icons (else Adwaita's are used)
 #   cnde             all of the above
 #
@@ -14,7 +15,7 @@
 #   cd packaging/arch && makepkg -si
 
 pkgbase=cnde-git
-pkgname=(cnde-compositor cnde-shell cnde-settings cnde-icons cnde)
+pkgname=(cnde-compositor cnde-shell cnde-settings cnde-lock cnde-icons cnde)
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="A small, configurable Wayland desktop"
@@ -46,6 +47,7 @@ package_cnde-compositor() {
                 'xdg-desktop-portal-gtk: file pickers and settings for apps'
                 'xdg-desktop-portal-wlr: screen sharing'
                 'cnde-shell: the top bar and dock'
+                'cnde-lock: the lock screen'
                 'cnde-icons: cnde-style icons on title bars')
     cd cnde
     install -Dm755 target/release/cnde-compositor -t "$pkgdir/usr/bin"
@@ -70,6 +72,15 @@ package_cnde-settings() {
     install -Dm644 data/cnde-settings.desktop -t "$pkgdir/usr/share/applications"
 }
 
+package_cnde-lock() {
+    pkgdesc="cnde's lock screen"
+    depends=(cnde-compositor libxkbcommon pam)
+    backup=(etc/pam.d/cnde-lock)
+    cd cnde
+    install -Dm755 target/release/cnde-lock -t "$pkgdir/usr/bin"
+    install -Dm644 data/pam.d/cnde-lock -t "$pkgdir/etc/pam.d"
+}
+
 package_cnde-icons() {
     pkgdesc="cnde's symbolic icons"
     arch=(any)
@@ -79,7 +90,7 @@ package_cnde-icons() {
 }
 
 package_cnde() {
-    pkgdesc="cnde desktop: compositor, shell, settings and icons"
+    pkgdesc="cnde desktop: compositor, shell, settings, lock screen and icons"
     arch=(any)
-    depends=(cnde-compositor cnde-shell cnde-settings cnde-icons)
+    depends=(cnde-compositor cnde-shell cnde-settings cnde-lock cnde-icons)
 }

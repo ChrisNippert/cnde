@@ -132,6 +132,8 @@ pub enum Request {
     /// An app was just started: show a busy pointer until a window opens
     /// (or a few seconds pass).
     Launching,
+    /// Lock the screen, as Super+L does.
+    LockScreen,
     /// Testing aid, honoured only by debug builds: move the pointer to
     /// (x, y) in the global space, then press or release the left button.
     FakePointer {

@@ -18,6 +18,7 @@ mod input;
 mod ipc;
 mod keybinds;
 mod layers;
+mod lock;
 mod overview;
 mod popup_anim;
 mod portals;

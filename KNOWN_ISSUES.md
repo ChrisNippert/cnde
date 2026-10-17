@@ -15,6 +15,11 @@ entries when they're done.
 
 ## Rough edges
 
+- **Lock screen** (Super+L, `cnde-lock`) is tested only in a nested session
+  with a test password: real PAM, multiple monitors and the udev backend are
+  untested. No idle lock or lock-before-suspend yet (logind's Lock signal),
+  and no fingerprint.
+
 - **Maximized windows crossing monitors of different resolution** visibly
   change as the app redraws at the new size when a workspace slide settles.
   The squeeze (`PendingSize`) keeps it from overflowing, but a crossfade from

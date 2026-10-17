@@ -43,6 +43,10 @@ being absent:
   another bar, or `""` for none.
 - Without `cnde-settings`, the shell leaves out its Settings menu items and
   the quick-settings gear; `config.toml` still does everything.
+- Without `cnde-lock`, Super+L and the quick-settings Lock button do
+  nothing unless `lock.command` names another ext-session-lock locker
+  (swaylock, ...). `cnde-lock` checks passwords through PAM: its own
+  `/etc/pam.d/cnde-lock` if installed, else the `login` service.
 - Without `cnde-icons`, symbolic icons come from Adwaita (and an
   uninstalled build finds them in the source tree's `icons/`).
 
@@ -51,7 +55,10 @@ being absent:
 - If `cnde-shell` crashes, the compositor restarts it, and windows are unaffected.
 - `cnde-lock` is separate from the shell so a shell crash can never unlock the
   screen. The ext-session-lock protocol already guarantees the compositor
-  keeps the screen locked if the lock client dies, and we keep that behaviour.
+  keeps the screen locked if the lock client dies, and we keep that behaviour:
+  the compositor starts `lock.command` again after 2 s with no lock surface.
+  A second locker is accepted only while none is alive, so locking again
+  can't be used to take over and unlock.
 - Only a crash in the compositor ends the session. Keep it boring and well tested.
 
 ## 3. Repository layout

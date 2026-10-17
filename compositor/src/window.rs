@@ -237,6 +237,14 @@ impl State {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
+        // Locked: the keyboard stays with the locker.
+        if self.lock.is_locked() {
+            if let Some(window) = window {
+                self.space.raise_element(window, true);
+                self.workspaces.raise(window);
+            }
+            return;
+        }
         if let Some(window) = window {
             self.space.raise_element(window, true);
             self.workspaces.raise(window);

@@ -31,6 +31,7 @@ pub struct Config {
     pub dock: Dock,
     pub launcher: Launcher,
     pub autostart: Autostart,
+    pub lock: Lock,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -451,6 +452,22 @@ pub struct Autostart {
     pub shell: String,
     /// Start PipeWire if the system doesn't (no systemd, e.g. Alpine).
     pub audio: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Lock {
+    /// The program that locks the screen (Super+L): any ext-session-lock
+    /// locker, e.g. "swaylock". Restarted if it dies while locked.
+    pub command: String,
+}
+
+impl Default for Lock {
+    fn default() -> Self {
+        Self {
+            command: "cnde-lock".into(),
+        }
+    }
 }
 
 impl Default for Autostart {

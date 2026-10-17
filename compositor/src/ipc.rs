@@ -142,6 +142,15 @@ impl State {
 
     fn handle_ipc_request(&mut self, request: Request) {
         debug!(?request, "IPC request");
+        // Locked: nothing the shell asks for may show or change anything.
+        if self.lock.is_locked()
+            && !matches!(
+                request,
+                Request::FakePointer { .. } | Request::FakeMediaKey { .. }
+            )
+        {
+            return;
+        }
         match request {
             Request::SetOverview { open } => self.set_overview(open),
             Request::ToggleOverview => self.activities_clicked(),
@@ -171,6 +180,7 @@ impl State {
                     toplevel.send_close();
                 }
             }
+            Request::LockScreen => self.lock_screen(),
             Request::Launching => {
                 self.launching = Some(std::time::Instant::now());
                 self.queue_redraw();

@@ -141,6 +141,10 @@ impl XdgShellHandler for State {
         if self.window_for_surface(&root).is_none() && !self.is_layer_surface(&root) {
             return;
         }
+        // Locked: nothing hidden behind the locker may take the keyboard.
+        if self.lock.is_locked() {
+            return;
+        }
         let mut grab = match self.popups.grab_popup(root, kind, &seat, serial) {
             Ok(grab) => grab,
             Err(err) => {
