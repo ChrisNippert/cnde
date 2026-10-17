@@ -210,6 +210,20 @@ impl State {
                 ),
                 None => Vec::new(),
             };
+            let over_windows = match (scene.as_ref().and_then(|s| s.close.as_ref()), output_geo) {
+                (Some(close), Some(geo)) => self
+                    .decorations
+                    .close_button(
+                        renderer,
+                        close.rect,
+                        close.hovered,
+                        geo.loc.to_f64(),
+                        backend.output.current_scale().fractional_scale().into(),
+                    )
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            };
             let frozen = self.screenshot.frozen_element(&backend.output);
             let locked = self.lock.is_locked();
             let mut elements = if locked {
@@ -234,6 +248,7 @@ impl State {
                     scene.map(|s| s.windows),
                     backdrop,
                     frost,
+                    over_windows,
                     &mut self.decorations,
                     &mut self.popup_anims,
                     &backend.output,

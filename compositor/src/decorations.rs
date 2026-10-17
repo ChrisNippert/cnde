@@ -152,6 +152,8 @@ pub struct Decorations {
     pub appearance: cnde_config::Appearance,
     /// Minimize and maximize buttons too (`appearance.window_buttons`).
     pub all_buttons: bool,
+    /// The overview's close button, per scale and hover state.
+    close_buttons: Vec<((u64, bool), MemoryRenderBuffer)>,
 }
 
 /// A press on a bar that may yet become a drag (or a double-click).
@@ -234,6 +236,72 @@ impl Decorations {
             element,
             location.to_i32_round(),
             stretch,
+        )))
+    }
+
+    /// The overview's close button over `rect` (global; see
+    /// `overview::CloseButton`), on an output at `output_loc`.
+    pub fn close_button(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        rect: Rectangle<f64, Logical>,
+        hovered: bool,
+        output_loc: Point<f64, Logical>,
+        scale: Scale<f64>,
+    ) -> Option<OutputElement> {
+        let key = (scale.x.to_bits(), hovered);
+        let size = crate::overview::CLOSE_SIZE;
+        let pixels = (size * scale.x).round() as u32;
+        if !self.close_buttons.iter().any(|(k, _)| *k == key) {
+            let mut data = vec![0u8; (pixels * pixels * 4) as usize];
+            {
+                let icons = self.icons.get_or_insert_with(Icons::new);
+                icons.set_theme(&self.appearance.icon_theme);
+                let mut canvas = Canvas::new(&mut data, pixels, pixels, scale.x as f32)?;
+                let s = size as f32;
+                canvas.clear(Color::rgba(0, 0, 0, 0.0));
+                let fill = if hovered { 0x50 } else { 0x36 };
+                canvas.circle(
+                    s / 2.0,
+                    s / 2.0,
+                    s / 2.0,
+                    Color::rgba(fill, fill, fill, 0.95),
+                );
+                let icon = 16.0;
+                let at = (s - icon) / 2.0;
+                let white = Color::rgba(0xff, 0xff, 0xff, 1.0);
+                canvas.icon(icons, "window-close-symbolic", at, at, icon, white);
+            }
+            let buffer = MemoryRenderBuffer::from_slice(
+                &data,
+                Fourcc::Abgr8888,
+                (pixels as i32, pixels as i32),
+                1,
+                Transform::Normal,
+                None,
+            );
+            self.close_buttons.push((key, buffer));
+        }
+        let (_, buffer) = self.close_buttons.iter().find(|(k, _)| *k == key)?;
+        let location = (rect.loc - output_loc).to_physical(scale);
+        let element = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            location,
+            buffer,
+            None,
+            Some(Rectangle::from_size(Size::from((
+                pixels as f64,
+                pixels as f64,
+            )))),
+            Some(Size::from((size as i32, size as i32))),
+            Kind::Unspecified,
+        )
+        .map_err(|err| warn!(?err, "can't upload the close button"))
+        .ok()?;
+        Some(OutputElement::Titlebar(RescaleRenderElement::from_element(
+            element,
+            location.to_i32_round(),
+            Scale::from(1.0),
         )))
     }
 

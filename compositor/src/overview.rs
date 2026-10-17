@@ -54,6 +54,10 @@ const TILE_RADIUS: f64 = 18.0;
 /// Space around and between spread-out windows on a card (full size).
 const SPREAD_PADDING: f64 = 32.0;
 const SPREAD_GAP: f64 = 28.0;
+/// The close button on the window under the pointer: its diameter, and how
+/// far its centre sits in from the window's top-right corner (logical).
+pub const CLOSE_SIZE: f64 = 28.0;
+const CLOSE_INSET: f64 = 4.0;
 /// Pointer this close to the top-left corner opens the overview.
 const HOT_CORNER: f64 = 1.0;
 /// ...and must leave this far before the corner works again.
@@ -121,6 +125,16 @@ pub struct Scene {
     /// Bottom to top.
     pub windows: Vec<Placed>,
     pub cards: Vec<Card>,
+    /// The window under the pointer, once it's fully open (GNOME-style).
+    pub close: Option<CloseButton>,
+}
+
+pub struct CloseButton {
+    pub window: Window,
+    /// Global coordinates.
+    pub rect: Rectangle<f64, Logical>,
+    /// The pointer is on the button itself.
+    pub hovered: bool,
 }
 
 pub struct Card {
@@ -412,6 +426,7 @@ impl State {
                 progress: 0.0,
                 windows,
                 cards: Vec::new(),
+                close: None,
             });
         }
 
@@ -452,6 +467,7 @@ impl State {
             progress,
             windows: Vec::new(),
             cards: Vec::new(),
+            close: None,
         };
         for (index, workspace) in self.workspaces.list.iter().enumerate() {
             let slot = index as f64 - position + main as f64;
@@ -539,7 +555,21 @@ impl State {
                 workspace,
             });
         }
+        let settled = progress >= 1.0
+            && grid <= 0.0
+            && self.overview.drag.is_none()
+            && self.workspaces.motion.is_none();
+        if settled && let Some(pointer) = self.seat.get_pointer() {
+            scene.close = close_button(&scene.windows, pointer.current_location());
+        }
         Some(scene)
+    }
+
+    /// The window whose overview close button is at `pos`.
+    fn overview_close_hit(&self, pos: Point<f64, Logical>) -> Option<Window> {
+        let output = self.space.output_under(pos).next()?.clone();
+        let close = self.scene(&output, Instant::now())?.close?;
+        close.rect.contains(pos).then_some(close.window)
     }
 
     /// What's under `pos` in the open overview.
@@ -560,6 +590,12 @@ impl State {
 
     /// A click in the overview: go to the window or workspace under it.
     pub fn overview_click(&mut self, pos: Point<f64, Logical>) {
+        if let Some(window) = self.overview_close_hit(pos) {
+            if let Some(toplevel) = window.toplevel() {
+                toplevel.send_close();
+            }
+            return;
+        }
         let hit = self.overview_hit(pos);
         let (index, window) = match hit {
             Some(Hit::Window(window, index)) => (index, Some(window)),
@@ -631,6 +667,38 @@ impl State {
 /// The overview's backdrop for `output`, top first: a frosted-glass tile
 /// per workspace card, a darkening layer, and the blurred wallpaper fading
 /// in over the sharp one.
+/// The close button for the topmost window under `pointer` (its button
+/// pokes out past the corner, so it counts as part of the window).
+fn close_button(windows: &[Placed], pointer: Point<f64, Logical>) -> Option<CloseButton> {
+    windows.iter().rev().find_map(|placed| {
+        let bar = crate::decorations::titlebar_height(&placed.window) as f64;
+        let mut whole = placed.rect;
+        whole.loc.y -= bar;
+        whole.size.h += bar;
+        let shown = placed.zoom.apply(whole);
+        let rect = close_rect(shown);
+        let hovered = rect.contains(pointer);
+        (hovered || shown.contains(pointer)).then(|| CloseButton {
+            window: placed.window.clone(),
+            rect,
+            hovered,
+        })
+    })
+}
+
+/// Where the close button sits on a window shown at `shown`: over its
+/// top-right corner.
+fn close_rect(shown: Rectangle<f64, Logical>) -> Rectangle<f64, Logical> {
+    let centre = Point::from((
+        shown.loc.x + shown.size.w - CLOSE_INSET,
+        shown.loc.y + CLOSE_INSET,
+    ));
+    Rectangle::new(
+        centre - Point::from((CLOSE_SIZE / 2.0, CLOSE_SIZE / 2.0)),
+        Size::from((CLOSE_SIZE, CLOSE_SIZE)),
+    )
+}
+
 pub fn backdrop(
     overview: &mut Overview,
     wallpapers: &Wallpapers,
@@ -855,6 +923,16 @@ mod tests {
             && b.loc.x < a.loc.x + a.size.w
             && a.loc.y < b.loc.y + b.size.h
             && b.loc.y < a.loc.y + a.size.h
+    }
+
+    #[test]
+    fn close_button_covers_the_top_right_corner() {
+        let shown = Rectangle::new(Point::from((100.0, 50.0)), size(400.0, 300.0));
+        let rect = close_rect(shown);
+        assert_eq!(rect.size, size(CLOSE_SIZE, CLOSE_SIZE));
+        assert!(rect.contains(Point::from((499.0, 51.0))), "the corner");
+        assert!(rect.loc.x + rect.size.w > 500.0, "pokes out to the right");
+        assert!(rect.loc.y < 50.0, "and above");
     }
 
     #[test]

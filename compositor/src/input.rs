@@ -354,8 +354,9 @@ impl State {
             self.bar_motion(location);
             self.check_hot_corner(location);
         }
-        // We draw the cursor ourselves on real hardware.
-        if self.backend.draws_cursor() {
+        // We draw the cursor ourselves on real hardware; the overview's
+        // close button follows the pointer.
+        if self.backend.draws_cursor() || self.overview.is_open() {
             self.queue_redraw();
         }
     }

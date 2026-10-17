@@ -765,6 +765,23 @@ impl State {
                 ),
                 None => Vec::new(),
             };
+            let over_windows = match (
+                scene.as_ref().and_then(|s| s.close.as_ref()),
+                self.space.output_geometry(&output),
+            ) {
+                (Some(close), Some(geo)) => self
+                    .decorations
+                    .close_button(
+                        &mut gpu.renderer,
+                        close.rect,
+                        close.hovered,
+                        geo.loc.to_f64(),
+                        output.current_scale().fractional_scale().into(),
+                    )
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            };
             elements.extend(render::output_elements(
                 &mut gpu.renderer,
                 &self.space,
@@ -773,6 +790,7 @@ impl State {
                 scene.map(|s| s.windows),
                 backdrop,
                 frost,
+                over_windows,
                 &mut self.decorations,
                 &mut self.popup_anims,
                 &output,

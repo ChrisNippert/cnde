@@ -177,6 +177,8 @@ pub fn output_elements(
     // Frosted glass under the dock (see `frost`): just below the layers
     // above the windows.
     frost: Vec<OutputElement>,
+    // Just above the windows (the overview's close button).
+    over_windows: Vec<OutputElement>,
     decorations: &mut crate::decorations::Decorations,
     popups: &mut PopupAnims,
     output: &Output,
@@ -251,6 +253,7 @@ pub fn output_elements(
         elements.extend(layer(renderer, Layer::Top));
         elements.extend(frost);
     }
+    elements.extend(over_windows);
     elements.extend(window_elements);
     if fullscreen {
         elements.extend(layer(renderer, Layer::Top));
