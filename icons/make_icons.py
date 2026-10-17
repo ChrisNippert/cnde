@@ -150,6 +150,7 @@ icon("status", "display-brightness",
      '<circle cx="8" cy="8" r="2.75"/><path d="M8 1.75v1M8 13.25v1M1.75 8h1M13.25 8h1M3.6 3.6l.7.7M11.7 11.7l.7.7M3.6 12.4l.7-.7M11.7 4.3l.7-.7"/>')
 icon("status", "weather-clear-night", fill("M10.5 2.25A5.75 5.75 0 1 0 13.75 10 4.5 4.5 0 0 1 10.5 2.25z"))
 icon("status", "bluetooth-disabled", '<path d="M4.5 5.25L11 10.5 8 13V3l3 2.5-6.5 5.25" opacity="0.5"/><path d="M2.5 2.5l11 11"/>')
+icon("status", "bluetooth-active", '<path d="M4.5 5.25L11 10.5 8 13V3l3 2.5-6.5 5.25"/>')
 icon("status", "notifications-disabled",
      '<path d="M4.25 11.25V7.5a3.75 3.75 0 0 1 6.4-2.65M11.75 7.5v3.75H5.5M6.75 13.25h2.5"/><path d="M2.5 2.5l11 11"/>')
 icon("status", "power-profile-balanced", '<path d="M8 2.5v11M3 5.5h10"/><path d="M3 5.5l-1.5 4a1.75 1.75 0 0 0 3 0zM13 5.5l-1.5 4a1.75 1.75 0 0 0 3 0z"/>')

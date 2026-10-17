@@ -83,6 +83,7 @@ pub struct Status {
     pub wifi_enabled: Option<bool>,
     pub volume: Option<status::Volume>,
     pub power_profiles: Option<status::PowerProfiles>,
+    pub bluetooth: Option<status::Bluetooth>,
     /// Read when quick settings opens; `None` on desktops.
     pub backlight: Option<status::Backlight>,
 }
@@ -95,6 +96,7 @@ impl Status {
             Update::WifiEnabled(enabled) => self.wifi_enabled = enabled,
             Update::Volume(volume) => self.volume = volume,
             Update::PowerProfiles(profiles) => self.power_profiles = profiles,
+            Update::Bluetooth(bluetooth) => self.bluetooth = bluetooth,
         }
     }
 }
@@ -294,6 +296,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .insert_source(status_rx, |event, _, app| {
             if let Event::Msg(update) = event {
                 app.status.apply(update);
+                if let Some((qs, _)) = &mut app.quick_settings {
+                    qs.status_changed(&app.xdg_shell, &app.theme, &app.status);
+                }
                 app.redraw_all();
             }
         })?;
@@ -877,14 +882,20 @@ impl App {
         } else {
             self.draw_quick_settings();
             // Redraw once a pressed toggle's wait is over, so a refused
-            // change visibly snaps back.
+            // change visibly snaps back (and again while a Bluetooth
+            // device is still connecting).
             if matches!(event.kind, PointerEventKind::Press { .. }) {
                 let wait = quick_settings::CONFIRM_WITHIN + Duration::from_millis(50);
                 let _ = self
                     .loop_handle
                     .insert_source(Timer::from_duration(wait), |_, _, app| {
                         app.draw_quick_settings();
-                        TimeoutAction::Drop
+                        match &app.quick_settings {
+                            Some((qs, _)) if qs.waiting() => {
+                                TimeoutAction::ToDuration(Duration::from_secs(1))
+                            }
+                            _ => TimeoutAction::Drop,
+                        }
                     });
             }
         }

@@ -65,25 +65,60 @@ impl ResizeAnim {
 }
 
 /// A size change applied without animation (dragging a fullscreen or
-/// maximized window off): until the client draws at `size`, show its old
-/// contents squeezed into `size` at the window's live position, so a stale
+/// maximized window off, or a workspace slide handing it to a monitor of
+/// another size): until the client draws at `size`, show its old contents
+/// squeezed into `size` at the window's live position, so a stale
 /// full-screen buffer never spills onto other monitors.
-pub struct PendingSize {
+///
+/// Generic over the snapshot only so the commit logic can be unit-tested;
+/// the compositor uses `Snapshot`.
+pub struct PendingSize<S = Snapshot> {
     size: Size<i32, Logical>,
     /// The client's size when we asked for `size`.
     old_size: Size<i32, Logical>,
     serial: Serial,
     since: Instant,
+    /// The old contents, if they should crossfade into the redrawn window
+    /// rather than being swapped for it in one frame.
+    snapshot: Option<S>,
+    /// That crossfade, once the client has caught up.
+    fade: Option<Animation>,
 }
 
-impl PendingSize {
+impl<S> PendingSize<S> {
     pub fn new(size: Size<i32, Logical>, old_size: Size<i32, Logical>, serial: Serial) -> Self {
         Self {
             size,
             old_size,
             serial,
             since: Instant::now(),
+            snapshot: None,
+            fade: None,
         }
+    }
+
+    /// Crossfade from `snapshot` once the client redraws.
+    pub fn with_snapshot(mut self, snapshot: Option<S>) -> Self {
+        self.snapshot = snapshot;
+        self
+    }
+
+    /// Called on each commit. Whether it's over: the client has caught up
+    /// and there are no old contents to fade out. If there are, the fade
+    /// starts now and `window_frame` drops it once done.
+    pub fn on_commit(&mut self, acked: Option<Serial>, current: Size<i32, Logical>) -> bool {
+        if self.fade.is_some() || !self.is_resolved(acked, current) {
+            return false;
+        }
+        if self.snapshot.is_none() {
+            return true;
+        }
+        self.fade = Some(Animation::new(0.0, 1.0, presets::WINDOW_RESIZE));
+        false
+    }
+
+    fn is_fading(&self) -> bool {
+        self.fade.is_some()
     }
 
     /// Whether the client has caught up. Acking isn't enough: Chromium and
@@ -172,10 +207,24 @@ pub fn window_frame(
     }
 
     if let Some(pending) = &state.pending_size {
-        if now.saturating_duration_since(pending.since) > presets::PENDING_SIZE_TIMEOUT {
-            state.pending_size = None;
-        } else if state.resize_anim.is_none() {
-            frame.rect = Rectangle::new(frame.rect.loc, pending.size.to_f64());
+        match &pending.fade {
+            // The client has redrawn: show it as it is, with its old
+            // contents fading out over it.
+            Some(fade) if fade.is_done(now) => state.pending_size = None,
+            Some(fade) => {
+                if state.resize_anim.is_none() {
+                    frame.snapshot_alpha = Some((1.0 - fade.value_at(now)) as f32);
+                }
+            }
+            None if now.saturating_duration_since(pending.since)
+                > presets::PENDING_SIZE_TIMEOUT =>
+            {
+                state.pending_size = None;
+            }
+            None if state.resize_anim.is_none() => {
+                frame.rect = Rectangle::new(frame.rect.loc, pending.size.to_f64());
+            }
+            None => {}
         }
     }
 
@@ -190,6 +239,15 @@ pub fn window_frame(
     }
 
     frame
+}
+
+/// The old contents to draw over the window at `WindowFrame::snapshot_alpha`.
+pub fn fading_snapshot(state: &WindowState) -> Option<&Snapshot> {
+    match (&state.resize_anim, &state.pending_size) {
+        (Some(resize), _) => resize.snapshot.as_ref(),
+        (None, Some(pending)) if pending.is_fading() => pending.snapshot.as_ref(),
+        _ => None,
+    }
 }
 
 pub fn is_animating(state: &WindowState) -> bool {
@@ -235,13 +293,38 @@ mod tests {
     #[test]
     fn pending_size_needs_ack_and_a_new_size() {
         let full = Size::from((2560, 1440));
-        let pending = PendingSize::new(Size::from((1536, 864)), full, Serial::from(10));
+        let pending = PendingSize::<()>::new(Size::from((1536, 864)), full, Serial::from(10));
         // Acked, but still drawing at the old size (Chromium/Electron).
         assert!(!pending.is_resolved(Some(Serial::from(10)), full));
         // New size, but not acked yet.
         assert!(!pending.is_resolved(Some(Serial::from(9)), Size::from((1536, 864))));
         // Acked and resized, even if not to the exact size (terminal cells).
         assert!(pending.is_resolved(Some(Serial::from(11)), Size::from((1530, 860))));
+    }
+
+    #[test]
+    fn pending_size_without_snapshot_ends_on_redraw() {
+        let full = Size::from((2560, 1440));
+        let mut pending = PendingSize::<()>::new(Size::from((1920, 1080)), full, Serial::from(3));
+        assert!(!pending.on_commit(Some(Serial::from(3)), full));
+        assert!(pending.on_commit(Some(Serial::from(3)), Size::from((1920, 1080))));
+        assert!(!pending.is_fading());
+    }
+
+    #[test]
+    fn pending_size_with_snapshot_fades_once() {
+        let full = Size::from((2560, 1440));
+        let small = Size::from((1920, 1080));
+        let mut pending = PendingSize::new(small, full, Serial::from(3)).with_snapshot(Some(()));
+        // Still drawing at the old size: keep squeezing, no fade yet.
+        assert!(!pending.on_commit(Some(Serial::from(3)), full));
+        assert!(!pending.is_fading());
+        // Redrawn: the fade starts instead of ending it.
+        assert!(!pending.on_commit(Some(Serial::from(3)), small));
+        assert!(pending.is_fading());
+        // Later commits neither restart nor end it; window_frame does.
+        assert!(!pending.on_commit(Some(Serial::from(4)), small));
+        assert!(pending.is_fading());
     }
 
     #[test]

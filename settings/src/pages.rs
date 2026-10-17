@@ -9,6 +9,7 @@ pub enum Page {
     Appearance,
     Displays,
     Wifi,
+    Bluetooth,
     Mouse,
     Keyboard,
     Panel,
@@ -17,10 +18,11 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [
+    pub const ALL: [Page; 9] = [
         Page::Appearance,
         Page::Displays,
         Page::Wifi,
+        Page::Bluetooth,
         Page::Mouse,
         Page::Keyboard,
         Page::Panel,
@@ -33,6 +35,7 @@ impl Page {
             Page::Appearance => "Appearance",
             Page::Displays => "Displays",
             Page::Wifi => "Wi-Fi",
+            Page::Bluetooth => "Bluetooth",
             Page::Mouse => "Mouse & Touchpad",
             Page::Keyboard => "Keyboard",
             Page::Panel => "Top Bar",
@@ -46,6 +49,7 @@ impl Page {
             Page::Appearance => "preferences-desktop-appearance-symbolic",
             Page::Displays => "video-display-symbolic",
             Page::Wifi => "network-wireless-symbolic",
+            Page::Bluetooth => "bluetooth-active-symbolic",
             Page::Mouse => "input-mouse-symbolic",
             Page::Keyboard => "input-keyboard-symbolic",
             Page::Panel => "focus-top-bar-symbolic",
@@ -119,6 +123,19 @@ pub enum Key {
     MainDisplay,
     /// Not in the config: Wi-Fi, done through NetworkManager or iwd.
     Wifi(WifiKey),
+    /// Not in the config: Bluetooth, done through BlueZ.
+    Bluetooth(BluetoothKey),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum BluetoothKey {
+    /// The adapter on or off.
+    Powered,
+    /// A device (by address): its Connect, Disconnect, Forget or Pair
+    /// buttons.
+    Device(String),
+    /// The code to type on the device being paired.
+    Code,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -214,8 +231,8 @@ impl Key {
                 file.set_output(name, "mode", table);
             }
             // Not the config's business: the window sends these to the
-            // Wi-Fi worker instead.
-            Key::Wifi(_) => {}
+            // Wi-Fi and Bluetooth workers instead.
+            Key::Wifi(_) | Key::Bluetooth(_) => {}
             Key::OutputPosition { name, axis } => {
                 let old = config.output(name).and_then(|o| o.position);
                 let Some(v) = value.as_f64() else {
@@ -519,12 +536,19 @@ pub struct WifiView<'a> {
     pub details: Option<&'a str>,
 }
 
-pub fn build(page: Page, c: &Config, displays: &[Display], wifi: WifiView<'_>) -> Vec<Group> {
+pub fn build(
+    page: Page,
+    c: &Config,
+    displays: &[Display],
+    wifi: WifiView<'_>,
+    bluetooth: Option<&crate::bluetooth::State>,
+) -> Vec<Group> {
     let d = Config::default();
     match page {
         Page::Appearance => appearance(c, &d),
         Page::Displays => displays_page(c, displays),
         Page::Wifi => wifi_page(wifi),
+        Page::Bluetooth => bluetooth_page(bluetooth),
         Page::Mouse => mouse(c, &d),
         Page::Keyboard => keyboard(c, &d),
         Page::Panel => panel(c, &d),
@@ -894,6 +918,130 @@ fn join_rows(join: &crate::wifi::Join) -> Vec<Row> {
         "",
     ));
     rows
+}
+
+// --- Bluetooth
+
+fn bluetooth_row(key: BluetoothKey, title: &str, control: Control, value: Value) -> Row {
+    Row {
+        key: Key::Bluetooth(key),
+        ..wifi_row(WifiKey::Hidden, title, control, value)
+    }
+}
+
+/// The adapter's switch, paired devices with their buttons, and what's
+/// nearby to pair with (looked for while the page shows).
+fn bluetooth_page(state: Option<&crate::bluetooth::State>) -> Vec<Group> {
+    use crate::bluetooth::{Availability, Busy};
+    let note = |text: &str| {
+        vec![Group {
+            title: "Bluetooth".into(),
+            description: text.into(),
+            rows: Vec::new(),
+        }]
+    };
+    let Some(state) = state else {
+        return note("Looking for Bluetooth…");
+    };
+    match state.availability {
+        Availability::Unknown => return note("Looking for Bluetooth…"),
+        Availability::NoService => {
+            return note("Bluetooth is managed by BlueZ, and it isn't running.");
+        }
+        Availability::NoAdapter => return note("No Bluetooth hardware found."),
+        Availability::Ready => {}
+    }
+    let top = Group {
+        title: "Bluetooth".into(),
+        description: state.error.clone().unwrap_or_default(),
+        rows: vec![bluetooth_row(
+            BluetoothKey::Powered,
+            "Bluetooth",
+            Control::switch(),
+            Value::Bool(state.powered),
+        )],
+    };
+    if !state.powered {
+        return vec![top];
+    }
+    let busy = |address: &str| {
+        state
+            .busy
+            .as_ref()
+            .filter(|(a, _)| a == address)
+            .map(|(_, busy)| *busy)
+    };
+    let device_row = |device: &crate::bluetooth::Device| {
+        let buttons: &[(&str, Value)] = match (device.paired, device.connected) {
+            (false, _) => &[("Pair", s("pair"))],
+            (true, true) => &[("Disconnect", s("disconnect")), ("Forget", s("forget"))],
+            (true, false) => &[("Connect", s("connect")), ("Forget", s("forget"))],
+        };
+        let mut row = bluetooth_row(
+            BluetoothKey::Device(device.address.clone()),
+            &device.name,
+            Control::Segmented(choices(buttons)),
+            Value::Unset,
+        );
+        let status = match busy(&device.address) {
+            Some(Busy::Pairing) => "Pairing…",
+            Some(Busy::Connecting) => "Connecting…",
+            Some(Busy::Disconnecting) => "Disconnecting…",
+            None if device.connected => "Connected",
+            None if device.paired => "Not connected",
+            None => "",
+        };
+        let battery = device.battery.map(|b| format!("{b}% battery"));
+        row.subtitle = [Some(status), Some(device.kind()), battery.as_deref()]
+            .into_iter()
+            .flatten()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        row
+    };
+
+    let mut groups = vec![top];
+    let paired: Vec<Row> = state
+        .devices
+        .iter()
+        .filter(|d| d.paired)
+        .map(device_row)
+        .collect();
+    groups.push(Group {
+        title: "My Devices".into(),
+        description: if paired.is_empty() {
+            "Nothing paired yet.".into()
+        } else {
+            String::new()
+        },
+        rows: paired,
+    });
+
+    let mut nearby = Vec::new();
+    for device in state.devices.iter().filter(|d| !d.paired) {
+        nearby.push(device_row(device));
+        // A keyboard shows the code to type on it under its row.
+        if busy(&device.address) == Some(Busy::Pairing)
+            && let Some(code) = &state.code
+        {
+            nearby.push(
+                bluetooth_row(BluetoothKey::Code, "Code", Control::Info, s(code))
+                    .sub(&format!("Type it on {}, then press Enter", device.name)),
+            );
+        }
+    }
+    let description = match (state.discovering, nearby.is_empty()) {
+        (true, true) => "Looking for devices…",
+        (false, true) => "No devices found.",
+        _ => "Make sure the device is in pairing mode.",
+    };
+    groups.push(Group {
+        title: "Nearby Devices".into(),
+        description: description.into(),
+        rows: nearby,
+    });
+    groups
 }
 
 fn speed(v: f64) -> String {
@@ -2009,7 +2157,7 @@ mod tests {
         };
         let displays = [display("DP-1"), display("DP-2")];
         for page in Page::ALL {
-            for group in build(page, &config, &displays, WifiView::default()) {
+            for group in build(page, &config, &displays, WifiView::default(), None) {
                 for row in group.rows {
                     let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();
                     let value = match &row.control {
@@ -2072,6 +2220,7 @@ mod tests {
     fn pages_by_name() {
         assert_eq!(Page::from_name("displays"), Some(Page::Displays));
         assert_eq!(Page::from_name("mouse"), Some(Page::Mouse));
+        assert_eq!(Page::from_name("bluetooth"), Some(Page::Bluetooth));
         assert_eq!(Page::from_name("nope"), None);
     }
 }

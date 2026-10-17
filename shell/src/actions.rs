@@ -25,6 +25,10 @@ pub enum Action {
     /// Percent of the panel's maximum brightness.
     SetBrightness(u32),
     SetPowerProfile(crate::status::PowerProfile),
+    /// The Bluetooth adapter on or off.
+    SetBluetooth(bool),
+    /// Connect (true) or disconnect a paired Bluetooth device, by address.
+    ConnectBluetooth(String, bool),
     Lock,
     Suspend,
     Reboot,
@@ -80,6 +84,19 @@ fn perform(action: Action) {
         Action::SetWifi(enabled) => set_wifi(*enabled),
         Action::SetBrightness(percent) => set_brightness(*percent),
         Action::SetPowerProfile(profile) => set_power_profile(*profile),
+        Action::SetBluetooth(on) => set_bluetooth(*on),
+        Action::ConnectBluetooth(address, connect) => {
+            // Connecting takes seconds: don't hold up the sliders.
+            let (address, connect) = (address.clone(), *connect);
+            let _ = thread::Builder::new()
+                .name("bluetooth-connect".into())
+                .spawn(move || {
+                    if let Err(err) = connect_bluetooth(&address, connect) {
+                        warn!(address, connect, %err, "bluetooth failed");
+                    }
+                });
+            Ok(())
+        }
         Action::Lock => compositor(&cnde_ipc::Request::LockScreen),
         Action::Suspend => login1("Suspend"),
         Action::Reboot => login1("Reboot"),
@@ -238,4 +255,74 @@ fn set_power_profile(profile: crate::status::PowerProfile) -> Result<(), String>
         "ActiveProfile",
         profile.dbus_name().into(),
     )
+}
+
+/// BlueZ's objects (see `status::read_bluez`).
+fn bluez_objects(conn: &Connection) -> Result<crate::status::BluezObjects, String> {
+    conn.call_method(
+        Some("org.bluez"),
+        "/",
+        Some("org.freedesktop.DBus.ObjectManager"),
+        "GetManagedObjects",
+        &(),
+    )
+    .and_then(|reply| reply.body().deserialize())
+    .map_err(|err| err.to_string())
+}
+
+/// The first adapter's path (hci0 before hci1).
+fn bluez_adapter(objects: &crate::status::BluezObjects) -> Option<String> {
+    objects
+        .iter()
+        .filter(|(_, ifaces)| ifaces.contains_key("org.bluez.Adapter1"))
+        .map(|(path, _)| path.to_string())
+        .min()
+}
+
+fn set_bluetooth(on: bool) -> Result<(), String> {
+    let conn = Connection::system().map_err(|err| err.to_string())?;
+    let adapter = bluez_adapter(&bluez_objects(&conn)?).ok_or("no Bluetooth adapter")?;
+    set_property(
+        &conn,
+        "org.bluez",
+        &adapter,
+        "org.bluez.Adapter1",
+        "Powered",
+        on.into(),
+    )
+}
+
+fn connect_bluetooth(address: &str, connect: bool) -> Result<(), String> {
+    let conn = Connection::system().map_err(|err| err.to_string())?;
+    let objects = bluez_objects(&conn)?;
+    let adapter = bluez_adapter(&objects).ok_or("no Bluetooth adapter")?;
+    let device = objects
+        .iter()
+        .find(|(_, ifaces)| {
+            ifaces.get("org.bluez.Device1").is_some_and(|props| {
+                let text = |key: &str| {
+                    props
+                        .get(key)
+                        .and_then(|v| v.try_clone().ok())
+                        .and_then(|v| String::try_from(v).ok())
+                };
+                text("Address").as_deref() == Some(address)
+                    && props
+                        .get("Adapter")
+                        .and_then(|v| v.try_clone().ok())
+                        .and_then(|v| zbus::zvariant::OwnedObjectPath::try_from(v).ok())
+                        .is_some_and(|p| p.as_str() == adapter)
+            })
+        })
+        .map(|(path, _)| path.to_string())
+        .ok_or("no such device")?;
+    conn.call_method(
+        Some("org.bluez"),
+        device.as_str(),
+        Some("org.bluez.Device1"),
+        if connect { "Connect" } else { "Disconnect" },
+        &(),
+    )
+    .map(|_| ())
+    .map_err(|err| err.to_string())
 }

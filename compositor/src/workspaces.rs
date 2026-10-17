@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use smithay::{
     desktop::Window,
     output::Output,
-    utils::{Logical, Point, Rectangle},
+    utils::{Logical, Point, Rectangle, Scale},
 };
 use tracing::debug;
 
@@ -20,6 +20,7 @@ use crate::{
     animation::{Animation, Params, presets},
     effects::{PendingSize, lerp_rect},
     render::{Placed, Zoom},
+    snapshot::Snapshot,
     state::State,
     window::{Placement, placement_rect, with_state},
 };
@@ -559,7 +560,8 @@ impl State {
     /// Map exactly the windows of visible workspaces into the space, where
     /// `rest_rect` says, so the end of a slide is exactly where windows
     /// settle. Windows that must change size (maximized onto a different
-    /// monitor) are configured and shown squeezed until they redraw.
+    /// monitor) are configured and shown squeezed until they redraw, then
+    /// crossfade into their new contents.
     pub(crate) fn rebuild_space(&mut self) {
         let mapped: Vec<Window> = self.space.elements().cloned().collect();
         for window in &mapped {
@@ -588,8 +590,14 @@ impl State {
                 };
                 toplevel.with_pending_state(|s| s.size = Some(rest.size));
                 if let Some(serial) = toplevel.send_pending_configure() {
+                    // Once it redraws, crossfade from the squeezed old
+                    // contents (where the slide left them) instead of
+                    // swapping them in one frame.
+                    let snapshot = self.refit_snapshot(&window, output);
                     with_state(&window, |s| {
-                        s.pending_size = Some(PendingSize::new(rest.size, old_size, serial));
+                        s.pending_size = Some(
+                            PendingSize::new(rest.size, old_size, serial).with_snapshot(snapshot),
+                        );
                     });
                 }
             }
@@ -599,6 +607,16 @@ impl State {
         // then, and this can run after the iteration's refresh, so they'd
         // vanish for one frame (the flash at the end of a slide).
         self.space.refresh();
+    }
+
+    /// `window`'s contents as they are, to fade out once it redraws at the
+    /// size of `output`; none with animations off.
+    fn refit_snapshot(&mut self, window: &Window, output: &Output) -> Option<Snapshot> {
+        if presets::WINDOW_RESIZE.scaled_duration().is_zero() {
+            return None;
+        }
+        let scale = Scale::from(output.current_scale().fractional_scale());
+        Snapshot::capture(self.backend.renderer()?, window, scale)
     }
 
     /// What `output` should show while the strip is moving. Every window
