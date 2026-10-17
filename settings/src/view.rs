@@ -201,12 +201,18 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     } else {
         "window-restore-symbolic"
     };
+    // `appearance.window_buttons`, as on the compositor's title bars.
+    let shown = match ui.config.appearance.window_buttons {
+        cnde_config::WindowButtons::All => 3,
+        cnde_config::WindowButtons::Close => 1,
+    };
     for (i, (target, icon)) in [
         (Target::Close, "window-close-symbolic"),
         (Target::Maximize, maximize_icon),
         (Target::Minimize, "window-minimize-symbolic"),
     ]
     .into_iter()
+    .take(shown)
     .enumerate()
     {
         let x = w - 10.0 - size - i as f32 * (size + 8.0);
