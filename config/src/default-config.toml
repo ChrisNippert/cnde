@@ -83,6 +83,7 @@
 # extend = false           # on an edge: stretch across the whole edge
 # align = "center"         # "start" (left/top), "center", "end" (right/bottom); stretched, moves the icons
 # reserve = true           # on an edge: maximized windows stop at it; false floats it over them
+# locked = false           # true: no dragging icons or the dock, and no edit mode
 
 [launcher]
 # Tapping Super opens the overview. Set a command to run that instead.

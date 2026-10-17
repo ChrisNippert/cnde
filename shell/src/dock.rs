@@ -251,10 +251,10 @@ pub fn layout(
 
 /// Editing the dock in place (from its right-click menu).
 #[derive(Debug, Default)]
-pub struct DockEdit {
-    pub drag: Option<DockDrag>,
-}
+pub struct DockEdit;
 
+/// Something being dragged: while editing, or straight away once a press
+/// on a pinned icon or the dock's background moves far enough.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DockDrag {
     /// A pinned icon being carried to a new place; `at` is the pointer.
@@ -272,6 +272,9 @@ pub enum EditHit {
     Icon(usize),
     Control(Control),
 }
+
+/// How far off the dock a carried icon must go to be unpinned.
+const UNPIN_DISTANCE: f64 = 48.0;
 
 /// The × badge's size, at an icon's top corner.
 const BADGE: f32 = 18.0;
@@ -310,6 +313,7 @@ pub struct Dock {
     items: Vec<Item>,
     hover: Option<usize>,
     pub edit: Option<DockEdit>,
+    pub drag: Option<DockDrag>,
     /// Apps just launched from here (desktop IDs), bouncing until their
     /// window shows up.
     pub launching: Vec<(String, std::time::Instant)>,
@@ -400,6 +404,7 @@ impl Dock {
             items: Vec::new(),
             hover: None,
             edit: None,
+            drag: None,
             launching: Vec::new(),
         }
     }
@@ -482,6 +487,24 @@ impl Dock {
                 along > centre
             })
             .count()
+    }
+
+    /// A carried icon dropped at `at` comes off the dock (is unpinned).
+    pub fn off_dock(&self, at: (f64, f64)) -> bool {
+        off_dock(at, self.size())
+    }
+
+    /// What a left press at `point` could start dragging, outside edit
+    /// mode: a pinned icon, or the dock itself from its background.
+    pub fn drag_target(&self, point: (f64, f64), icon: f32) -> Option<DockDrag> {
+        match self.cell_at(point, icon) {
+            Some((index, _)) => self
+                .items
+                .get(index)
+                .filter(|i| i.favorite)
+                .map(|_| DockDrag::Icon { index, at: point }),
+            None => Some(DockDrag::Move { at: point }),
+        }
     }
 
     fn vertical(&self) -> bool {
@@ -669,6 +692,7 @@ impl Dock {
                 self.hover,
                 self.vertical(),
                 self.edit.as_ref(),
+                self.drag,
                 Look {
                     radius: self.radius(theme),
                     frosted: self.frosted,
@@ -707,6 +731,7 @@ fn paint(
     hover: Option<usize>,
     vertical: bool,
     edit: Option<&DockEdit>,
+    drag: Option<DockDrag>,
     look: Look,
     // Per item: how far it's hopping, and which way is away from the edge.
     (hops, away): (&[f32], (f32, f32)),
@@ -715,7 +740,6 @@ fn paint(
     icon: f32,
 ) {
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
-    let drag = edit.and_then(|e| e.drag);
     // Frosted: a light tint over the blur the compositor draws behind.
     let base = if look.frosted {
         theme
@@ -754,6 +778,9 @@ fn paint(
         Some(DockDrag::Icon { index, at }) => Some((index, at)),
         _ => None,
     };
+    // Carried off the dock: it'll be unpinned, so it's left out (a gap).
+    let size = (layout.width as u32, layout.height as u32);
+    let unpinning = carried.is_some_and(|(_, at)| off_dock(at, size));
     if let Some(line) = layout.separator {
         canvas.rounded_rect(line.x, line.y, line.w, line.h, 0.0, theme.qs_toggle_off);
     }
@@ -885,6 +912,7 @@ fn paint(
         }
     }
     if let Some((index, at)) = carried
+        && !unpinning
         && let (Some(item), Some(cell)) = (items.get(index), layout.cells.get(index))
     {
         // Where it would go: a bar between icons.
@@ -1010,6 +1038,15 @@ pub fn frosted(background: DockBackground) -> bool {
 }
 
 /// The × on a pinned icon while editing: its top-right corner.
+/// Whether `at` is further than [`UNPIN_DISTANCE`] outside a dock of
+/// `size`.
+fn off_dock(at: (f64, f64), size: (u32, u32)) -> bool {
+    let (w, h) = (size.0 as f64, size.1 as f64);
+    let dx = (-at.0).max(at.0 - w).max(0.0);
+    let dy = (-at.1).max(at.1 - h).max(0.0);
+    dx.hypot(dy) > UNPIN_DISTANCE
+}
+
 fn badge_rect(cell: Rect) -> Rect {
     Rect {
         x: cell.x + cell.w - BADGE - 1.0,
@@ -1120,6 +1157,7 @@ mod tests {
                 Some(1),
                 false,
                 None,
+                None,
                 Look::plain(),
                 (&[], (0.0, -1.0)),
                 &mut icons,
@@ -1130,6 +1168,15 @@ mod tests {
         let mut data = format!("{w}x{h}\n").into_bytes();
         data.extend_from_slice(&pixels);
         std::fs::write(path, data).unwrap();
+    }
+
+    #[test]
+    fn icons_come_off_well_past_the_dock() {
+        let size = (300, 64);
+        assert!(!off_dock((150.0, 32.0), size));
+        assert!(!off_dock((150.0, -40.0), size));
+        assert!(off_dock((150.0, -60.0), size));
+        assert!(off_dock((360.0, 32.0), size));
     }
 
     #[test]

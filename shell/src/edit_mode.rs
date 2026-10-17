@@ -4,6 +4,9 @@
 //!
 //! Dock: drag pinned icons to reorder them, × to unpin, drag the grip to a
 //! screen edge to move the dock, −/+ (or the scroll wheel) for icon size.
+//! Dragging works outside edit mode too, unless `dock.locked`: a pinned
+//! icon to reorder it (or off the dock to unpin it), the background to
+//! move the dock.
 //! Top bar: drag the bottom edge for height, drag the clock to the left,
 //! the centre or the right. Both: Done to finish.
 
@@ -32,6 +35,9 @@ const ICON_STEP: i64 = 8;
 const ICON_RANGE: (i64, i64) = (24, 128);
 /// The grip must travel this far before a release moves the dock.
 const MOVE_THRESHOLD: f64 = 40.0;
+/// Outside edit mode, a press must travel this far to start a drag; less
+/// is a click.
+const DRAG_THRESHOLD: f64 = 8.0;
 /// Margins the dock keeps from the screen edge (as in `dock`).
 const EDGE_MARGIN: f64 = 8.0;
 const OVERVIEW_MARGIN: f64 = 20.0;
@@ -46,6 +52,9 @@ pub struct DockPreview {
 
 impl App {
     pub fn start_dock_edit(&mut self) {
+        if self.config.dock.locked {
+            return;
+        }
         self.dock_editing = true;
         self.apply_dock_edit();
     }
@@ -63,6 +72,7 @@ impl App {
             && dock.edit.is_some() != self.dock_editing
         {
             dock.edit = self.dock_editing.then(DockEdit::default);
+            dock.drag = None;
             dock.relayout(icon);
         }
         self.draw_dock();
@@ -86,7 +96,62 @@ impl App {
         self.panels.iter().any(|p| p.edit.is_some())
     }
 
-    /// Pointer input on the dock while it's being edited.
+    /// Outside edit mode: a left press on a pinned icon or the background
+    /// waits to see if it's a click or the start of a drag. Returns whether
+    /// the event was used up.
+    pub fn dock_press_pointer(&mut self, event: &PointerEvent) -> bool {
+        let icon = self.config.dock.icon_size as f32;
+        let Some(dock) = &mut self.dock else {
+            return false;
+        };
+        match event.kind {
+            PointerEventKind::Press {
+                button: BTN_LEFT, ..
+            } => {
+                self.dock_press = None;
+                if self.config.dock.locked || dock.drag_target(event.position, icon).is_none() {
+                    return false;
+                }
+                self.dock_press = Some(event.position);
+                true
+            }
+            PointerEventKind::Motion { .. } => {
+                let Some(start) = self.dock_press else {
+                    return false;
+                };
+                let at = event.position;
+                if (at.0 - start.0).hypot(at.1 - start.1) <= DRAG_THRESHOLD {
+                    return false;
+                }
+                self.dock_press = None;
+                dock.drag = dock.drag_target(start, icon).map(|drag| match drag {
+                    DockDrag::Icon { index, .. } => DockDrag::Icon { index, at },
+                    DockDrag::Move { .. } => DockDrag::Move { at },
+                });
+                if matches!(dock.drag, Some(DockDrag::Move { .. })) {
+                    self.dock_drag_start = Some(start);
+                }
+                self.draw_dock();
+                self.update_dock_preview();
+                true
+            }
+            PointerEventKind::Release {
+                button: BTN_LEFT, ..
+            } => {
+                // Never got far enough: a click where it was pressed.
+                let Some(start) = self.dock_press.take() else {
+                    return false;
+                };
+                let click = dock.click(start, icon, false);
+                self.dock_click(click);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Pointer input on the dock while it's being edited, or while
+    /// something on it is dragged.
     pub fn dock_edit_pointer(&mut self, event: &PointerEvent) {
         let icon = self.config.dock.icon_size as f32;
         // Work out what the event means, then act (acting needs `self`).
@@ -94,13 +159,12 @@ impl App {
             let Some(dock) = &mut self.dock else {
                 return;
             };
-            if dock.edit.is_none() {
+            if dock.edit.is_none() && dock.drag.is_none() {
                 return;
             }
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    let edit = dock.edit.as_mut().expect("checked above");
-                    match &mut edit.drag {
+                    match &mut dock.drag {
                         Some(DockDrag::Icon { at, .. } | DockDrag::Move { at }) => {
                             *at = event.position;
                             DockStep::Redraw
@@ -115,8 +179,7 @@ impl App {
                     }
                 }
                 PointerEventKind::Leave { .. } => {
-                    let dragging = dock.edit.as_ref().is_some_and(|e| e.drag.is_some());
-                    if !dragging && dock.hover(None, icon) {
+                    if dock.drag.is_none() && dock.hover(None, icon) {
                         DockStep::Redraw
                     } else {
                         DockStep::Nothing
@@ -124,39 +187,39 @@ impl App {
                 }
                 PointerEventKind::Press {
                     button: BTN_LEFT, ..
-                } => {
-                    let hit = dock.edit_hit(event.position, icon);
-                    let edit = dock.edit.as_mut().expect("checked above");
-                    match hit {
-                        Some(EditHit::Unpin(index)) => DockStep::Unpin(index),
-                        Some(EditHit::Icon(index)) => {
-                            edit.drag = Some(DockDrag::Icon {
-                                index,
-                                at: event.position,
-                            });
-                            DockStep::Redraw
-                        }
-                        Some(EditHit::Control(Control::Move)) => {
-                            edit.drag = Some(DockDrag::Move { at: event.position });
-                            self.dock_drag_start = Some(event.position);
-                            DockStep::Redraw
-                        }
-                        Some(EditHit::Control(Control::Smaller)) => DockStep::Size(-ICON_STEP),
-                        Some(EditHit::Control(Control::Bigger)) => DockStep::Size(ICON_STEP),
-                        Some(EditHit::Control(Control::Done)) => DockStep::Done,
-                        None => DockStep::Nothing,
+                } if dock.edit.is_some() => match dock.edit_hit(event.position, icon) {
+                    Some(EditHit::Unpin(index)) => DockStep::Unpin(index),
+                    Some(EditHit::Icon(index)) => {
+                        dock.drag = Some(DockDrag::Icon {
+                            index,
+                            at: event.position,
+                        });
+                        DockStep::Redraw
                     }
-                }
+                    Some(EditHit::Control(Control::Move)) => {
+                        dock.drag = Some(DockDrag::Move { at: event.position });
+                        self.dock_drag_start = Some(event.position);
+                        DockStep::Redraw
+                    }
+                    Some(EditHit::Control(Control::Smaller)) => DockStep::Size(-ICON_STEP),
+                    Some(EditHit::Control(Control::Bigger)) => DockStep::Size(ICON_STEP),
+                    Some(EditHit::Control(Control::Done)) => DockStep::Done,
+                    None => DockStep::Nothing,
+                },
                 PointerEventKind::Release {
                     button: BTN_LEFT, ..
-                } => match dock.edit.as_mut().and_then(|e| e.drag.take()) {
+                } => match dock.drag.take() {
+                    // Dropped well off the dock: unpinned.
+                    Some(DockDrag::Icon { index, at }) if dock.off_dock(at) => {
+                        DockStep::Unpin(index)
+                    }
                     Some(DockDrag::Icon { index, at }) => {
                         DockStep::Reorder(index, dock.drop_index(at, icon))
                     }
                     Some(DockDrag::Move { at }) => DockStep::Move(at),
                     None => DockStep::Nothing,
                 },
-                PointerEventKind::Axis { vertical, .. } => {
+                PointerEventKind::Axis { vertical, .. } if dock.edit.is_some() => {
                     let notches = if vertical.value120 != 0 {
                         vertical.value120 as f64 / 120.0
                     } else {
@@ -188,6 +251,7 @@ impl App {
                     list.retain(|f| *f != id);
                     write_config(&[("dock.favorites", Value::List(list))]);
                 }
+                self.draw_dock();
             }
             DockStep::Reorder(from, to) => {
                 self.reorder_pinned(from, to);
@@ -220,7 +284,7 @@ impl App {
         let Some(dock) = &self.dock else {
             return;
         };
-        let Some(DockDrag::Move { at }) = dock.edit.as_ref().and_then(|e| e.drag) else {
+        let Some(DockDrag::Move { at }) = dock.drag else {
             self.dock_preview = None;
             return;
         };
@@ -497,7 +561,7 @@ fn set_panel_drag(panel: &mut crate::panel::Panel, drag: Option<PanelDrag>) {
     }
 }
 
-/// What a pointer event on the dock comes to, while editing.
+/// What a pointer event on the dock comes to, while editing or dragging.
 enum DockStep {
     Nothing,
     Redraw,

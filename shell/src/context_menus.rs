@@ -338,7 +338,9 @@ impl App {
         } else {
             "Edit Dock…"
         };
-        entries.push(Entry::item(edit, Action::EditDock));
+        if !dock.locked {
+            entries.push(Entry::item(edit, Action::EditDock));
+        }
         entries.push(Entry::item("Dock Settings", Action::Settings(Some("dock"))));
         entries
     }
