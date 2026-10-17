@@ -713,6 +713,10 @@ impl App {
             }
             dock.frosted = dock::frosted(self.config.dock.background);
             dock.pad = self.config.dock.padding;
+            dock.launcher = dock::LauncherPlace {
+                first: self.config.dock.launcher == cnde_config::LauncherSide::Start,
+                gap: self.config.dock.launcher_gap,
+            };
             dock.update(items, icon);
         }
         self.draw_dock();

@@ -146,13 +146,38 @@ pub enum Control {
     Done,
 }
 
-/// `editing` adds the edit-mode buttons ([`CONTROLS`]) at the end.
-pub fn layout(items: &[Item], icon: f32, pad: f32, vertical: bool, editing: bool) -> Layout {
+/// Where the app grid button goes, and how far from the icons.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LauncherPlace {
+    pub first: bool,
+    pub gap: f32,
+}
+
+impl Default for LauncherPlace {
+    fn default() -> Self {
+        Self {
+            first: false,
+            gap: SEPARATOR,
+        }
+    }
+}
+
+/// `editing` adds the edit-mode buttons ([`CONTROLS`]) at the end. Cells
+/// are indexed items first, then the apps button, then the controls,
+/// whatever order they're shown in.
+pub fn layout(
+    items: &[Item],
+    icon: f32,
+    pad: f32,
+    launcher: LauncherPlace,
+    vertical: bool,
+    editing: bool,
+) -> Layout {
     let cell = icon + 2.0 * pad;
     let favorites = items.iter().filter(|i| i.favorite).count();
     let separated = favorites > 0 && favorites < items.len();
+    let apps = items.len();
     let mut along = INNER_PAD;
-    let mut cells = Vec::new();
     let mut separator = None;
     let rect = |along: f32| {
         if vertical {
@@ -171,36 +196,47 @@ pub fn layout(items: &[Item], icon: f32, pad: f32, vertical: bool, editing: bool
             }
         }
     };
-    let count = items.len() + 1 + if editing { CONTROLS.len() } else { 0 };
-    for i in 0..count {
-        // The separator before the first non-favorite, and before the apps
-        // button if there are any items at all.
-        let before_controls = editing && i == items.len() + 1;
-        if (separated && i == favorites)
-            || (i == items.len() && !items.is_empty())
-            || before_controls
-        {
-            let line = if vertical {
-                Rect {
-                    x: INNER_PAD + pad,
-                    y: along + SEPARATOR / 2.0 - 0.5,
-                    w: cell - 2.0 * pad,
-                    h: 1.0,
-                }
+    let controls = if editing { CONTROLS.len() } else { 0 };
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    if launcher.first {
+        order.insert(0, apps);
+    } else {
+        order.push(apps);
+    }
+    order.extend(apps + 1..apps + 1 + controls);
+    let mut cells = vec![rect(0.0); order.len()];
+    for (shown, &i) in order.iter().enumerate() {
+        // Room between the apps button and the icons, and separators
+        // before the first non-favorite and before the edit controls.
+        let next_to_apps = !items.is_empty()
+            && if launcher.first {
+                i == 0
             } else {
-                Rect {
-                    x: along + SEPARATOR / 2.0 - 0.5,
-                    y: INNER_PAD + pad,
-                    w: 1.0,
-                    h: cell - 2.0 * pad,
-                }
+                i == apps
             };
-            if i == favorites && separated {
-                separator = Some(line);
+        if next_to_apps {
+            along += launcher.gap;
+        } else if (separated && i == favorites) || (shown > 0 && i == apps + 1) {
+            if i == favorites {
+                separator = Some(if vertical {
+                    Rect {
+                        x: INNER_PAD + pad,
+                        y: along + SEPARATOR / 2.0 - 0.5,
+                        w: cell - 2.0 * pad,
+                        h: 1.0,
+                    }
+                } else {
+                    Rect {
+                        x: along + SEPARATOR / 2.0 - 0.5,
+                        y: INNER_PAD + pad,
+                        w: 1.0,
+                        h: cell - 2.0 * pad,
+                    }
+                });
             }
             along += SEPARATOR;
         }
-        cells.push(rect(along));
+        cells[i] = rect(along);
         along += cell;
     }
     along += INNER_PAD;
@@ -265,6 +301,7 @@ pub struct Dock {
     pub frosted: bool,
     /// Room either side of each icon (`dock.padding`).
     pub pad: f32,
+    pub launcher: LauncherPlace,
     /// The size the compositor gave the surface (stretched docks).
     surface_size: (u32, u32),
     scale: i32,
@@ -353,6 +390,7 @@ impl Dock {
             reserve,
             frosted: false,
             pad: 8.0,
+            launcher: LauncherPlace::default(),
             surface_size: (0, 0),
             scale: scale.max(1),
             configured: false,
@@ -380,6 +418,7 @@ impl Dock {
             &self.items,
             icon,
             self.pad,
+            self.launcher,
             self.vertical(),
             self.edit.is_some(),
         );
@@ -996,20 +1035,42 @@ mod tests {
             };
             3
         ];
-        let l = layout(&items, 48.0, 8.0, false, false);
+        let l = layout(&items, 48.0, 8.0, LauncherPlace::default(), false, false);
         assert_eq!(l.cells.len(), 4);
         assert!(
             l.cells[3].x > l.cells[2].x + l.cells[2].w,
             "a gap before the apps button"
         );
         assert!(l.width > l.height);
-        let v = layout(&items, 48.0, 8.0, true, false);
+        let v = layout(&items, 48.0, 8.0, LauncherPlace::default(), true, false);
         assert!(v.height > v.width);
     }
 
     #[test]
+    fn launcher_can_lead_with_its_own_gap() {
+        let item = Item {
+            app: Some("a.desktop".into()),
+            icon: "a".into(),
+            favorite: true,
+            windows: vec![],
+            focused: false,
+        };
+        let items = vec![item; 2];
+        let place = LauncherPlace {
+            first: true,
+            gap: 40.0,
+        };
+        let l = layout(&items, 48.0, 8.0, place, false, false);
+        // Index 2 is still the apps button; it's just shown first.
+        assert!(l.cells[2].x < l.cells[0].x);
+        assert_eq!(l.cells[0].x - (l.cells[2].x + l.cells[2].w), 40.0);
+        let end = layout(&items, 48.0, 8.0, LauncherPlace::default(), false, false);
+        assert_eq!(l.width - end.width, 40.0 - SEPARATOR);
+    }
+
+    #[test]
     fn stretched_dock_places_icons_by_align() {
-        let l = layout(&[], 48.0, 8.0, false, false);
+        let l = layout(&[], 48.0, 8.0, LauncherPlace::default(), false, false);
         let first = |align| spread(l.clone(), 1000.0, false, align).cells[0].x;
         assert_eq!(first(DockAlign::Start), l.cells[0].x);
         assert_eq!(first(DockAlign::End), l.cells[0].x + 1000.0 - l.width);
@@ -1037,7 +1098,7 @@ mod tests {
         .collect();
         let windows = vec![window(1, "firefox", true), window(2, "discord", false)];
         let items = items(&favorites, &apps, &windows);
-        let l = layout(&items, 48.0, 8.0, false, false);
+        let l = layout(&items, 48.0, 8.0, LauncherPlace::default(), false, false);
         let (w, h) = (l.width.ceil() as u32, l.height.ceil() as u32);
         let mut pixels = vec![0u8; (w * h * 4) as usize];
         {

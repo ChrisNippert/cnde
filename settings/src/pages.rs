@@ -1588,6 +1588,41 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
             )
             .sub("Room either side of each icon"),
         );
+        let side = matches!(c.dock.position, DockPosition::Left | DockPosition::Right);
+        let (before, after) = if side {
+            ("Top", "Bottom")
+        } else {
+            ("Left", "Right")
+        };
+        let launcher = |v: cnde_config::LauncherSide| {
+            s(match v {
+                cnde_config::LauncherSide::Start => "start",
+                cnde_config::LauncherSide::End => "end",
+            })
+        };
+        rows.push(
+            Row::new(
+                "dock.launcher",
+                "App grid button",
+                Control::Segmented(choices(&[(before, s("start")), (after, s("end"))])),
+                launcher(c.dock.launcher),
+                launcher(d.dock.launcher),
+            )
+            .sub("Which end of the icons it sits at"),
+        );
+        rows.push(Row::new(
+            "dock.launcher_gap",
+            "App grid button gap",
+            Control::Slider {
+                min: 0.0,
+                max: 400.0,
+                step: 2.0,
+                int: false,
+                format: |v| format!("{v:.0} px"),
+            },
+            Value::Float(c.dock.launcher_gap as f64),
+            Value::Float(d.dock.launcher_gap as f64),
+        ));
     }
     vec![group("Dock", rows)]
 }

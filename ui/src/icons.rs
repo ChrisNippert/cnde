@@ -261,7 +261,12 @@ fn render_color(path: &Path, size: u32) -> Option<tiny_skia::Pixmap> {
         );
         resvg::render(&tree, transform, &mut pixmap.as_mut());
     } else {
-        let image = tiny_skia::Pixmap::load_png(path).ok()?;
+        let mut image = tiny_skia::Pixmap::load_png(path).ok()?;
+        // Bicubic reads a 4x4 neighbourhood, so shrinking a 512 px icon to
+        // 32 in one go skips most pixels and aliases. Halve first.
+        while image.width().min(image.height()) >= 2 * size {
+            image = halve(&image)?;
+        }
         let (w, h) = (image.width() as f32, image.height() as f32);
         let scale = size as f32 / w.max(h);
         let transform = tiny_skia::Transform::from_scale(scale, scale).post_translate(
@@ -275,4 +280,46 @@ fn render_color(path: &Path, size: u32) -> Option<tiny_skia::Pixmap> {
         pixmap.draw_pixmap(0, 0, image.as_ref(), &paint, transform, None);
     }
     Some(pixmap)
+}
+
+/// Half the size, each pixel the average of four (premultiplied, so
+/// averaging is exact).
+fn halve(image: &tiny_skia::Pixmap) -> Option<tiny_skia::Pixmap> {
+    let (w, h) = (image.width() / 2, image.height() / 2);
+    let mut out = tiny_skia::Pixmap::new(w.max(1), h.max(1))?;
+    let src = image.data();
+    let stride = image.width() as usize * 4;
+    let dst = out.data_mut();
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let i = 2 * y * stride + 8 * x;
+            for c in 0..4 {
+                let sum = src[i + c] as u32
+                    + src[i + 4 + c] as u32
+                    + src[i + stride + c] as u32
+                    + src[i + stride + 4 + c] as u32;
+                dst[(y * w as usize + x) * 4 + c] = ((sum + 2) / 4) as u8;
+            }
+        }
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn halving_averages_each_square_of_four() {
+        // A 2x2 checkerboard of opaque white and transparent pixels.
+        let mut image = tiny_skia::Pixmap::new(2, 2).unwrap();
+        for (i, px) in image.data_mut().chunks_mut(4).enumerate() {
+            if i == 0 || i == 3 {
+                px.copy_from_slice(&[255; 4]);
+            }
+        }
+        let half = halve(&image).unwrap();
+        assert_eq!((half.width(), half.height()), (1, 1));
+        assert_eq!(half.data(), &[128, 128, 128, 128]);
+    }
 }

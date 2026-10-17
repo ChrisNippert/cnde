@@ -357,6 +357,10 @@ pub struct Dock {
     pub icon_size: u32,
     /// Room either side of each icon; twice this between two icons.
     pub padding: f32,
+    /// Which end of the icons the app grid button sits at.
+    pub launcher: LauncherSide,
+    /// Space between the app grid button and the nearest icon.
+    pub launcher_gap: f32,
     /// What's behind the icons.
     pub background: DockBackground,
     /// On a screen edge: stretch across the whole edge instead of sitting
@@ -381,12 +385,23 @@ impl Default for Dock {
             ],
             icon_size: 48,
             padding: 8.0,
+            launcher: LauncherSide::End,
+            launcher_gap: 12.0,
             background: DockBackground::Solid,
             extend: false,
             align: DockAlign::Center,
             reserve: true,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LauncherSide {
+    /// Before the first icon (left, or top on a side edge).
+    Start,
+    #[default]
+    End,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -607,6 +622,7 @@ impl Config {
             32.0,
         )?;
         in_range("dock.padding", self.dock.padding as f64, 0.0, 32.0)?;
+        in_range("dock.launcher_gap", self.dock.launcher_gap as f64, 0.0, 400.0)?;
         if !(24..=128).contains(&self.dock.icon_size) {
             return Err(Error::Invalid(format!(
                 "dock.icon_size must be 24 to 128, got {}",

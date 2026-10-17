@@ -75,6 +75,8 @@
 # favorites = ["firefox.desktop", "org.gnome.Nautilus.desktop", "Alacritty.desktop"]
 # icon_size = 48
 # padding = 8              # room either side of each icon
+# launcher = "end"         # the app grid button: "start" (before the icons) or "end"
+# launcher_gap = 12        # space between it and the icons
 # background = "solid"     # "solid" or "frosted" (translucent over the blurred wallpaper)
 # extend = false           # on an edge: stretch across the whole edge
 # align = "center"         # "start" (left/top), "center", "end" (right/bottom); stretched, moves the icons
