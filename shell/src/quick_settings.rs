@@ -39,6 +39,11 @@ pub enum Hit {
     PowerProfile(usize),
     Wifi,
     Bluetooth,
+    /// The Bluetooth devices tile's header: opens or closes the list.
+    BluetoothDevices,
+    /// A paired device in the open list (index into the status's
+    /// devices): connects or disconnects it.
+    BluetoothDevice(usize),
     DarkMode,
     DoNotDisturb,
     Power,
@@ -75,6 +80,8 @@ pub struct Layout {
     pub toggle_tile: Rect,
     /// (circle bounds, what it is), left to right.
     pub toggles: Vec<(Rect, Hit)>,
+    /// Paired Bluetooth devices, while Bluetooth is on and has some.
+    pub devices: Option<DeviceList>,
     pub volume: Rect,
     pub brightness: Option<Rect>,
     /// The power mode tile and its segments.
@@ -88,10 +95,20 @@ pub struct Layout {
     pub power_menu: Option<Vec<(Rect, Hit)>>,
 }
 
+/// The Bluetooth devices tile: a header row that opens it, and a row per
+/// device when it's open.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceList {
+    pub tile: Rect,
+    pub header: Rect,
+    pub rows: Vec<Rect>,
+}
+
 /// The cnde-settings page for a section of the card, if it has one.
 fn settings_page(hit: Hit) -> Option<&'static str> {
     match hit {
         Hit::Wifi => Some("wifi"),
+        Hit::Bluetooth => Some("bluetooth"),
         Hit::DarkMode => Some("appearance"),
         Hit::Brightness => Some("displays"),
         _ => None,
@@ -104,6 +121,9 @@ const LABEL_GAP: f32 = 6.0;
 const PROFILE_TILE_HEIGHT: f32 = 64.0;
 /// The arrow after a label that opens a settings page.
 const LINK_ARROW: f32 = 10.0;
+const DEVICE_ROW_HEIGHT: f32 = 40.0;
+/// More devices than this are left to the Settings page.
+const MAX_DEVICES: usize = 6;
 
 /// Which optional parts the card has, from what the machine offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -111,6 +131,8 @@ pub struct Features {
     pub brightness: bool,
     /// How many power modes to offer (0: no power-profiles-daemon).
     pub power_profiles: usize,
+    /// Paired Bluetooth devices to list (0: no list, e.g. Bluetooth's off).
+    pub bluetooth_devices: usize,
 }
 
 impl Features {
@@ -121,11 +143,21 @@ impl Features {
                 .power_profiles
                 .as_ref()
                 .map_or(0, |p| p.available.len()),
+            bluetooth_devices: status
+                .bluetooth
+                .as_ref()
+                .filter(|b| b.powered)
+                .map_or(0, |b| b.devices.len().min(MAX_DEVICES)),
         }
     }
 }
 
-pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layout {
+pub fn layout(
+    theme: &Theme,
+    power_menu_open: bool,
+    devices_open: bool,
+    features: Features,
+) -> Layout {
     // No ways into cnde-settings when it isn't installed.
     let settings = cfg!(test) || crate::apps::settings_installed();
     let mut settings_links = Vec::new();
@@ -171,6 +203,31 @@ pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layou
         })
         .collect();
     y += tile_h + theme.qs_gap;
+
+    // Paired Bluetooth devices: a header row, the devices under it if open.
+    let devices = (features.bluetooth_devices > 0).then(|| {
+        let shown = if devices_open {
+            features.bluetooth_devices
+        } else {
+            0
+        };
+        let row = |i: usize| Rect {
+            x: pad,
+            y: y + i as f32 * DEVICE_ROW_HEIGHT,
+            w: inner,
+            h: DEVICE_ROW_HEIGHT,
+        };
+        let list = DeviceList {
+            tile: Rect {
+                h: DEVICE_ROW_HEIGHT * (shown + 1) as f32,
+                ..row(0)
+            },
+            header: row(0),
+            rows: (1..=shown).map(row).collect(),
+        };
+        y += list.tile.h + theme.qs_gap;
+        list
+    });
 
     let volume = Rect {
         x: pad,
@@ -274,6 +331,7 @@ pub fn layout(theme: &Theme, power_menu_open: bool, features: Features) -> Layou
         height: y,
         toggle_tile,
         toggles,
+        devices,
         volume,
         brightness,
         power_profiles,
@@ -304,6 +362,14 @@ impl Layout {
         }
         if self.brightness.is_some_and(|b| b.contains(point)) {
             return Some(Hit::Brightness);
+        }
+        if let Some(list) = &self.devices {
+            if list.header.contains(point) {
+                return Some(Hit::BluetoothDevices);
+            }
+            if let Some(i) = list.rows.iter().position(|r| r.contains(point)) {
+                return Some(Hit::BluetoothDevice(i));
+            }
         }
         if let Some((_, segments)) = &self.power_profiles
             && let Some(i) = segments.iter().position(|r| r.contains(point))
@@ -378,6 +444,14 @@ pub struct QuickSettings {
     /// system hasn't confirmed it within `CONFIRM_WITHIN`, they snap back
     /// (the change was refused or failed).
     wifi_override: Option<(bool, Instant)>,
+    bluetooth_override: Option<(bool, Instant)>,
+    /// A device being connected (true) or disconnected, by address; it
+    /// says so until BlueZ reports it done or `CONNECT_WITHIN` runs out.
+    device_override: Option<(String, bool, Instant)>,
+    /// The Bluetooth devices list is open.
+    devices_open: bool,
+    /// The panel-surface rect the card hangs from.
+    anchor: (i32, i32, i32, i32),
     profile_override: Option<(crate::status::PowerProfile, Instant)>,
     /// Brightness has no change notification: what we set is what it is.
     brightness: Option<u32>,
@@ -409,7 +483,7 @@ impl QuickSettings {
         scale: i32,
     ) -> Option<Self> {
         let features = Features::of(status);
-        let layout = layout(theme, false, features);
+        let layout = layout(theme, false, false, features);
         let positioner = positioner(xdg_shell, &layout, anchor)?;
         let surface = compositor.create_surface(qh);
         let popup = Popup::from_surface(None, &positioner, qh, surface, xdg_shell)
@@ -429,6 +503,10 @@ impl QuickSettings {
             dragging: None,
             volume_override: None,
             wifi_override: None,
+            bluetooth_override: None,
+            device_override: None,
+            devices_open: false,
+            anchor,
             profile_override: None,
             brightness: status.backlight.as_ref().map(|b| b.percent()),
             frame_pending: false,
@@ -463,7 +541,7 @@ impl QuickSettings {
         anchor: (i32, i32, i32, i32),
     ) {
         let open = self.layout.power_menu.is_none();
-        let new = layout(theme, open, self.features);
+        let new = layout(theme, open, self.devices_open, self.features);
         let positioner = positioner(xdg_shell, &new, anchor);
         let old = std::mem::replace(&mut self.layout, new);
         if open {
@@ -474,6 +552,58 @@ impl QuickSettings {
         } else if let Some(positioner) = positioner {
             self.collapsing = Some((old, positioner));
         }
+    }
+
+    /// Lay the card out again (a list opened or closed, or what the
+    /// machine offers changed), resizing the popup at once.
+    fn relayout(&mut self, xdg_shell: &XdgShell, theme: &Theme) {
+        let new = layout(
+            theme,
+            self.layout.power_menu.is_some(),
+            self.devices_open,
+            self.features,
+        );
+        if new == self.layout {
+            return;
+        }
+        self.layout = new;
+        self.collapsing = None;
+        if let Some(positioner) = positioner(xdg_shell, &self.layout, self.anchor) {
+            self.popup.reposition(&positioner, 0);
+        }
+    }
+
+    /// The status changed: grow or shrink for parts that came or went (the
+    /// Bluetooth devices, as it's switched on and off).
+    pub fn status_changed(&mut self, xdg_shell: &XdgShell, theme: &Theme, status: &Status) {
+        let features = Features {
+            // Read only when the card opens.
+            brightness: self.features.brightness,
+            ..Features::of(status)
+        };
+        if features != self.features {
+            self.features = features;
+            self.relayout(xdg_shell, theme);
+        }
+    }
+
+    /// A pressed toggle or device is still waiting for the system to
+    /// confirm it (so it's worth drawing again soon).
+    pub fn waiting(&self) -> bool {
+        let fresh = |since: &Instant| since.elapsed() < CONFIRM_WITHIN;
+        self.wifi_override.as_ref().is_some_and(|(_, t)| fresh(t))
+            || self
+                .bluetooth_override
+                .as_ref()
+                .is_some_and(|(_, t)| fresh(t))
+            || self
+                .profile_override
+                .as_ref()
+                .is_some_and(|(_, t)| fresh(t))
+            || self
+                .device_override
+                .as_ref()
+                .is_some_and(|(_, _, t)| t.elapsed() < CONNECT_WITHIN)
     }
 
     /// Returns true if the popup should close.
@@ -513,6 +643,34 @@ impl QuickSettings {
                     actions.run(Action::SetWifi(!enabled));
                 }
             }
+            Some(Hit::Bluetooth) => {
+                let shown = self
+                    .bluetooth_override
+                    .map(|(on, _)| on)
+                    .or(status.bluetooth.as_ref().map(|b| b.powered));
+                if let Some(powered) = shown {
+                    self.bluetooth_override = Some((!powered, Instant::now()));
+                    actions.run(Action::SetBluetooth(!powered));
+                }
+            }
+            Some(Hit::BluetoothDevices) => {
+                self.devices_open = !self.devices_open;
+                self.relayout(xdg_shell, theme);
+            }
+            Some(Hit::BluetoothDevice(i)) => {
+                let device = status.bluetooth.as_ref().and_then(|b| b.devices.get(i));
+                let busy = self
+                    .device_override
+                    .as_ref()
+                    .is_some_and(|(_, _, since)| since.elapsed() < CONNECT_WITHIN);
+                if let Some(device) = device
+                    && !busy
+                {
+                    let connect = !device.connected;
+                    self.device_override = Some((device.address.clone(), connect, Instant::now()));
+                    actions.run(Action::ConnectBluetooth(device.address.clone(), connect));
+                }
+            }
             Some(Hit::Power) => self.toggle_power_menu(xdg_shell, theme, anchor),
             Some(Hit::Settings) => {
                 crate::apps::open_settings(None);
@@ -532,8 +690,8 @@ impl QuickSettings {
                 return true;
             }
             Some(Hit::DarkMode) => crate::config::set_dark(!theme.dark),
-            // Not wired up yet (Bluetooth, notifications).
-            Some(Hit::Bluetooth | Hit::DoNotDisturb) | None => {}
+            // Not wired up yet (notifications).
+            Some(Hit::DoNotDisturb) | None => {}
         }
         false
     }
@@ -617,6 +775,24 @@ impl QuickSettings {
         if let Some((on, _)) = self.wifi_override {
             shown.wifi_enabled = Some(on);
         }
+        let powered = status.bluetooth.as_ref().map(|b| b.powered);
+        self.bluetooth_override = self
+            .bluetooth_override
+            .filter(|&(on, since)| fresh(since) && powered != Some(on));
+        if let (Some((on, _)), Some(bluetooth)) = (self.bluetooth_override, &mut shown.bluetooth) {
+            bluetooth.powered = on;
+        }
+        self.device_override = self
+            .device_override
+            .take()
+            .filter(|(address, connect, since)| {
+                since.elapsed() < CONNECT_WITHIN
+                    && status.bluetooth.as_ref().is_some_and(|b| {
+                        b.devices
+                            .iter()
+                            .any(|d| d.address == *address && d.connected != *connect)
+                    })
+            });
         self.profile_override = self.profile_override.filter(|&(profile, since)| {
             fresh(since)
                 && status
@@ -648,6 +824,9 @@ impl QuickSettings {
             scale as f32,
             &mut self.anim,
             self.dragging,
+            self.device_override
+                .as_ref()
+                .map(|(address, connect, _)| (address.as_str(), *connect)),
         );
         // Still moving: draw again when this frame is shown.
         if self.anim.running() {
@@ -670,6 +849,8 @@ impl QuickSettings {
 
 /// How long a pressed toggle waits for the system to confirm the change.
 pub const CONFIRM_WITHIN: Duration = Duration::from_secs(3);
+/// How long a Bluetooth device may take to connect (or disconnect).
+pub const CONNECT_WITHIN: Duration = Duration::from_secs(20);
 
 /// Draw the card. Separate from the Wayland plumbing so tests can render it.
 #[allow(clippy::too_many_arguments)]
@@ -686,6 +867,8 @@ fn paint(
     s: f32,
     anim: &mut Animator<Moving>,
     dragging: Option<Slider>,
+    // A Bluetooth device being connected (true) or disconnected.
+    pending: Option<(&str, bool)>,
 ) {
     anim.begin();
     // Sliders glide to a clicked spot, but follow the pointer while dragged.
@@ -746,12 +929,21 @@ fn paint(
                 };
                 (wifi_on == Some(true), wifi_on.is_some(), icon, label)
             }
-            Hit::Bluetooth => (
-                false,
-                false,
-                "bluetooth-disabled-symbolic",
-                "Bluetooth".into(),
-            ),
+            Hit::Bluetooth => {
+                let bluetooth = status.bluetooth.as_ref();
+                let on = bluetooth.is_some_and(|b| b.powered);
+                // The connected device's name, the way Wi-Fi shows the network.
+                let label = bluetooth
+                    .filter(|b| b.powered)
+                    .and_then(|b| b.connected())
+                    .map_or_else(|| "Bluetooth".into(), |d| d.name.clone());
+                let icon = if on {
+                    "bluetooth-active-symbolic"
+                } else {
+                    "bluetooth-disabled-symbolic"
+                };
+                (on, bluetooth.is_some(), icon, label)
+            }
             Hit::DarkMode => (
                 theme.dark,
                 true,
@@ -816,6 +1008,11 @@ fn paint(
             );
         }
         canvas.text(fonts, &mut text, tx, ty, dim);
+    }
+
+    // Paired Bluetooth devices.
+    if let (Some(list), Some(bluetooth)) = (&layout.devices, &status.bluetooth) {
+        paint_devices(canvas, list, bluetooth, pending, fonts, icons, theme, s);
     }
 
     // Volume: the fat slider, speaker icon inside.
@@ -1063,6 +1260,106 @@ fn paint(
     );
 }
 
+/// The Bluetooth devices tile: "Devices" and an arrow, then (open) a row
+/// per paired device saying whether it's connected.
+#[allow(clippy::too_many_arguments)]
+fn paint_devices(
+    canvas: &mut Canvas<'_>,
+    list: &DeviceList,
+    bluetooth: &crate::status::Bluetooth,
+    pending: Option<(&str, bool)>,
+    fonts: &mut Fonts,
+    icons: &mut Icons,
+    theme: &Theme,
+    s: f32,
+) {
+    let tile = list.tile;
+    canvas.rounded_rect(
+        tile.x,
+        tile.y,
+        tile.w,
+        tile.h,
+        theme.qs_tile_radius.min(tile.h / 2.0),
+        theme.qs_tile,
+    );
+    let open = !list.rows.is_empty();
+    let header = list.header;
+    let arrow = if open {
+        "pan-up-symbolic"
+    } else {
+        "pan-down-symbolic"
+    };
+    canvas.icon(
+        icons,
+        arrow,
+        header.x + header.w - 14.0 - 16.0,
+        header.y + (header.h - 16.0) / 2.0,
+        16.0,
+        theme.qs_dim,
+    );
+    let icon_size = 18.0;
+    // One line: an icon, a name, and something on the right.
+    let mut line = |canvas: &mut Canvas<'_>,
+                    rect: Rect,
+                    icon: &str,
+                    name: &str,
+                    right: Option<(&str, Color)>| {
+        let iy = rect.y + (rect.h - icon_size) / 2.0;
+        if !canvas.icon(icons, icon, rect.x + 14.0, iy, icon_size, theme.popup_text) {
+            canvas.icon(
+                icons,
+                "bluetooth-active-symbolic",
+                rect.x + 14.0,
+                iy,
+                icon_size,
+                theme.popup_text,
+            );
+        }
+        let mut right_w = 14.0;
+        if let Some((text, color)) = right {
+            let mut text = fonts.layout(text, theme.qs_label_size, Weight::Normal, s);
+            right_w += text.width + 8.0;
+            let ty = (rect.y + (rect.h - text.height) / 2.0).round();
+            let tx = (rect.x + rect.w - 14.0 - text.width).round();
+            canvas.text(fonts, &mut text, tx, ty, color);
+        }
+        let x = rect.x + 14.0 + icon_size + 10.0;
+        let room = rect.x + rect.w - right_w - x;
+        let mut text = fonts.layout(name, theme.font_size, Weight::Normal, s);
+        let mut keep = name.chars().count();
+        while text.width > room && keep > 2 {
+            keep -= 1;
+            text = fonts.layout(&ellipsize(name, keep), theme.font_size, Weight::Normal, s);
+        }
+        let ty = (rect.y + (rect.h - text.height) / 2.0).round();
+        canvas.text(fonts, &mut text, x.round(), ty, theme.popup_text);
+    };
+
+    line(canvas, header, "bluetooth-active-symbolic", "Devices", None);
+    for (rect, device) in list.rows.iter().zip(&bluetooth.devices) {
+        canvas.rounded_rect(
+            rect.x + 14.0,
+            rect.y,
+            rect.w - 28.0,
+            1.0,
+            0.0,
+            theme.qs_dim.with_alpha(theme.qs_dim.a * 0.2),
+        );
+        let state = match pending {
+            Some((address, true)) if address == device.address => {
+                Some(("Connecting…", theme.qs_dim))
+            }
+            Some((address, false)) if address == device.address => {
+                Some(("Disconnecting…", theme.qs_dim))
+            }
+            _ if device.connected => Some(("Connected", theme.qs_toggle_on)),
+            _ => None,
+        };
+        let icon = format!("{}-symbolic", device.icon);
+        line(canvas, *rect, &icon, &device.name, state);
+    }
+}
+
 fn positioner(
     xdg_shell: &XdgShell,
     layout: &Layout,
@@ -1098,7 +1395,7 @@ mod tests {
     #[test]
     fn layout_hits() {
         let theme = Theme::dark();
-        let l = layout(&theme, false, Features::default());
+        let l = layout(&theme, false, false, Features::default());
         let centre = |r: Rect| ((r.x + r.w / 2.0) as f64, (r.y + r.h / 2.0) as f64);
         assert_eq!(l.hit(centre(l.toggles[0].0)), Some(Hit::Wifi));
         assert_eq!(
@@ -1114,8 +1411,8 @@ mod tests {
     #[test]
     fn power_menu_grows_the_card() {
         let theme = Theme::dark();
-        let closed = layout(&theme, false, Features::default());
-        let open = layout(&theme, true, Features::default());
+        let closed = layout(&theme, false, false, Features::default());
+        let open = layout(&theme, true, false, Features::default());
         assert!(open.height > closed.height);
         let reboot = open.power_menu.as_ref().unwrap()[2].0;
         assert_eq!(
@@ -1129,8 +1426,9 @@ mod tests {
         let features = Features {
             brightness: true,
             power_profiles: 3,
+            ..Features::default()
         };
-        let l = layout(&Theme::dark(), false, features);
+        let l = layout(&Theme::dark(), false, false, features);
         let b = l.brightness.unwrap();
         assert_eq!(
             l.hit(((b.x + b.w / 2.0) as f64, (b.y + 4.0) as f64)),
@@ -1142,16 +1440,16 @@ mod tests {
             l.hit(((last.x + 4.0) as f64, (last.y + 4.0) as f64)),
             Some(Hit::PowerProfile(2))
         );
-        assert!(l.height > layout(&Theme::dark(), false, Features::default()).height);
+        assert!(l.height > layout(&Theme::dark(), false, false, Features::default()).height);
     }
 
     #[test]
     fn sections_open_their_settings_pages() {
         let features = Features {
             brightness: true,
-            power_profiles: 0,
+            ..Features::default()
         };
-        let l = layout(&Theme::dark(), false, features);
+        let l = layout(&Theme::dark(), false, false, features);
         let (wifi, _) = l.toggles[0];
         let label = (
             (wifi.x + wifi.w / 2.0) as f64,
@@ -1165,18 +1463,75 @@ mod tests {
             l.hit(((end - b.h / 2.0) as f64, (b.y + b.h / 2.0) as f64)),
             Some(Hit::SettingsPage("displays"))
         );
-        // Bluetooth has no page.
         let (bt, _) = l.toggles[1];
         let label = (
             (bt.x + bt.w / 2.0) as f64,
             (bt.y + bt.h + LABEL_GAP + 4.0) as f64,
         );
+        assert_eq!(l.hit(label), Some(Hit::SettingsPage("bluetooth")));
+        // Do Not Disturb has no page.
+        let (dnd, _) = l.toggles[3];
+        let label = (
+            (dnd.x + dnd.w / 2.0) as f64,
+            (dnd.y + dnd.h + LABEL_GAP + 4.0) as f64,
+        );
         assert_eq!(l.hit(label), None);
     }
 
     #[test]
+    fn bluetooth_devices_open_and_close() {
+        let theme = Theme::dark();
+        let centre = |r: Rect| ((r.x + r.w / 2.0) as f64, (r.y + r.h / 2.0) as f64);
+        // No paired devices (or Bluetooth's off): no list.
+        let none = layout(&theme, false, true, Features::default());
+        assert!(none.devices.is_none());
+        let features = Features {
+            bluetooth_devices: 3,
+            ..Features::default()
+        };
+        let closed = layout(&theme, false, false, features);
+        let list = closed.devices.as_ref().unwrap();
+        assert!(list.rows.is_empty());
+        assert_eq!(closed.hit(centre(list.header)), Some(Hit::BluetoothDevices));
+        assert!(closed.volume.y > list.tile.y + list.tile.h);
+
+        let open = layout(&theme, false, true, features);
+        let list = open.devices.as_ref().unwrap();
+        assert_eq!(list.rows.len(), 3);
+        assert_eq!(
+            open.hit(centre(list.rows[2])),
+            Some(Hit::BluetoothDevice(2))
+        );
+        assert!(open.height > closed.height);
+        // The rest of the card moves down out of the way.
+        assert!(open.volume.y > list.rows[2].y + list.rows[2].h);
+        assert_eq!(open.hit(centre(open.volume)), Some(Hit::Volume));
+    }
+
+    #[test]
+    fn bluetooth_features_follow_status() {
+        let mut status = Status::default();
+        assert_eq!(Features::of(&status).bluetooth_devices, 0);
+        let device = |name: &str| crate::status::BluetoothDevice {
+            address: name.into(),
+            name: name.into(),
+            icon: String::new(),
+            connected: false,
+        };
+        status.bluetooth = Some(crate::status::Bluetooth {
+            powered: false,
+            devices: vec![device("a"), device("b")],
+        });
+        assert_eq!(Features::of(&status).bluetooth_devices, 0);
+        status.bluetooth.as_mut().unwrap().powered = true;
+        assert_eq!(Features::of(&status).bluetooth_devices, 2);
+        status.bluetooth.as_mut().unwrap().devices = (0..20).map(|_| device("x")).collect();
+        assert_eq!(Features::of(&status).bluetooth_devices, MAX_DEVICES);
+    }
+
+    #[test]
     fn slider_maps_x_to_percent() {
-        let l = layout(&Theme::dark(), false, Features::default());
+        let l = layout(&Theme::dark(), false, false, Features::default());
         assert_eq!(l.volume_at(l.volume.x as f64), 0);
         assert_eq!(l.volume_at((l.volume.x + l.volume.w) as f64), 100);
         assert_eq!(l.volume_at((l.volume.x + l.volume.w / 2.0) as f64), 50);
@@ -1215,11 +1570,29 @@ mod tests {
                 max: 100,
                 current: 40,
             }),
+            bluetooth: Some(crate::status::Bluetooth {
+                powered: true,
+                devices: vec![
+                    crate::status::BluetoothDevice {
+                        address: "00:00:00:00:00:01".into(),
+                        name: "Earbuds".into(),
+                        icon: "audio-headphones".into(),
+                        connected: true,
+                    },
+                    crate::status::BluetoothDevice {
+                        address: "00:00:00:00:00:02".into(),
+                        name: "Trackball".into(),
+                        icon: "input-mouse".into(),
+                        connected: false,
+                    },
+                ],
+            }),
         };
         let mut fonts = Fonts::new(theme.font_families);
         let mut icons = Icons::new();
         let power_open = std::env::var_os("CNDE_QS_POWER").is_some();
-        let layout = layout(&theme, power_open, Features::of(&status));
+        let devices_open = std::env::var_os("CNDE_QS_DEVICES").is_some();
+        let layout = layout(&theme, power_open, devices_open, Features::of(&status));
         let scale = 2.0;
         let (w, h) = (
             (layout.width * scale) as u32,
@@ -1240,6 +1613,7 @@ mod tests {
                 Some(40),
                 scale,
                 &mut Animator::new(),
+                None,
                 None,
             );
         }
