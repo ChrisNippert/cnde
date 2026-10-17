@@ -554,9 +554,10 @@ impl App {
             .dock
             .as_ref()
             .filter(|d| d.output == launcher.output && d.size().1 > 0)
-            .map_or(self.config.dock.icon_size as f32 + 24.0, |d| {
-                d.size().1 as f32
-            });
+            .map_or(
+                self.config.dock.icon_size as f32 + 2.0 * self.config.dock.padding + 12.0,
+                |d| d.size().1 as f32,
+            );
         height + margin + 16.0
     }
 
@@ -711,6 +712,7 @@ impl App {
                 dock.edit = self.dock_editing.then(dock::DockEdit::default);
             }
             dock.frosted = dock::frosted(self.config.dock.background);
+            dock.pad = self.config.dock.padding;
             dock.update(items, icon);
         }
         self.draw_dock();

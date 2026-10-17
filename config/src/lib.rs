@@ -306,6 +306,10 @@ pub struct Panel {
     pub workspace_dot_size: f32,
     /// Width of the pill marking active workspaces.
     pub workspace_active_width: f32,
+    /// Space between the screen's sides and the first and last buttons.
+    pub padding: f32,
+    /// Room either side of each button's content (Activities, status).
+    pub button_padding: f32,
 }
 
 impl Default for Panel {
@@ -323,6 +327,8 @@ impl Default for Panel {
             clock_position: ClockPosition::Center,
             workspace_dot_size: 7.0,
             workspace_active_width: 28.0,
+            padding: 12.0,
+            button_padding: 10.0,
         }
     }
 }
@@ -349,12 +355,14 @@ pub struct Dock {
     pub favorites: Vec<String>,
     /// Logical pixels.
     pub icon_size: u32,
+    /// Room either side of each icon; twice this between two icons.
+    pub padding: f32,
     /// What's behind the icons.
     pub background: DockBackground,
     /// On a screen edge: stretch across the whole edge instead of sitting
     /// in the middle, sized to its icons.
     pub extend: bool,
-    /// Where along its edge it sits (when not stretched).
+    /// Where along its edge it sits; stretched, where its icons sit.
     pub align: DockAlign,
     /// On a screen edge: maximized windows stop at it. Off, it floats over
     /// them.
@@ -372,6 +380,7 @@ impl Default for Dock {
                 "Alacritty.desktop".into(),
             ],
             icon_size: 48,
+            padding: 8.0,
             background: DockBackground::Solid,
             extend: false,
             align: DockAlign::Center,
@@ -590,6 +599,14 @@ impl Config {
             2.0,
             96.0,
         )?;
+        in_range("panel.padding", panel.padding as f64, 0.0, 400.0)?;
+        in_range(
+            "panel.button_padding",
+            panel.button_padding as f64,
+            0.0,
+            32.0,
+        )?;
+        in_range("dock.padding", self.dock.padding as f64, 0.0, 32.0)?;
         if !(24..=128).contains(&self.dock.icon_size) {
             return Err(Error::Invalid(format!(
                 "dock.icon_size must be 24 to 128, got {}",

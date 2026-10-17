@@ -349,7 +349,7 @@ impl Panel {
             .sum::<f32>()
             + theme.workspace_spacing * workspaces.len().saturating_sub(1) as f32;
         let pad = theme.panel_button_padding;
-        let start = theme.padding - pad / 2.0;
+        let start = theme.panel_padding - pad / 2.0;
         let activities = (start, start + pad + dots_width.max(dot) + pad);
         self.activities_region = Some(activities);
         self.button_background(
@@ -400,7 +400,7 @@ impl Panel {
             .as_ref()
             .map_or(0.0, |t| theme.status_icon_text_gap + t.width);
         let content = (icons_width + text_width).max(icon);
-        let end = width - theme.padding + pad / 2.0;
+        let end = width - theme.panel_padding + pad / 2.0;
         let region = (end - pad - content - pad, end);
         self.status_region = Some(region);
         self.button_background(

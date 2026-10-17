@@ -66,15 +66,18 @@
 # clock_position = "center"   # or "left", "right"
 # workspace_dot_size = 7
 # workspace_active_width = 28
+# padding = 12             # space at the left and right ends
+# button_padding = 10      # room either side of each button
 
 [dock]
 # position = "overview"    # "overview" (only there, like GNOME), "bottom", "left", "right", "off"
 # visibility = "always"    # on an edge: "always" ("intellihide" and "autohide" are coming)
 # favorites = ["firefox.desktop", "org.gnome.Nautilus.desktop", "Alacritty.desktop"]
 # icon_size = 48
+# padding = 8              # room either side of each icon
 # background = "solid"     # "solid" or "frosted" (translucent over the blurred wallpaper)
 # extend = false           # on an edge: stretch across the whole edge
-# align = "center"         # "start" (left/top), "center", "end" (right/bottom)
+# align = "center"         # "start" (left/top), "center", "end" (right/bottom); stretched, moves the icons
 # reserve = true           # on an edge: maximized windows stop at it; false floats it over them
 
 [launcher]

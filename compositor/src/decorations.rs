@@ -375,7 +375,13 @@ impl State {
             states
                 .data_map
                 .insert_if_missing_threadsafe(|| DecorationBound(Mutex::new(None)));
-            *states.data_map.get::<DecorationBound>().unwrap().0.lock().unwrap() = requested;
+            *states
+                .data_map
+                .get::<DecorationBound>()
+                .unwrap()
+                .0
+                .lock()
+                .unwrap() = requested;
         });
         self.send_decoration(toplevel);
     }
@@ -383,7 +389,13 @@ impl State {
     /// The mode the config and `toplevel`'s own request give.
     fn decoration_mode(&self, toplevel: &ToplevelSurface) -> DecorationMode {
         let requested = with_states(toplevel.wl_surface(), |states| {
-            *states.data_map.get::<DecorationBound>().unwrap().0.lock().unwrap()
+            *states
+                .data_map
+                .get::<DecorationBound>()
+                .unwrap()
+                .0
+                .lock()
+                .unwrap()
         });
         match self.config.appearance.titlebars {
             cnde_config::Titlebars::App => DecorationMode::ClientSide,

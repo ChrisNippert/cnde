@@ -125,6 +125,8 @@ pub struct Theme {
     pub panel_button_inset: f32,
     /// Extra width either side of the button's content.
     pub panel_button_padding: f32,
+    /// Space between the screen's sides and the first and last buttons.
+    pub panel_padding: f32,
 
     // Status icons (right side of the panel)
     pub status_icon_size: f32,
@@ -272,6 +274,7 @@ impl Theme {
             panel_button_active: Color::rgba(0xff, 0xff, 0xff, 0.22),
             panel_button_inset: 4.0,
             panel_button_padding: 10.0,
+            panel_padding: 12.0,
 
             status_icon_size: 16.0,
             status_spacing: 12.0,

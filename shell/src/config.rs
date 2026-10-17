@@ -48,6 +48,8 @@ pub fn theme_from(config: &Config) -> Theme {
     }
     theme.panel_foreground = color(&panel.foreground, theme.panel_foreground);
     theme.font_size = panel.font_size;
+    theme.panel_padding = panel.padding;
+    theme.panel_button_padding = panel.button_padding;
     theme.workspace_dot_size = panel.workspace_dot_size;
     theme.workspace_active_width = panel.workspace_active_width;
     // The dots follow the text colour so a light panel stays legible.

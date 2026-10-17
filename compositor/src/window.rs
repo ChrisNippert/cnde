@@ -118,7 +118,11 @@ impl State {
 
     /// The area a window in `placement` may occupy on its monitor: the whole
     /// monitor when fullscreen, otherwise what panels leave free.
-    pub(crate) fn area_for(&self, window: &Window, placement: Placement) -> Option<Rectangle<i32, Logical>> {
+    pub(crate) fn area_for(
+        &self,
+        window: &Window,
+        placement: Placement,
+    ) -> Option<Rectangle<i32, Logical>> {
         self.area_on(&self.output_for(window)?, placement)
     }
 

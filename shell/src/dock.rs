@@ -25,8 +25,7 @@ use tracing::warn;
 
 use crate::{App, apps::App as AppEntry};
 
-/// Padding around each icon, and inside the dock's background.
-const CELL_PAD: f32 = 8.0;
+/// Padding inside the dock's background, around the icons' cells.
 const INNER_PAD: f32 = 6.0;
 /// Gap between the dock and the screen edge.
 const EDGE_MARGIN: i32 = 8;
@@ -148,8 +147,8 @@ pub enum Control {
 }
 
 /// `editing` adds the edit-mode buttons ([`CONTROLS`]) at the end.
-pub fn layout(items: &[Item], icon: f32, vertical: bool, editing: bool) -> Layout {
-    let cell = icon + 2.0 * CELL_PAD;
+pub fn layout(items: &[Item], icon: f32, pad: f32, vertical: bool, editing: bool) -> Layout {
+    let cell = icon + 2.0 * pad;
     let favorites = items.iter().filter(|i| i.favorite).count();
     let separated = favorites > 0 && favorites < items.len();
     let mut along = INNER_PAD;
@@ -183,17 +182,17 @@ pub fn layout(items: &[Item], icon: f32, vertical: bool, editing: bool) -> Layou
         {
             let line = if vertical {
                 Rect {
-                    x: INNER_PAD + CELL_PAD,
+                    x: INNER_PAD + pad,
                     y: along + SEPARATOR / 2.0 - 0.5,
-                    w: cell - 2.0 * CELL_PAD,
+                    w: cell - 2.0 * pad,
                     h: 1.0,
                 }
             } else {
                 Rect {
                     x: along + SEPARATOR / 2.0 - 0.5,
-                    y: INNER_PAD + CELL_PAD,
+                    y: INNER_PAD + pad,
                     w: 1.0,
-                    h: cell - 2.0 * CELL_PAD,
+                    h: cell - 2.0 * pad,
                 }
             };
             if i == favorites && separated {
@@ -264,6 +263,8 @@ pub struct Dock {
     reserve: bool,
     /// Translucent: the compositor frosts the wallpaper behind it.
     pub frosted: bool,
+    /// Room either side of each icon (`dock.padding`).
+    pub pad: f32,
     /// The size the compositor gave the surface (stretched docks).
     surface_size: (u32, u32),
     scale: i32,
@@ -351,6 +352,7 @@ impl Dock {
             align,
             reserve,
             frosted: false,
+            pad: 8.0,
             surface_size: (0, 0),
             scale: scale.max(1),
             configured: false,
@@ -374,14 +376,20 @@ impl Dock {
     }
 
     fn layout(&self, icon: f32) -> Layout {
-        let layout = layout(&self.items, icon, self.vertical(), self.edit.is_some());
+        let layout = layout(
+            &self.items,
+            icon,
+            self.pad,
+            self.vertical(),
+            self.edit.is_some(),
+        );
         let length = if self.vertical() {
             self.surface_size.1
         } else {
             self.surface_size.0
         };
         if self.extend {
-            spread(layout, length as f32, self.vertical())
+            spread(layout, length as f32, self.vertical(), self.align)
         } else {
             layout
         }
@@ -719,7 +727,10 @@ fn paint(
                 theme.search_selected,
             );
         }
-        let (x, y) = (cell.x + CELL_PAD, cell.y + CELL_PAD);
+        let (x, y) = (
+            cell.x + (cell.w - icon) / 2.0,
+            cell.y + (cell.h - icon) / 2.0,
+        );
         let Some(item) = items.get(i) else {
             // The apps button, then (editing) the edit buttons.
             let control = i.checked_sub(items.len() + 1).and_then(|c| CONTROLS.get(c));
@@ -883,9 +894,9 @@ fn paint(
         }
         // The icon itself, under the pointer (along the dock only).
         let (x, y) = if vertical {
-            (cell.x + CELL_PAD, at.1 as f32 - icon / 2.0)
+            (cell.x + (cell.w - icon) / 2.0, at.1 as f32 - icon / 2.0)
         } else {
-            (at.0 as f32 - icon / 2.0, cell.y + CELL_PAD)
+            (at.0 as f32 - icon / 2.0, cell.y + (cell.h - icon) / 2.0)
         };
         canvas.app_icon(icons, &item.icon, x, y, icon);
     }
@@ -911,8 +922,8 @@ impl Look {
     }
 }
 
-/// A stretched dock: the same cells, centred along `length`.
-fn spread(mut layout: Layout, length: f32, vertical: bool) -> Layout {
+/// A stretched dock: the same cells, placed along `length` by `align`.
+fn spread(mut layout: Layout, length: f32, vertical: bool, align: DockAlign) -> Layout {
     let natural = if vertical {
         layout.height
     } else {
@@ -921,7 +932,11 @@ fn spread(mut layout: Layout, length: f32, vertical: bool) -> Layout {
     if length <= natural {
         return layout;
     }
-    let shift = ((length - natural) / 2.0).round();
+    let shift = match align {
+        DockAlign::Start => 0.0,
+        DockAlign::Center => ((length - natural) / 2.0).round(),
+        DockAlign::End => length - natural,
+    };
     let moved = |r: &mut Rect| {
         if vertical {
             r.y += shift;
@@ -981,15 +996,25 @@ mod tests {
             };
             3
         ];
-        let l = layout(&items, 48.0, false, false);
+        let l = layout(&items, 48.0, 8.0, false, false);
         assert_eq!(l.cells.len(), 4);
         assert!(
             l.cells[3].x > l.cells[2].x + l.cells[2].w,
             "a gap before the apps button"
         );
         assert!(l.width > l.height);
-        let v = layout(&items, 48.0, true, false);
+        let v = layout(&items, 48.0, 8.0, true, false);
         assert!(v.height > v.width);
+    }
+
+    #[test]
+    fn stretched_dock_places_icons_by_align() {
+        let l = layout(&[], 48.0, 8.0, false, false);
+        let first = |align| spread(l.clone(), 1000.0, false, align).cells[0].x;
+        assert_eq!(first(DockAlign::Start), l.cells[0].x);
+        assert_eq!(first(DockAlign::End), l.cells[0].x + 1000.0 - l.width);
+        assert!(first(DockAlign::Start) < first(DockAlign::Center));
+        assert!(first(DockAlign::Center) < first(DockAlign::End));
     }
 
     /// `CNDE_DOCK_PREVIEW=/path cargo test -p cnde-shell dock_preview -- --ignored`
@@ -1012,7 +1037,7 @@ mod tests {
         .collect();
         let windows = vec![window(1, "firefox", true), window(2, "discord", false)];
         let items = items(&favorites, &apps, &windows);
-        let l = layout(&items, 48.0, false, false);
+        let l = layout(&items, 48.0, 8.0, false, false);
         let (w, h) = (l.width.ceil() as u32, l.height.ceil() as u32);
         let mut pixels = vec![0u8; (w * h * 4) as usize];
         {

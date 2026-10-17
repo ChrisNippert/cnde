@@ -1314,6 +1314,34 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .advanced(),
                 Row::new(
+                    "panel.padding",
+                    "Space at the ends",
+                    Control::Slider {
+                        min: 0.0,
+                        max: 400.0,
+                        step: 2.0,
+                        int: false,
+                        format: px,
+                    },
+                    Value::Float(p.padding as f64),
+                    Value::Float(dp.padding as f64),
+                )
+                .sub("Between the screen's sides and the first and last buttons"),
+                Row::new(
+                    "panel.button_padding",
+                    "Button padding",
+                    Control::Slider {
+                        min: 0.0,
+                        max: 32.0,
+                        step: 1.0,
+                        int: false,
+                        format: px,
+                    },
+                    Value::Float(p.button_padding as f64),
+                    Value::Float(dp.button_padding as f64),
+                )
+                .sub("Room either side of each button"),
+                Row::new(
                     "panel.font_size",
                     "Text size",
                     Control::Slider {
@@ -1499,7 +1527,7 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
             .sub("Off, the dock floats over maximized windows"),
         );
     }
-    if c.dock.position != DockPosition::Off && !(on_edge && c.dock.extend) {
+    if c.dock.position != DockPosition::Off {
         let align = |v: cnde_config::DockAlign| {
             s(match v {
                 cnde_config::DockAlign::Start => "start",
@@ -1513,7 +1541,7 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
         } else {
             ("Left", "Right")
         };
-        rows.push(Row::new(
+        let row = Row::new(
             "dock.align",
             "Alignment",
             Control::Segmented(choices(&[
@@ -1523,7 +1551,12 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
             ])),
             align(c.dock.align),
             align(d.dock.align),
-        ));
+        );
+        rows.push(if on_edge && c.dock.extend {
+            row.sub("Where the icons sit along the stretched dock")
+        } else {
+            row
+        });
     }
     if c.dock.position != DockPosition::Off {
         rows.push(Row::new(
@@ -1539,6 +1572,22 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
             Value::Int(c.dock.icon_size as i64),
             Value::Int(d.dock.icon_size as i64),
         ));
+        rows.push(
+            Row::new(
+                "dock.padding",
+                "Icon spacing",
+                Control::Slider {
+                    min: 0.0,
+                    max: 32.0,
+                    step: 1.0,
+                    int: false,
+                    format: |v| format!("{v:.0} px"),
+                },
+                Value::Float(c.dock.padding as f64),
+                Value::Float(d.dock.padding as f64),
+            )
+            .sub("Room either side of each icon"),
+        );
     }
     vec![group("Dock", rows)]
 }
