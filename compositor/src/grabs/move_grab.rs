@@ -36,7 +36,10 @@ impl PointerGrab<State> for MoveSurfaceGrab {
         let new_location = self.initial_window_location.to_f64() + delta;
         data.space
             .map_element(self.window.clone(), new_location.to_i32_round(), true);
-        data.update_snap_preview(&self.window, event.location);
+        // A tile being dragged swaps with tiles instead of snapping to edges.
+        if self.tile.is_none() {
+            data.update_snap_preview(&self.window, event.location);
+        }
         data.queue_redraw();
     }
 
