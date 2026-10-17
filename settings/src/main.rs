@@ -254,6 +254,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dragging: None,
             wifi: None,
             wifi_join: None,
+            wifi_details: None,
             arranged: None,
             arranging: None,
         },
@@ -328,6 +329,15 @@ impl App {
                     {
                         app.ui.wifi_join = None;
                     }
+                    // Its details close once it's no longer connected.
+                    if let Some(ssid) = &app.ui.wifi_details
+                        && !state
+                            .networks
+                            .iter()
+                            .any(|n| n.connected && n.ssid == *ssid)
+                    {
+                        app.ui.wifi_details = None;
+                    }
                     app.ui.wifi = Some(state);
                     app.redraw();
                 }
@@ -363,6 +373,7 @@ impl App {
             return;
         };
         if network.connected {
+            self.open_sub_page(Some(ssid.to_string()));
             return;
         }
         if network.known || !network.security.secured() {
@@ -393,6 +404,17 @@ impl App {
             JoinField::Password
         };
         self.edit_field(Key::Wifi(WifiKey::Join(first)), String::new());
+        self.redraw();
+    }
+
+    /// Into the connected network's details (`Some`), or back out of them,
+    /// with the fade a new page gets.
+    fn open_sub_page(&mut self, ssid: Option<String>) {
+        self.ui.wifi_details = ssid;
+        self.ui.scroll = 0.0;
+        self.res
+            .anim
+            .restart(view::AnimKey::Page, 0.0, 1.0, cnde_ui::anim::MEDIUM);
         self.redraw();
     }
 
@@ -707,6 +729,7 @@ impl App {
             Target::Page(page) => {
                 if self.ui.page != page {
                     self.ui.page = page;
+                    self.ui.wifi_details = None;
                     self.res
                         .anim
                         .restart(view::AnimKey::Page, 0.0, 1.0, cnde_ui::anim::MEDIUM);
@@ -716,6 +739,7 @@ impl App {
                     }
                 }
             }
+            Target::Back => self.open_sub_page(None),
             Target::Close => self.exit.stop(),
             Target::Minimize => self.window.set_minimized(),
             Target::Maximize => {
@@ -1027,6 +1051,8 @@ impl App {
         if event.keysym == Keysym::Escape {
             if self.ui.popover.take().is_some() || self.ui.edit.take().is_some() {
                 self.redraw();
+            } else if self.ui.sub_page().is_some() {
+                self.open_sub_page(None);
             }
             return;
         }
