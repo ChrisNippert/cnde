@@ -294,6 +294,9 @@ pub struct Dock {
     reserve: bool,
     /// Translucent: the compositor frosts the wallpaper behind it.
     pub frosted: bool,
+    /// A window's against the dock's edge: a frosted dock fades to solid.
+    pub solid: bool,
+    solid_fade: cnde_ui::Animator<()>,
     /// Room either side of each icon (`dock.padding`).
     pub pad: f32,
     pub launcher: LauncherPlace,
@@ -384,6 +387,8 @@ impl Dock {
             align,
             reserve,
             frosted: false,
+            solid: false,
+            solid_fade: cnde_ui::Animator::new(),
             pad: 8.0,
             launcher: LauncherPlace::default(),
             surface_size: (0, 0),
@@ -613,6 +618,12 @@ impl Dock {
         self.dirty = false;
         let layout = self.layout(icon);
         let scale = self.scale;
+        self.solid_fade.begin();
+        let solid = self.solid_fade.get(
+            (),
+            if self.solid { 1.0 } else { 0.0 },
+            cnde_ui::anim::MEDIUM,
+        );
         // Bouncing icons: done once the app has a window, or after a while.
         let items = &self.items;
         self.launching.retain(|(id, at)| {
@@ -665,6 +676,7 @@ impl Dock {
                 Look {
                     radius: self.radius(),
                     frosted: self.frosted,
+                    solid,
                 },
                 (&hops, away),
                 icons,
@@ -685,7 +697,7 @@ impl Dock {
             surface.commit();
         }
         // Keep hopping: draw again on the next frame.
-        if !self.launching.is_empty() {
+        if !self.launching.is_empty() || self.solid_fade.running() {
             self.dirty = true;
         }
     }
@@ -710,7 +722,9 @@ fn paint(
     let drag = edit.and_then(|e| e.drag);
     // Frosted: a light tint over the blur the compositor draws behind.
     let base = if look.frosted {
-        theme.search_background.with_alpha(FROSTED_ALPHA)
+        theme
+            .search_background
+            .with_alpha(FROSTED_ALPHA + (1.0 - FROSTED_ALPHA) * look.solid)
     } else {
         // Solid means solid (the style's colour is a touch see-through).
         theme.search_background.with_alpha(1.0)
@@ -942,6 +956,8 @@ fn paint(
 struct Look {
     radius: f32,
     frosted: bool,
+    /// How far a frosted dock has faded to solid, 0-1.
+    solid: f32,
 }
 
 /// How opaque a frosted dock's tint is.
@@ -953,6 +969,7 @@ impl Look {
         Self {
             radius: cnde_ipc::dock::RADIUS as f32,
             frosted: false,
+            solid: 0.0,
         }
     }
 }

@@ -728,7 +728,8 @@ impl App {
             if dock.edit.is_some() != self.dock_editing {
                 dock.edit = self.dock_editing.then(dock::DockEdit::default);
             }
-            dock.frosted = dock::frosted(self.config.dock.background) && !touched;
+            dock.frosted = dock::frosted(self.config.dock.background);
+            dock.solid = touched;
             dock.pad = self.config.dock.padding;
             dock.launcher = dock::LauncherPlace {
                 first: self.config.dock.launcher == cnde_config::LauncherSide::Start,

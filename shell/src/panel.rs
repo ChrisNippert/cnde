@@ -95,6 +95,8 @@ pub struct Panel {
     done_region: Option<(f32, f32)>,
     /// Hover pills fading: (button, true) for the "open" highlight.
     anim: Animator<(Button, bool)>,
+    /// Fading to solid (1) when a window's against the bar, and back.
+    solid_fade: Animator<()>,
     /// A frame callback is outstanding; draw when it fires.
     frame_pending: bool,
     dirty: bool,
@@ -138,6 +140,7 @@ impl Panel {
             clock_region: None,
             done_region: None,
             anim: Animator::new(),
+            solid_fade: Animator::new(),
             frame_pending: false,
             dirty: false,
         }
@@ -296,6 +299,10 @@ impl Panel {
         }
         self.dirty = false;
         self.anim.begin();
+        self.solid_fade.begin();
+        let solid = self
+            .solid_fade
+            .get((), if solid { 1.0 } else { 0.0 }, cnde_ui::anim::MEDIUM);
         let scale = self.scale;
         let (w, h) = (
             self.width as i32 * scale,
@@ -334,10 +341,9 @@ impl Panel {
             width,
             height + self.radius,
             self.radius,
-            if solid {
-                theme.panel_background.with_alpha(1.0)
-            } else {
-                theme.panel_background
+            {
+                let a = theme.panel_background.a;
+                theme.panel_background.with_alpha(a + (1.0 - a) * solid)
             },
         );
 
@@ -532,7 +538,7 @@ impl Panel {
         surface.frame(qh, FrameCallbackData(surface.clone()));
         self.frame_pending = true;
         // A pill still fading: draw again next frame.
-        if self.anim.running() {
+        if self.anim.running() || self.solid_fade.running() {
             self.dirty = true;
         }
         self.layer.commit();
