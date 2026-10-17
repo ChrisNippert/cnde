@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
 };
 
-use cnde_ipc::{Event, Request, WindowInfo};
+use cnde_ipc::{Event, OutputEdges, Request, WindowInfo};
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, generic::Generic};
 use tracing::{debug, info, warn};
 
@@ -19,6 +19,8 @@ pub struct IpcClients {
     clients: Vec<(u64, UnixStream)>,
     /// The window list as last sent; `None` forces a resend.
     windows: Option<Vec<WindowInfo>>,
+    /// The edges as last sent; `None` forces a resend.
+    edges: Option<Vec<OutputEdges>>,
 }
 
 impl IpcClients {
@@ -97,6 +99,7 @@ impl State {
         self.ipc.clients.push((id, writer));
         // Everyone gets the window list again; the newcomer needs it.
         self.ipc.windows = None;
+        self.ipc.edges = None;
         debug!(id, "IPC client connected");
 
         let mut pending = Vec::new();
@@ -228,6 +231,56 @@ impl State {
                 windows: windows.clone(),
             });
             self.ipc.windows = Some(windows);
+        }
+    }
+
+    /// Send which monitor edges windows touch, if that changed.
+    pub fn sync_ipc_edges(&mut self) {
+        if self.ipc.clients.is_empty() {
+            return;
+        }
+        let open = self.overview.is_open() || self.lock.is_locked();
+        let edges: Vec<OutputEdges> = self
+            .space
+            .outputs()
+            .map(|output| {
+                let mut edges = OutputEdges {
+                    output: output.name(),
+                    ..Default::default()
+                };
+                let (Some(geo), false) = (self.space.output_geometry(output), open) else {
+                    return edges;
+                };
+                let zone = smithay::desktop::layer_map_for_output(output).non_exclusive_zone();
+                let zone = smithay::utils::Rectangle::new(zone.loc + geo.loc, zone.size);
+                for window in self.space.elements_for_output(output) {
+                    let Some(rect) = self.space.element_geometry(window) else {
+                        continue;
+                    };
+                    if crate::window::with_state(window, |s| s.minimized) {
+                        continue;
+                    }
+                    // A server-drawn titlebar sits above the geometry.
+                    let top = rect.loc.y - crate::decorations::titlebar_height(window);
+                    let overlaps_x = rect.loc.x < zone.loc.x + zone.size.w
+                        && rect.loc.x + rect.size.w > zone.loc.x;
+                    let overlaps_y =
+                        top < zone.loc.y + zone.size.h && rect.loc.y + rect.size.h > zone.loc.y;
+                    edges.top |= overlaps_x && top <= zone.loc.y;
+                    edges.bottom |=
+                        overlaps_x && rect.loc.y + rect.size.h >= zone.loc.y + zone.size.h;
+                    edges.left |= overlaps_y && rect.loc.x <= zone.loc.x;
+                    edges.right |=
+                        overlaps_y && rect.loc.x + rect.size.w >= zone.loc.x + zone.size.w;
+                }
+                edges
+            })
+            .collect();
+        if self.ipc.edges.as_ref() != Some(&edges) {
+            self.ipc.broadcast(&Event::Edges {
+                outputs: edges.clone(),
+            });
+            self.ipc.edges = Some(edges);
         }
     }
 

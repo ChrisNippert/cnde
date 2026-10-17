@@ -712,7 +712,8 @@ fn paint(
     let base = if look.frosted {
         theme.search_background.with_alpha(FROSTED_ALPHA)
     } else {
-        theme.search_background
+        // Solid means solid (the style's colour is a touch see-through).
+        theme.search_background.with_alpha(1.0)
     };
     // Carrying the dock: tinted, so it's clear it's moving.
     let background = if matches!(drag, Some(DockDrag::Move { .. })) {

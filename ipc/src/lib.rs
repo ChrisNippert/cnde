@@ -52,6 +52,21 @@ pub enum Event {
     MediaKey {
         key: MediaKey,
     },
+    /// Which edges of each monitor's free area have a window against them
+    /// (maximized, snapped or pushed there): bars there turn solid. Sent
+    /// when it changes; nothing touches anything while the overview's open.
+    Edges {
+        outputs: Vec<OutputEdges>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct OutputEdges {
+    pub output: String,
+    pub top: bool,
+    pub bottom: bool,
+    pub left: bool,
+    pub right: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -38,6 +38,8 @@ pub struct Draw<'a> {
     pub overview_open: bool,
     pub quick_settings_open: bool,
     pub clock_position: ClockPosition,
+    /// A window is against the bar: no see-through, whatever the style.
+    pub solid: bool,
 }
 
 /// Editing the bar in place (from its right-click menu).
@@ -283,6 +285,7 @@ impl Panel {
             overview_open,
             quick_settings_open,
             clock_position,
+            solid,
         } = ctx;
         if self.width == 0 {
             return; // not configured yet
@@ -331,7 +334,11 @@ impl Panel {
             width,
             height + self.radius,
             self.radius,
-            theme.panel_background,
+            if solid {
+                theme.panel_background.with_alpha(1.0)
+            } else {
+                theme.panel_background
+            },
         );
 
         // Activities: GNOME-style workspace dots, the active ones stretched

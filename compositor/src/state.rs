@@ -304,6 +304,7 @@ impl State {
         }
         self.refresh_ext_workspaces();
         self.sync_ipc_windows();
+        self.sync_ipc_edges();
         self.screenshot_ready_check();
         // Last, so frame callbacks sent while rendering go out now.
         if let Err(err) = self.display_handle.flush_clients() {

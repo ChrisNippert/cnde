@@ -622,7 +622,12 @@ impl Config {
             32.0,
         )?;
         in_range("dock.padding", self.dock.padding as f64, 0.0, 32.0)?;
-        in_range("dock.launcher_gap", self.dock.launcher_gap as f64, 0.0, 400.0)?;
+        in_range(
+            "dock.launcher_gap",
+            self.dock.launcher_gap as f64,
+            0.0,
+            400.0,
+        )?;
         if !(24..=128).contains(&self.dock.icon_size) {
             return Err(Error::Invalid(format!(
                 "dock.icon_size must be 24 to 128, got {}",

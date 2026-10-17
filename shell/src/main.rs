@@ -155,6 +155,8 @@ pub struct App {
     screenshot: Option<screenshot::ScreenshotUi>,
     /// Every open window, from the compositor.
     windows: Vec<cnde_ipc::WindowInfo>,
+    /// Which monitor edges windows touch (bars there go solid).
+    edges: Vec<cnde_ipc::OutputEdges>,
     /// Where an overview dock goes (the overview's monitor).
     dock_output: Option<wl_output::WlOutput>,
     overview_open: bool,
@@ -255,6 +257,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dock_drag_start: None,
         dock_preview: None,
         windows: Vec::new(),
+        edges: Vec::new(),
         dock_output: None,
         overview_open: false,
         reported_grid: false,
@@ -410,6 +413,11 @@ impl App {
                 self.sync_dock();
             }
             cnde_ipc::Event::ScreenshotUi { windows } => self.open_screenshot_ui(windows),
+            cnde_ipc::Event::Edges { outputs } => {
+                self.edges = outputs;
+                self.redraw_panels();
+                self.sync_dock();
+            }
             cnde_ipc::Event::ScreenshotDone { path } => {
                 self.screenshot = None;
                 if let Some(path) = path {
@@ -707,11 +715,20 @@ impl App {
         }
         let items = dock::items(&self.config.dock.favorites, &self.apps, &self.windows);
         let icon = self.config.dock.icon_size as f32;
+        // A window against the dock's edge makes it solid.
+        let touched = self.dock.as_ref().is_some_and(|dock| {
+            self.edges_of(&dock.output)
+                .is_some_and(|e| match dock.position() {
+                    cnde_config::DockPosition::Left => e.left,
+                    cnde_config::DockPosition::Right => e.right,
+                    _ => e.bottom,
+                })
+        });
         if let Some(dock) = &mut self.dock {
             if dock.edit.is_some() != self.dock_editing {
                 dock.edit = self.dock_editing.then(dock::DockEdit::default);
             }
-            dock.frosted = dock::frosted(self.config.dock.background);
+            dock.frosted = dock::frosted(self.config.dock.background) && !touched;
             dock.pad = self.config.dock.padding;
             dock.launcher = dock::LauncherPlace {
                 first: self.config.dock.launcher == cnde_config::LauncherSide::Start,
@@ -746,6 +763,12 @@ impl App {
     pub fn redraw_all(&mut self) {
         self.redraw_panels();
         self.draw_quick_settings();
+    }
+
+    /// What the compositor last said touches `output`'s edges.
+    fn edges_of(&self, output: &wl_output::WlOutput) -> Option<&cnde_ipc::OutputEdges> {
+        let name = self.outputs.info(output)?.name?;
+        self.edges.iter().find(|e| e.output == name)
     }
 
     fn redraw_panels(&mut self) {
@@ -851,6 +874,11 @@ impl App {
     }
 
     fn draw_panel(&mut self, index: usize) {
+        let solid = self
+            .panels
+            .get(index)
+            .and_then(|p| self.edges_of(&p.output))
+            .is_some_and(|e| e.top);
         let Some(panel) = self.panels.get_mut(index) else {
             return;
         };
@@ -868,6 +896,7 @@ impl App {
                 overview_open: self.overview_open,
                 quick_settings_open: self.quick_settings.is_some(),
                 clock_position: self.config.panel.clock_position,
+                solid,
             },
         );
     }
