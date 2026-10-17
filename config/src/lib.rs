@@ -54,6 +54,9 @@ pub struct Keyboard {
     pub repeat_delay: i32,
     /// Repeats per second.
     pub repeat_rate: i32,
+    /// Super+Alt+Left/Right move the content that way (Left shows the next
+    /// workspace), like natural scrolling. Off: Left goes to the previous.
+    pub natural_workspace_keys: bool,
 }
 
 impl Default for Keyboard {
@@ -64,6 +67,7 @@ impl Default for Keyboard {
             options: String::new(),
             repeat_delay: 200,
             repeat_rate: 25,
+            natural_workspace_keys: false,
         }
     }
 }

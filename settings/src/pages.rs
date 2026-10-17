@@ -1203,6 +1203,19 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
                 ),
             ],
         ),
+        group(
+            "Workspaces",
+            vec![
+                Row::new(
+                    "input.keyboard.natural_workspace_keys",
+                    "Natural workspace keys",
+                    Control::switch(),
+                    Value::Bool(k.natural_workspace_keys),
+                    Value::Bool(dk.natural_workspace_keys),
+                )
+                .sub("Super+Alt+Left shows the next workspace, as the content moves left"),
+            ],
+        ),
     ]
 }
 

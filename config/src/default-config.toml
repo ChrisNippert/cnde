@@ -10,6 +10,7 @@
 # options = ""             # e.g. "caps:escape"
 # repeat_delay = 200       # ms before a held key repeats
 # repeat_rate = 25         # repeats per second
+# natural_workspace_keys = false   # true: Super+Alt+Left shows the next workspace (content moves left)
 
 [input.mouse]
 # speed = 0.0              # -1.0 (slow) to 1.0 (fast)

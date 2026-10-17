@@ -213,7 +213,7 @@ Every default listed here can be rebound or reconfigured.
 | Super+Up / Down | Maximize / restore |
 | Super+Left / Right | Snap to left / right half (straight across if already snapped to the other side) |
 | Super+Shift+F | Toggle fullscreen |
-| Super+Alt+Left / Right | Slide the workspace strip left / right (Left = next workspace; see Workspaces) |
+| Super+Alt+Left / Right | Previous / next workspace (`natural_workspace_keys` swaps them; see Workspaces) |
 | Super+Alt+Shift+Left / Right | Same, carrying the focused window along |
 | Super+Shift+S | Screenshot UI |
 | Super+Q | Launch default terminal (`$TERMINAL`, then `xdg-terminal-exec`, then a fallback list) |
@@ -231,15 +231,16 @@ Every default listed here can be rebound or reconfigured.
 
   ```
   [1] [2] [3] [4]          [1] [2] [3] [4]
-   ↑   ↑         Super+Alt+Left   ↑   ↑
+   ↑   ↑        Super+Alt+Right   ↑   ↑
   main right       ───────►      main right
   ```
 
   - Super+Alt+Left/Right slides the whole strip by one workspace, on all
     monitors at once, animated as one continuous motion.
-  - **Direction = content motion.** Left moves content left, which reveals the next
-    workspace. This matches 3-finger swipe direction, so keys and gestures agree.
-    (This is the reverse of GNOME's keybind direction, and it's intentional.)
+  - **Direction = the workspace you go to.** Right goes to the next workspace,
+    as in GNOME. `[input.keyboard] natural_workspace_keys = true` makes the
+    arrow the content's motion instead (Left reveals the next workspace),
+    matching the 3-finger swipe, like natural scrolling.
   - **Gestures are "natural".** Content follows the fingers 1:1, like
     natural touchpad scrolling. Swiping fingers right-to-left reveals the next
     workspace. This holds regardless of the scroll-direction setting (as in

@@ -32,6 +32,7 @@ pub enum Action {
     /// Super+Shift+S or Print Screen.
     Screenshot,
     /// Slide the workspace strip: +1 = next (content moves left).
+    /// Right is +1; `[input.keyboard] natural_workspace_keys` flips it.
     /// `carry` brings the focused window along.
     Workspace {
         step: isize,
@@ -95,11 +96,11 @@ pub fn action_for(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> Option
         ModKey::Alt => mods.alt && mods.ctrl && !mods.logo,
     };
     if workspace_mods {
-        // Direction = content motion (ARCHITECTURE.md §5.2): Left reveals
-        // the next workspace.
+        // Right goes to the next workspace; the caller flips it for
+        // natural keys (content moves with the arrow, so Left reveals next).
         let step = match sym {
-            keysyms::KEY_Left => 1,
-            keysyms::KEY_Right => -1,
+            keysyms::KEY_Left => -1,
+            keysyms::KEY_Right => 1,
             _ => return None,
         };
         return Some(Action::Workspace {
@@ -169,7 +170,7 @@ mod tests {
         assert_eq!(
             action_for(ModKey::Super, &m, Keysym::from(keysyms::KEY_Left)),
             Some(Action::Workspace {
-                step: 1,
+                step: -1,
                 carry: false
             })
         );
@@ -177,7 +178,7 @@ mod tests {
         assert_eq!(
             action_for(ModKey::Super, &carry, Keysym::from(keysyms::KEY_Right)),
             Some(Action::Workspace {
-                step: -1,
+                step: 1,
                 carry: true
             })
         );

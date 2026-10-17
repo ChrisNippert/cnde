@@ -254,7 +254,14 @@ impl State {
             Action::SnapRight => self.set_focused_placement(Placement::SnappedRight),
             Action::ToggleFullscreen => self.toggle_focused_fullscreen(),
             Action::SwitchVt(vt) => self.switch_vt(vt),
-            Action::Workspace { step, carry } => self.step_workspace(step, carry),
+            Action::Workspace { step, carry } => {
+                let step = if self.config.input.keyboard.natural_workspace_keys {
+                    -step
+                } else {
+                    step
+                };
+                self.step_workspace(step, carry)
+            }
             Action::Media(key) => self.ipc.broadcast(&cnde_ipc::Event::MediaKey { key }),
             Action::Screenshot => self.start_screenshot(),
             Action::Launcher if self.screenshot.active => {}
