@@ -510,7 +510,7 @@ impl State {
                         _ => 0,
                     };
                     let rect = content_rect(crate::window::placement_rect(placement, area), bar);
-                    self.space.map_element(window.clone(), rect.loc, false);
+                    self.move_window(&window, rect.loc);
                     Some(rect.size)
                 }
                 // winit sizes its own bar from the configure and crashes

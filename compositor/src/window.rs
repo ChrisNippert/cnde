@@ -458,7 +458,24 @@ impl State {
             let rect = content_rect(placement_rect(placement, area), titlebar_height(&window));
             toplevel.with_pending_state(|s| s.size = Some(rect.size));
             toplevel.send_pending_configure();
-            self.space.map_element(window.clone(), rect.loc, false);
+            self.move_window(&window, rect.loc);
+        }
+    }
+
+    /// Move a mapped window, keeping its place in the stack. Why not just
+    /// `map_element`: that puts it on top, so re-fitting maximized windows
+    /// after a setting changed buried the window being used.
+    pub fn move_window(&mut self, window: &Window, loc: Point<i32, Logical>) {
+        let above: Vec<Window> = self
+            .space
+            .elements()
+            .skip_while(|w| *w != window)
+            .skip(1)
+            .cloned()
+            .collect();
+        self.space.map_element(window.clone(), loc, false);
+        for other in &above {
+            self.space.raise_element(other, false);
         }
     }
 }
