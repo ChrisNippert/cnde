@@ -23,9 +23,6 @@ use crate::{
 /// The desktop menu's invisible anchor surface, pixels square.
 const HOLDER: i32 = 9;
 
-/// Icon sizes the dock menu offers.
-const ICON_SIZES: [(&str, i64); 3] = [("Small", 32), ("Medium", 48), ("Large", 64)];
-
 impl App {
     /// Right-click on the dock at `point` (dock-surface coordinates).
     pub fn dock_menu(&mut self, point: (f64, f64), serial: u32) {
@@ -266,81 +263,17 @@ impl App {
         entries
     }
 
-    /// The dock's own menu: where it is, how big, and the way to edit it.
+    /// The dock's own menu: edit it in place, or the rest in Settings.
     fn dock_entries(&self) -> Vec<Entry> {
-        let dock = &self.config.dock;
-        let mut entries = vec![Entry::Section("Position".into())];
-        for (label, value, position) in [
-            ("In the Overview", "overview", DockPosition::Overview),
-            ("Bottom", "bottom", DockPosition::Bottom),
-            ("Left", "left", DockPosition::Left),
-            ("Right", "right", DockPosition::Right),
-        ] {
-            entries.push(Entry::check(
-                label,
-                dock.position == position,
-                Action::Config(vec![("dock.position", Value::Str(value.into()))]),
-            ));
-        }
-        entries.push(Entry::Section("Icon Size".into()));
-        for (label, size) in ICON_SIZES {
-            entries.push(Entry::check(
-                label,
-                dock.icon_size as i64 == size,
-                Action::Config(vec![("dock.icon_size", Value::Int(size))]),
-            ));
-        }
-        entries.push(Entry::Section("Style".into()));
-        let frosted = dock.background == cnde_config::DockBackground::Frosted;
-        entries.push(Entry::check(
-            "Frosted",
-            frosted,
-            Action::Config(vec![(
-                "dock.background",
-                Value::Str(if frosted { "solid" } else { "frosted" }.into()),
-            )]),
-        ));
-        if dock.position != DockPosition::Overview {
-            entries.push(Entry::check(
-                "Stretch Across the Edge",
-                dock.extend,
-                Action::Config(vec![("dock.extend", Value::Bool(!dock.extend))]),
-            ));
-            entries.push(Entry::check(
-                "Float Over Windows",
-                !dock.reserve,
-                Action::Config(vec![("dock.reserve", Value::Bool(!dock.reserve))]),
-            ));
-        }
-        if !(dock.extend && dock.position != DockPosition::Overview) {
-            entries.push(Entry::Section("Alignment".into()));
-            let side = matches!(dock.position, DockPosition::Left | DockPosition::Right);
-            let (start, end) = if side {
-                ("Top", "Bottom")
-            } else {
-                ("Left", "Right")
-            };
-            for (label, value, align) in [
-                (start, "start", cnde_config::DockAlign::Start),
-                ("Center", "center", cnde_config::DockAlign::Center),
-                (end, "end", cnde_config::DockAlign::End),
-            ] {
-                entries.push(Entry::check(
-                    label,
-                    dock.align == align,
-                    Action::Config(vec![("dock.align", Value::Str(value.into()))]),
-                ));
-            }
-        }
-        entries.push(Entry::Separator);
         let edit = if self.dock_editing {
             "Done Editing"
         } else {
             "Edit Dock…"
         };
-        entries.push(Entry::item(edit, Action::EditDock));
-        entries.push(Entry::item("Dock Settings", Action::Settings(Some("dock"))));
-        entries
+        vec![
+            Entry::item(edit, Action::EditDock),
+            Entry::item("Dock Settings", Action::Settings(Some("dock"))),
+        ]
     }
 
     fn panel_entries(&self) -> Vec<Entry> {
