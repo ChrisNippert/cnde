@@ -53,6 +53,13 @@
 # from = "19:00"           # "custom": dark from this time (24-hour)...
 # to = "07:00"             # ...until this one; also used by "sunset" until [location] is set
 
+[night_light]
+# A warm colour filter (less blue light), applied by the compositor.
+# schedule = "off"         # "off", "always", "sunset" (sunset to sunrise), "custom"
+# temperature = 4000       # kelvin, 2500 (warmest) to 6500 (no change)
+# from = "20:00"           # "custom": on from this time (24-hour)...
+# to = "06:00"             # ...until this one; also used by "sunset" until [location] is set
+
 [location]
 # For sunset and sunrise, worked out on this computer: nothing is looked up online.
 # coordinates = ""         # "latitude, longitude" in degrees, north and east positive, e.g. "52.52, 13.40"

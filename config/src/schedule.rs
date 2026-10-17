@@ -275,11 +275,77 @@ impl DarkMode {
     }
 }
 
+/// `[night_light]`: a warm colour filter over the screen.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NightLight {
+    pub schedule: NightSchedule,
+    /// Colour temperature in kelvin: lower is warmer.
+    pub temperature: u32,
+    /// When it starts and ends ("HH:MM", 24-hour), for `schedule =
+    /// "custom"`, and for "sunset" until a location is set.
+    pub from: String,
+    pub to: String,
+}
+
+impl Default for NightLight {
+    fn default() -> Self {
+        Self {
+            schedule: NightSchedule::Off,
+            temperature: 4000,
+            from: "20:00".into(),
+            to: "06:00".into(),
+        }
+    }
+}
+
+/// The warmest and coolest temperatures accepted (6500 K is no change).
+pub const NIGHT_LIGHT_RANGE: std::ops::RangeInclusive<u32> = 2500..=6500;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NightSchedule {
+    #[default]
+    Off,
+    /// On all the time.
+    Always,
+    /// From sunset to sunrise.
+    Sunset,
+    /// From `from` to `to`.
+    Custom,
+}
+
+impl NightLight {
+    /// The temperature to filter at on `clock`, or `None` when it's off
+    /// (or not its time).
+    pub fn target(&self, location: &Location, clock: &Clock) -> Option<u32> {
+        let when = match self.schedule {
+            NightSchedule::Off => When::Never,
+            NightSchedule::Always => When::Always,
+            NightSchedule::Sunset => {
+                When::night(location, clock).unwrap_or_else(|| When::custom(&self.from, &self.to))
+            }
+            NightSchedule::Custom => When::custom(&self.from, &self.to),
+        };
+        when.contains(clock.minute).then_some(self.temperature)
+    }
+}
+
 /// The checks `Config::validate` runs on these sections.
 pub(crate) fn validate(config: &Config) -> Result<(), Error> {
+    if !NIGHT_LIGHT_RANGE.contains(&config.night_light.temperature) {
+        return Err(Error::Invalid(format!(
+            "night_light.temperature must be between {} and {} kelvin, got {}",
+            NIGHT_LIGHT_RANGE.start(),
+            NIGHT_LIGHT_RANGE.end(),
+            config.night_light.temperature
+        )));
+    }
     for (name, text) in [
         ("dark_mode.from", &config.dark_mode.from),
         ("dark_mode.to", &config.dark_mode.to),
+        ("night_light.from", &config.night_light.from),
+        ("night_light.to", &config.night_light.to),
     ] {
         if parse_time(text).is_none() {
             return Err(Error::Invalid(format!(
@@ -480,6 +546,56 @@ mod tests {
         // No location: the custom times (19:00 to 07:00) stand in.
         now.minute = at("20:00");
         assert_eq!(dark.wants_dark(&nowhere, &now), Some(true));
+    }
+
+    #[test]
+    fn night_light_schedules() {
+        let mut light = NightLight::default();
+        let nowhere = Location::default();
+        let mut now = clock(2024, 6, 21, 120);
+        now.minute = at("23:00");
+        assert_eq!(light.target(&nowhere, &now), None, "off by default");
+
+        light.schedule = NightSchedule::Always;
+        light.temperature = 3500;
+        now.minute = at("12:00");
+        assert_eq!(light.target(&nowhere, &now), Some(3500));
+
+        // 20:00 to 06:00 runs over midnight.
+        light.schedule = NightSchedule::Custom;
+        for (time, on) in [
+            ("19:59", false),
+            ("20:00", true),
+            ("00:00", true),
+            ("05:59", true),
+            ("06:00", false),
+        ] {
+            now.minute = at(time);
+            assert_eq!(light.target(&nowhere, &now).is_some(), on, "{time}");
+        }
+
+        // Without a location, sunset uses the custom times.
+        light.schedule = NightSchedule::Sunset;
+        now.minute = at("21:00");
+        assert!(light.target(&nowhere, &now).is_some());
+        // Berlin's midsummer sun sets around 21:33.
+        let berlin = Location {
+            coordinates: "52.52, 13.40".into(),
+        };
+        assert_eq!(light.target(&berlin, &now), None);
+        now.minute = at("22:00");
+        assert_eq!(light.target(&berlin, &now), Some(3500));
+    }
+
+    #[test]
+    fn night_light_validation() {
+        assert!(Config::parse("[night_light]\ntemperature = 1000\n").is_err());
+        assert!(Config::parse("[night_light]\ntemperature = 7000\n").is_err());
+        assert!(Config::parse("[night_light]\nfrom = \"late\"\n").is_err());
+        let config =
+            Config::parse("[night_light]\nschedule = \"sunset\"\ntemperature = 2500\n").unwrap();
+        assert_eq!(config.night_light.schedule, NightSchedule::Sunset);
+        assert_eq!(config.night_light.temperature, 2500);
     }
 
     #[test]

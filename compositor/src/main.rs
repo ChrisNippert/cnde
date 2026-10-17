@@ -19,6 +19,7 @@ mod ipc;
 mod keybinds;
 mod layers;
 mod lock;
+mod night_light;
 mod overview;
 mod popup_anim;
 mod portals;

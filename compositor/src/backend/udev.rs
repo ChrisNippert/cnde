@@ -550,6 +550,7 @@ impl State {
         self.space.unmap_output(&surface.output);
         self.wallpapers.forget(&surface.output.name());
         self.crossfade.forget(&surface.output.name());
+        self.night_light.forget(&surface.output.name());
         self.capture.output_removed(&surface.output);
         self.display_handle.remove_global::<State>(surface.global);
     }
@@ -897,6 +898,13 @@ impl State {
             elements.insert(cursor_count, render::OutputElement::Wallpaper(fade));
         }
 
+        // The night light filter goes under the pointer but over
+        // everything else, and is left out of screen captures.
+        let night = self.night_light.element(&mut gpu.renderer, &output, now);
+        let filtered = night.is_some();
+        if let Some(night) = night {
+            elements.insert(cursor_count, render::OutputElement::Night(night));
+        }
         let rendered = match surface.drm_output.render_frame(
             &mut gpu.renderer,
             &elements,
@@ -909,6 +917,9 @@ impl State {
                 false
             }
         };
+        if filtered {
+            elements.remove(cursor_count);
+        }
         // Screen captures copy what this frame showed.
         crate::capture::capture_output(
             &mut self.capture,
@@ -948,6 +959,7 @@ impl State {
                 || self.overview.is_animating(now)
                 || self.popup_anims.is_animating(now)
                 || self.crossfade.is_animating()
+                || self.night_light.is_animating(now)
                 || self.launching.is_some(),
             now,
         ) {

@@ -1450,7 +1450,93 @@ fn displays_page(c: &Config, displays: &[Display]) -> Vec<Group> {
         })
         .collect::<Vec<_>>();
     groups.extend(per_display);
+    groups.push(night_light(c, &Config::default()));
     groups
+}
+
+/// The warm colour filter and when it's on.
+fn night_light(c: &Config, d: &Config) -> Group {
+    use cnde_config::NightSchedule;
+    let schedule = |v: NightSchedule| {
+        s(match v {
+            NightSchedule::Off => "off",
+            NightSchedule::Always => "always",
+            NightSchedule::Sunset => "sunset",
+            NightSchedule::Custom => "custom",
+        })
+    };
+    let light = &c.night_light;
+    let located = c.location.coordinates().is_some();
+    let subtitle = match light.schedule {
+        NightSchedule::Off => "Warmer colours, less blue light".to_string(),
+        NightSchedule::Always => "On all the time".to_string(),
+        NightSchedule::Sunset if !located => {
+            "No location set: the times below are used until you add one".to_string()
+        }
+        NightSchedule::Sunset => sun_today(c).unwrap_or_else(|| "From sunset to sunrise".into()),
+        NightSchedule::Custom => "On between the times below".to_string(),
+    };
+    let mut rows = vec![
+        Row::new(
+            "night_light.schedule",
+            "Night light",
+            Control::Segmented(choices(&[
+                ("Off", s("off")),
+                ("Always", s("always")),
+                ("Sunset to sunrise", s("sunset")),
+                ("Custom", s("custom")),
+            ])),
+            schedule(light.schedule),
+            schedule(d.night_light.schedule),
+        )
+        .sub(&subtitle),
+    ];
+    if light.schedule != NightSchedule::Off {
+        rows.push(
+            Row::new(
+                "night_light.temperature",
+                "Colour temperature",
+                Control::Slider {
+                    min: 2500.0,
+                    max: 6500.0,
+                    step: 100.0,
+                    int: true,
+                    format: |v| format!("{v:.0} K"),
+                },
+                Value::Int(light.temperature as i64),
+                Value::Int(d.night_light.temperature as i64),
+            )
+            .sub("Lower is warmer"),
+        );
+    }
+    let times = match light.schedule {
+        NightSchedule::Off | NightSchedule::Always => false,
+        NightSchedule::Sunset => !located,
+        NightSchedule::Custom => true,
+    };
+    if times {
+        rows.push(
+            Row::new(
+                "night_light.from",
+                "On from",
+                Control::text("20:00"),
+                s(&light.from),
+                s(&d.night_light.from),
+            )
+            .sub("24-hour time, like 20:30"),
+        );
+        rows.push(Row::new(
+            "night_light.to",
+            "Off from",
+            Control::text("06:00"),
+            s(&light.to),
+            s(&d.night_light.to),
+        ));
+    }
+    if light.schedule == NightSchedule::Sunset {
+        rows.push(location_row(c));
+    }
+    group("Night light", rows)
 }
 
 fn accel(v: cnde_config::AccelProfile) -> Value {
@@ -2210,6 +2296,35 @@ mod tests {
         let group = dark_schedule(&config, &Config::default());
         assert!(group.rows[0].subtitle.starts_with("Sunset "));
         for row in group.rows {
+            let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();
+            row.key.write(&mut file, &config, &row.value);
+            assert!(file.config().is_ok(), "{}", row.title);
+        }
+    }
+
+    #[test]
+    fn night_light_rows() {
+        let mut config = Config::default();
+        let titles = |config: &Config| -> Vec<String> {
+            night_light(config, &Config::default())
+                .rows
+                .into_iter()
+                .map(|r| r.title)
+                .collect()
+        };
+        assert_eq!(titles(&config), ["Night light"]);
+        config.night_light.schedule = cnde_config::NightSchedule::Custom;
+        assert_eq!(
+            titles(&config),
+            ["Night light", "Colour temperature", "On from", "Off from"]
+        );
+        config.night_light.schedule = cnde_config::NightSchedule::Sunset;
+        config.location.coordinates = "52.52, 13.40".into();
+        assert_eq!(
+            titles(&config),
+            ["Night light", "Colour temperature", "Location"]
+        );
+        for row in night_light(&config, &Config::default()).rows {
             let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();
             row.key.write(&mut file, &config, &row.value);
             assert!(file.config().is_ok(), "{}", row.title);

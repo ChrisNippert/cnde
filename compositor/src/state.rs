@@ -92,6 +92,7 @@ pub struct State {
     pub crossfade: crate::crossfade::Crossfade,
     /// Dark mode on a timer.
     pub schedules: crate::schedule::Schedules,
+    pub night_light: crate::night_light::NightLight,
     pub decorations: crate::decorations::Decorations,
     pub bar_input: crate::decorations::BarInput,
     pub overview: crate::overview::Overview,
@@ -202,6 +203,7 @@ impl State {
             dock_frost: Default::default(),
             crossfade: Default::default(),
             schedules: Default::default(),
+            night_light: Default::default(),
             decorations: Default::default(),
             bar_input: Default::default(),
             overview: crate::overview::Overview::new(),

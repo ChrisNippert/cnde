@@ -85,6 +85,12 @@ impl State {
         self.schedules.dirty = false;
         let clock = Clock::now();
         let config = &self.config;
+        let night = config.night_light.target(&config.location, &clock);
+        if self.night_light.set(night) {
+            info!(?night, "night light: fading");
+            self.queue_redraw();
+        }
+        let config = &self.config;
         let wanted = config.dark_mode.wants_dark(&config.location, &clock);
         let Some(dark) = self.schedules.dark.update(wanted) else {
             return;
