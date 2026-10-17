@@ -1809,6 +1809,16 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
             Value::Float(c.dock.launcher_gap as f64),
             Value::Float(d.dock.launcher_gap as f64),
         ));
+        rows.push(
+            Row::new(
+                "dock.locked",
+                "Lock the dock",
+                Control::switch(),
+                Value::Bool(c.dock.locked),
+                Value::Bool(d.dock.locked),
+            )
+            .sub("Icons and the dock can't be dragged or edited"),
+        );
     }
     vec![group("Dock", rows)]
 }

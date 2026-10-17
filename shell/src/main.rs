@@ -147,6 +147,9 @@ pub struct App {
     dock_editing: bool,
     /// Where the dock's move grip was pressed.
     dock_drag_start: Option<(f64, f64)>,
+    /// A left press on the dock that's a click or a drag, not yet known
+    /// which (see `dock_press_pointer`).
+    dock_press: Option<(f64, f64)>,
     /// Where a dragged dock would land.
     dock_preview: Option<edit_mode::DockPreview>,
     /// The latest input serial, for grabs the compositor started for us.
@@ -255,6 +258,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_serial: 0,
         dock_editing: false,
         dock_drag_start: None,
+        dock_press: None,
         dock_preview: None,
         windows: Vec::new(),
         edges: Vec::new(),
@@ -745,6 +749,18 @@ impl App {
             .is_some_and(|l| l.bottom_reserve != self.launcher_reserve())
         {
             self.draw_launcher();
+        }
+    }
+
+    /// Act on a left or middle click on the dock.
+    fn dock_click(&mut self, click: Click) {
+        match click {
+            Click::Nothing => {}
+            Click::Launch(id) => self.launch(&id),
+            Click::Activate(id) => {
+                self.ipc.send(&cnde_ipc::Request::ActivateWindow { id });
+            }
+            Click::AppGrid => self.ipc.send(&cnde_ipc::Request::ShowAppGrid),
         }
     }
 
@@ -1251,10 +1267,16 @@ impl PointerHandler for App {
                         ..
                     }
                 );
-                if dock.edit.is_some() && !right_click {
+                if (dock.edit.is_some() || dock.drag.is_some()) && !right_click {
                     self.dock_edit_pointer(event);
                     continue;
                 }
+                if self.dock_press_pointer(event) {
+                    continue;
+                }
+                let Some(dock) = &mut self.dock else {
+                    continue;
+                };
                 let icon = self.config.dock.icon_size as f32;
                 let click = match event.kind {
                     PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -1285,14 +1307,7 @@ impl PointerHandler for App {
                     }
                     _ => continue,
                 };
-                match click {
-                    Click::Nothing => {}
-                    Click::Launch(id) => self.launch(&id),
-                    Click::Activate(id) => {
-                        self.ipc.send(&cnde_ipc::Request::ActivateWindow { id });
-                    }
-                    Click::AppGrid => self.ipc.send(&cnde_ipc::Request::ShowAppGrid),
-                }
+                self.dock_click(click);
                 continue;
             }
             if let Some(launcher) = &mut self.launcher

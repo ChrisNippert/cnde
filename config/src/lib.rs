@@ -399,6 +399,8 @@ pub struct Dock {
     /// On a screen edge: maximized windows stop at it. Off, it floats over
     /// them.
     pub reserve: bool,
+    /// Icons and the dock itself can't be dragged, and edit mode is off.
+    pub locked: bool,
 }
 
 impl Default for Dock {
@@ -419,6 +421,7 @@ impl Default for Dock {
             extend: false,
             align: DockAlign::Center,
             reserve: true,
+            locked: false,
         }
     }
 }
@@ -709,6 +712,13 @@ mod tests {
     #[test]
     fn out_of_range_is_an_error() {
         assert!(Config::parse("[input.mouse]\nspeed = 3.0\n").is_err());
+    }
+
+    #[test]
+    fn dock_lock_parses() {
+        assert!(!Config::default().dock.locked);
+        let config = Config::parse("[dock]\nlocked = true\n").unwrap();
+        assert!(config.dock.locked);
     }
 
     #[test]

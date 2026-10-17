@@ -270,10 +270,12 @@ impl App {
         } else {
             "Edit Dock…"
         };
-        vec![
-            Entry::item(edit, Action::EditDock),
-            Entry::item("Dock Settings", Action::Settings(Some("dock"))),
-        ]
+        let mut entries = Vec::new();
+        if !self.config.dock.locked {
+            entries.push(Entry::item(edit, Action::EditDock));
+        }
+        entries.push(Entry::item("Dock Settings", Action::Settings(Some("dock"))));
+        entries
     }
 
     fn panel_entries(&self) -> Vec<Entry> {
