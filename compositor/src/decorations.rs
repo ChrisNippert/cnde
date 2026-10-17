@@ -10,7 +10,10 @@
 //! Floating windows also get an invisible border for resizing, since an app
 //! that doesn't decorate itself doesn't offer resize edges either.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use cnde_ui::{Canvas, Color, Fonts, Icons, Weight};
 use smithay::{
@@ -69,8 +72,9 @@ pub enum Part {
 }
 
 /// Marks a toplevel that bound xdg-decoration (stored on its surface):
-/// only those may get a server-side bar.
-struct DecorationBound;
+/// only those may get a server-side bar. Holds the mode the app asked
+/// for, so a config change can honour it again.
+struct DecorationBound(Mutex<Option<DecorationMode>>);
 
 /// Whether cnde draws `window`'s title bar.
 pub fn is_ssd(window: &Window) -> bool {
@@ -368,39 +372,75 @@ impl State {
         requested: Option<DecorationMode>,
     ) {
         with_states(toplevel.wl_surface(), |states| {
-            states.data_map.insert_if_missing(|| DecorationBound);
+            states
+                .data_map
+                .insert_if_missing_threadsafe(|| DecorationBound(Mutex::new(None)));
+            *states.data_map.get::<DecorationBound>().unwrap().0.lock().unwrap() = requested;
         });
-        let mode = match self.config.appearance.titlebars {
+        self.send_decoration(toplevel);
+    }
+
+    /// The mode the config and `toplevel`'s own request give.
+    fn decoration_mode(&self, toplevel: &ToplevelSurface) -> DecorationMode {
+        let requested = with_states(toplevel.wl_surface(), |states| {
+            *states.data_map.get::<DecorationBound>().unwrap().0.lock().unwrap()
+        });
+        match self.config.appearance.titlebars {
             cnde_config::Titlebars::App => DecorationMode::ClientSide,
             // Apps with their own header bars ask for client-side.
             cnde_config::Titlebars::Cnde => requested.unwrap_or(DecorationMode::ServerSide),
-        };
+        }
+    }
+
+    /// Sends `toplevel` the mode the config and its own request give.
+    fn send_decoration(&mut self, toplevel: &ToplevelSurface) {
+        let mode = self.decoration_mode(toplevel);
         toplevel.with_pending_state(|state| state.decoration_mode = Some(mode));
         if toplevel.is_initial_configure_sent() {
             toplevel.send_pending_configure();
         }
     }
 
-    /// `appearance.titlebars` changed: tell every app that asked.
+    /// `appearance.titlebars` changed: tell every app that asked, and make
+    /// room for the bar (or take it back) in maximized and snapped windows.
     pub fn apply_titlebars_config(&mut self) {
-        let toplevels: Vec<ToplevelSurface> = self
+        let windows: Vec<Window> = self
             .space
             .elements()
             .chain(&self.unmapped)
-            .filter_map(|w| w.toplevel().cloned())
-            .filter(|t| {
-                with_states(t.wl_surface(), |states| {
-                    states.data_map.get::<DecorationBound>().is_some()
+            .filter(|w| {
+                w.toplevel().is_some_and(|t| {
+                    with_states(t.wl_surface(), |states| {
+                        states.data_map.get::<DecorationBound>().is_some()
+                    })
                 })
             })
+            .cloned()
             .collect();
-        for toplevel in toplevels {
-            // Forget what the app asked before: the config wins now.
-            let requested = match self.config.appearance.titlebars {
-                cnde_config::Titlebars::Cnde => Some(DecorationMode::ServerSide),
-                cnde_config::Titlebars::App => None,
+        for window in windows {
+            let toplevel = window.toplevel().unwrap().clone();
+            let placement = with_state(&window, |s| s.placement);
+            let mapped = self.space.element_geometry(&window).is_some();
+            let area = self.area_for(&window, placement).filter(|_| mapped);
+            let fills = !matches!(placement, Placement::Floating | Placement::Fullscreen);
+            let size = match area {
+                Some(area) if fills => {
+                    let bar = match self.decoration_mode(&toplevel) {
+                        DecorationMode::ServerSide => HEIGHT,
+                        _ => 0,
+                    };
+                    let rect = content_rect(crate::window::placement_rect(placement, area), bar);
+                    self.space.map_element(window.clone(), rect.loc, false);
+                    Some(rect.size)
+                }
+                // winit sizes its own bar from the configure and crashes
+                // on 0x0 ("pick your own size") when bars come back.
+                _ => toplevel
+                    .with_pending_state(|s| s.size)
+                    .or(Some(window.geometry().size)),
             };
-            self.choose_decoration(&toplevel, requested);
+            toplevel.with_pending_state(|s| s.size = size);
+            self.send_decoration(&toplevel);
         }
         self.queue_redraw();
     }
