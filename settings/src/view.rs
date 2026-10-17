@@ -35,6 +35,8 @@ pub enum Target {
     Slider(usize),
     Entry(usize),
     Reset(usize),
+    /// A monitor on the arrangement canvas (index into `Ui::displays`).
+    Screen(usize),
     /// A wallpaper tile; `None` is the built-in one.
     Wallpaper(Option<usize>),
     /// The tile after the wallpapers: pick a picture of your own.
@@ -103,6 +105,11 @@ pub struct Ui {
     /// The network whose password is being asked for.
     /// The network being joined, whose form shows.
     pub wifi_join: Option<crate::wifi::Join>,
+    /// Where the arrangement shows each display while one's dragged (and
+    /// until the compositor reports the result).
+    pub arranged: Option<Vec<(i32, i32)>>,
+    /// The display being dragged.
+    pub arranging: Option<usize>,
 }
 
 /// The result of a paint, for hit-testing.
@@ -114,6 +121,8 @@ pub struct Painted {
     pub sliders: Vec<(usize, Rect)>,
     /// How far the page can scroll.
     pub max_scroll: f32,
+    /// Window px per logical px on the arrangement canvas.
+    pub arrange_scale: f32,
 }
 
 impl Painted {
@@ -472,6 +481,9 @@ fn row_height(ui: &Ui, row: &Row, t: &Theme, col_w: f32) -> f32 {
     if let Control::Color { .. } = row.control {
         return t.row_subtitle_height + swatches_height() + t.row_padding;
     }
+    if let Control::Arrangement = row.control {
+        return ARRANGE_HEIGHT;
+    }
     if row.subtitle.is_empty() {
         t.row_height
     } else {
@@ -511,6 +523,10 @@ fn paint_row(
     let t = p.theme;
     if let Control::Wallpapers = row.control {
         wallpapers(ui, a, p, out, row, rect);
+        return;
+    }
+    if let Control::Arrangement = row.control {
+        arrangement(ui, a, p, out, rect);
         return;
     }
     let activatable = matches!(
@@ -703,7 +719,7 @@ fn paint_row(
             );
             right - tw
         }
-        Control::Wallpapers => unreachable!(),
+        Control::Wallpapers | Control::Arrangement => unreachable!(),
     };
 
     let mut text_right = control_x - 12.0;
@@ -806,6 +822,109 @@ fn swatches(
                 .rounded_rect(x, y, SWATCH, SWATCH, 7.0, Color::rgb(r, g, b));
             out.hits.push((swatch, Target::Swatch(index, n)));
         }
+    }
+}
+
+const ARRANGE_HEIGHT: f32 = 240.0;
+
+/// The monitors as boxes, scaled to fit the card with room to drag. The
+/// scale and centre come from where the compositor has them, so the
+/// picture holds still while one's moved.
+fn arrangement(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, rect: Rect) {
+    let t = p.theme;
+    let ds = &ui.displays;
+    let (Some(min_x), Some(min_y), Some(max_x), Some(max_y)) = (
+        ds.iter().map(|d| d.x).min(),
+        ds.iter().map(|d| d.y).min(),
+        ds.iter().map(|d| d.x + d.w).max(),
+        ds.iter().map(|d| d.y + d.h).max(),
+    ) else {
+        return;
+    };
+    let (bw, bh) = ((max_x - min_x).max(1) as f32, (max_y - min_y).max(1) as f32);
+    let pad = 24.0;
+    let scale = ((rect.w - pad * 2.0) / bw).min((rect.h - pad * 2.0) / bh) * 0.75;
+    out.arrange_scale = scale;
+    let ox = rect.x + rect.w / 2.0 - (min_x as f32 + bw / 2.0) * scale;
+    let oy = rect.y + rect.h / 2.0 - (min_y as f32 + bh / 2.0) * scale;
+    let main = ui
+        .config
+        .outputs
+        .iter()
+        .find(|o| o.main)
+        .map(|o| o.name.as_str())
+        .or_else(|| {
+            ds.iter()
+                .min_by_key(|d| (d.x, d.y))
+                .map(|d| d.name.as_str())
+        });
+
+    // The dragged one on top.
+    let mut order: Vec<usize> = (0..ds.len()).collect();
+    order.sort_by_key(|&i| ui.arranging == Some(i));
+    for i in order {
+        let d = &ds[i];
+        let (x, y) = ui
+            .arranged
+            .as_ref()
+            .and_then(|a| a.get(i).copied())
+            .unwrap_or((d.x, d.y));
+        let gap = 2.0;
+        let r = Rect::new(
+            ox + x as f32 * scale + gap,
+            oy + y as f32 * scale + gap,
+            d.w as f32 * scale - gap * 2.0,
+            d.h as f32 * scale - gap * 2.0,
+        );
+        let lit =
+            hover(a, ui, Target::Screen(i)).max(if ui.arranging == Some(i) { 1.0 } else { 0.0 });
+        let fill = t.window_sidebar.mix(t.accent, 0.18 + 0.17 * lit);
+        p.canvas.rounded_rect(r.x, r.y, r.w, r.h, 8.0, fill);
+        let border = if ui.arranging == Some(i) {
+            t.accent
+        } else {
+            t.card_separator
+        };
+        p.canvas
+            .stroke_rounded_rect(r.x, r.y, r.w, r.h, 8.0, 2.0, border);
+        // The top bar lives on the main display.
+        if main == Some(d.name.as_str()) {
+            p.canvas.rounded_rect(
+                r.x + 6.0,
+                r.y + 6.0,
+                r.w - 12.0,
+                4.0,
+                2.0,
+                t.window_text.with_alpha(0.5),
+            );
+        }
+        let label_w = p
+            .measure(&d.name, t.font_size, Weight::Bold)
+            .min(r.w - 12.0);
+        p.label_v(
+            &d.name,
+            r.x + (r.w - label_w) / 2.0,
+            r.y + r.h / 2.0 - 8.0,
+            r.w - 12.0,
+            t.font_size,
+            Weight::Bold,
+            t.window_text,
+        );
+        let (pw, ph) = d.current.map_or((d.w, d.h), |(w, h, _)| (w, h));
+        let size = format!("{pw} × {ph}");
+        let size_w = p
+            .measure(&size, t.subtitle_size, Weight::Normal)
+            .min(r.w - 12.0);
+        p.label_v(
+            &size,
+            r.x + (r.w - size_w) / 2.0,
+            r.y + r.h / 2.0 + 10.0,
+            r.w - 12.0,
+            t.subtitle_size,
+            Weight::Normal,
+            t.window_dim,
+        );
+        out.hits.push((r, Target::Screen(i)));
     }
 }
 
@@ -1024,10 +1143,24 @@ mod tests {
                 Display {
                     name: "DP-1".into(),
                     description: "Dell U2720Q · 3840×2160 at 60 Hz".into(),
+                    x: 0,
+                    y: 0,
+                    w: 2560,
+                    h: 1440,
+                    modes: vec![(3840, 2160, 60_000), (2560, 1440, 59_951)],
+                    current: Some((3840, 2160, 60_000)),
+                    preferred: Some((3840, 2160, 60_000)),
                 },
                 Display {
                     name: "HDMI-A-1".into(),
                     description: String::new(),
+                    x: 2560,
+                    y: 200,
+                    w: 1920,
+                    h: 1080,
+                    modes: vec![(1920, 1080, 165_000), (1920, 1080, 60_000)],
+                    current: Some((1920, 1080, 165_000)),
+                    preferred: Some((1920, 1080, 60_000)),
                 },
             ],
             thumbs: Vec::new(),
@@ -1042,6 +1175,8 @@ mod tests {
             dragging: None,
             wifi: None,
             wifi_join: None,
+            arranged: None,
+            arranging: None,
         }
     }
 

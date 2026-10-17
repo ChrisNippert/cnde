@@ -75,6 +75,8 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Str(String),
+    /// A monitor's position: `{ x, y }`.
+    Point(i64, i64),
     Unset,
 }
 
@@ -108,6 +110,11 @@ pub enum Key {
     Output { name: String, field: &'static str },
     /// One coordinate of a monitor's position (`x` or `y`).
     OutputPosition { name: String, axis: char },
+    /// A monitor's resolution (`"2560x1440"`), or its refresh rate too
+    /// (`"2560x1440@179.96"`); both rows write `mode`.
+    OutputMode { name: String, refresh: bool },
+    /// The arrangement canvas; dragging writes each monitor's `position`.
+    Arrangement,
     /// Which monitor has `main = true`: a name, or `Unset` for automatic.
     MainDisplay,
     /// Not in the config: Wi-Fi, done through NetworkManager or iwd.
@@ -157,6 +164,12 @@ impl Key {
                 // Two decimals: slider steps shouldn't write 0.30000000000000004.
                 Value::Float(v) => ((v * 100.0).round() / 100.0).into(),
                 Value::Str(v) => v.as_str().into(),
+                Value::Point(x, y) => {
+                    let mut table = cnde_config::toml_edit::InlineTable::new();
+                    table.insert("x", (*x).into());
+                    table.insert("y", (*y).into());
+                    table.into()
+                }
                 Value::Unset => return None,
             })
         };
@@ -179,6 +192,27 @@ impl Key {
                 Some(v) => file.set_output(name, field, v),
                 None => file.remove_output(name, field),
             },
+            Key::Arrangement => {}
+            Key::OutputMode { name, .. } => {
+                let parsed = value.as_str().split_once('x').and_then(|(w, rest)| {
+                    let (h, hz) = match rest.split_once('@') {
+                        Some((h, hz)) => (h, hz.parse::<f64>().ok()),
+                        None => (rest, None),
+                    };
+                    Some((w.parse::<i64>().ok()?, h.parse::<i64>().ok()?, hz))
+                });
+                let Some((w, h, hz)) = parsed else {
+                    file.remove_output(name, "mode");
+                    return;
+                };
+                let mut table = cnde_config::toml_edit::InlineTable::new();
+                table.insert("width", w.into());
+                table.insert("height", h.into());
+                if let Some(hz) = hz {
+                    table.insert("refresh", ((hz * 100.0).round() / 100.0).into());
+                }
+                file.set_output(name, "mode", table);
+            }
             // Not the config's business: the window sends these to the
             // Wi-Fi worker instead.
             Key::Wifi(_) => {}
@@ -254,6 +288,8 @@ pub enum Control {
     Password,
     /// Read-only text on the right (connection details).
     Info,
+    /// The monitors as boxes to drag into place.
+    Arrangement,
     /// A colour: a hex entry, and swatches to pick from below the title.
     Color {
         placeholder: &'static str,
@@ -363,6 +399,114 @@ fn group(title: &str, rows: Vec<Row>) -> Group {
 pub struct Display {
     pub name: String,
     pub description: String,
+    /// Where it is in the global layout, logical pixels.
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    /// What it offers: width, height, refresh in mHz.
+    pub modes: Vec<(i32, i32, i32)>,
+    pub current: Option<(i32, i32, i32)>,
+    pub preferred: Option<(i32, i32, i32)>,
+}
+
+/// "179.96" or "60".
+fn hz(mhz: i32) -> String {
+    let text = format!("{:.2}", mhz as f64 / 1000.0);
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// A display's resolution and refresh rate rows.
+fn mode_rows(display: &Display, config: Option<cnde_config::ModeConfig>) -> Vec<Row> {
+    let name = &display.name;
+    let mut sizes: Vec<(i32, i32)> = Vec::new();
+    for &(w, h, _) in &display.modes {
+        if !sizes.contains(&(w, h)) {
+            sizes.push((w, h));
+        }
+    }
+    sizes.sort_by_key(|&(w, h)| std::cmp::Reverse((w as i64 * h as i64, w)));
+    sizes.truncate(14);
+    let size_value = |(w, h): (i32, i32)| Value::Str(format!("{w}x{h}"));
+    let auto_label = match display.preferred {
+        Some((w, h, _)) => format!("Automatic ({w} × {h})"),
+        None => "Automatic".into(),
+    };
+    let mut resolutions = vec![Choice {
+        label: auto_label,
+        value: Value::Unset,
+    }];
+    resolutions.extend(sizes.iter().map(|&(w, h)| Choice {
+        label: format!("{w} × {h}"),
+        value: size_value((w, h)),
+    }));
+    let resolution = config.map_or(Value::Unset, |m| {
+        size_value((m.width as i32, m.height as i32))
+    });
+
+    // Rates at the size it's running (or set to).
+    let size = config
+        .map(|m| (m.width as i32, m.height as i32))
+        .or(display.current.map(|(w, h, _)| (w, h)));
+    let mut rates: Vec<i32> = display
+        .modes
+        .iter()
+        .filter(|(w, h, _)| Some((*w, *h)) == size)
+        .map(|m| m.2)
+        .collect();
+    rates.sort_by_key(|r| std::cmp::Reverse(*r));
+    rates.dedup_by(|a, b| hz(*a) == hz(*b));
+    let fastest = config.map_or(Value::Unset, |m| {
+        Value::Str(format!("{}x{}", m.width, m.height))
+    });
+    let mut refreshes = vec![Choice {
+        label: match rates.first() {
+            Some(&r) => format!("Fastest ({} Hz)", hz(r)),
+            None => "Fastest".into(),
+        },
+        value: fastest.clone(),
+    }];
+    if let Some((w, h)) = size {
+        refreshes.extend(rates.iter().map(|&r| Choice {
+            label: format!("{} Hz", hz(r)),
+            value: Value::Str(format!("{w}x{h}@{}", hz(r))),
+        }));
+    }
+    let refresh = match config {
+        Some(m) if m.refresh.is_some() => Value::Str(format!(
+            "{}x{}@{}",
+            m.width,
+            m.height,
+            hz((m.refresh.unwrap_or(0.0) * 1000.0).round() as i32)
+        )),
+        _ => fastest.clone(),
+    };
+    vec![
+        Row {
+            key: Key::OutputMode {
+                name: name.clone(),
+                refresh: false,
+            },
+            title: "Resolution".into(),
+            subtitle: String::new(),
+            control: Control::Dropdown(resolutions),
+            value: resolution,
+            default: Value::Unset,
+            advanced: false,
+        },
+        Row {
+            key: Key::OutputMode {
+                name: name.clone(),
+                refresh: true,
+            },
+            title: "Refresh rate".into(),
+            subtitle: String::new(),
+            control: Control::Dropdown(refreshes),
+            value: refresh,
+            default: fastest,
+            advanced: false,
+        },
+    ]
 }
 
 /// What the Wi-Fi page shows: the worker's last report, and the network
@@ -910,6 +1054,19 @@ fn displays_page(c: &Config, displays: &[Display]) -> Vec<Group> {
     }
     let mut groups = Vec::new();
     if displays.len() > 1 {
+        groups.push(Group {
+            title: "Arrangement".into(),
+            description: "Drag the screens to match how they sit on your desk".into(),
+            rows: vec![Row {
+                key: Key::Arrangement,
+                title: String::new(),
+                subtitle: String::new(),
+                control: Control::Arrangement,
+                value: Value::Unset,
+                default: Value::Unset,
+                advanced: false,
+            }],
+        });
         let mut mains = vec![Choice {
             label: "Automatic (leftmost)".into(),
             value: Value::Unset,
@@ -991,7 +1148,8 @@ fn displays_page(c: &Config, displays: &[Display]) -> Vec<Group> {
                     advanced: true,
                 }
             };
-            let mut rows = vec![Row {
+            let mut rows = mode_rows(display, output.and_then(|o| o.mode));
+            rows.push(Row {
                 key: output_key("scale"),
                 title: "Scale".into(),
                 subtitle: "Makes everything bigger on high-resolution screens".into(),
@@ -999,7 +1157,7 @@ fn displays_page(c: &Config, displays: &[Display]) -> Vec<Group> {
                 value: scale,
                 default: Value::Unset,
                 advanced: false,
-            }];
+            });
             rows.push(coordinate('x'));
             rows.push(coordinate('y'));
             Group {
@@ -1676,17 +1834,31 @@ mod tests {
     #[test]
     fn every_row_writes_a_valid_config() {
         let config = Config::default();
-        let displays = [Display {
-            name: "DP-1".into(),
+        let display = |name: &str| Display {
+            name: name.into(),
             description: String::new(),
-        }];
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+            modes: vec![
+                (1920, 1080, 165_000),
+                (1920, 1080, 59_940),
+                (1280, 720, 60_000),
+            ],
+            current: Some((1920, 1080, 165_000)),
+            preferred: Some((1920, 1080, 165_000)),
+        };
+        let displays = [display("DP-1"), display("DP-2")];
         for page in Page::ALL {
             for group in build(page, &config, &displays, WifiView::default()) {
                 for row in group.rows {
                     let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();
                     let value = match &row.control {
                         Control::Switch { on, .. } => on.clone(),
-                        Control::Segmented(c) | Control::Dropdown(c) => c[0].value.clone(),
+                        Control::Segmented(c) | Control::Dropdown(c) => {
+                            c[c.len() - 1].value.clone()
+                        }
                         Control::Slider { min, int, .. } => {
                             if *int {
                                 Value::Int(*min as i64)

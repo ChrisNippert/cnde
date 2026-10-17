@@ -129,10 +129,24 @@ pub struct OutputConfig {
     pub position: Option<Position>,
     /// 1.0 = no scaling; 2.0 for most HiDPI laptops.
     pub scale: Option<f64>,
+    /// Resolution and refresh rate. Default: the monitor's preferred
+    /// resolution at the fastest refresh it offers for it.
+    pub mode: Option<ModeConfig>,
     /// The monitor the workspace strip is anchored to (its workspace is
     /// "the current one"). Default: the leftmost monitor.
     #[serde(default)]
     pub main: bool,
+}
+
+/// `mode = { width = 2560, height = 1440, refresh = 179.96 }`
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeConfig {
+    pub width: u32,
+    pub height: u32,
+    /// In Hz; the closest one the monitor offers is used. Default: the
+    /// fastest at this resolution.
+    pub refresh: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -709,5 +723,18 @@ mod tests {
         let output = config.output("DP-2").unwrap();
         assert_eq!(output.position, Some(Position { x: 1920, y: 0 }));
         assert_eq!(output.scale, Some(1.5));
+        assert_eq!(output.mode, None);
+        let config = Config::parse(
+            "[[output]]\nname = \"DP-2\"\nmode = { width = 2560, height = 1440, refresh = 179.96 }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.output("DP-2").unwrap().mode,
+            Some(ModeConfig {
+                width: 2560,
+                height: 1440,
+                refresh: Some(179.96)
+            })
+        );
     }
 }

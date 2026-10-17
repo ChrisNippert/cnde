@@ -4,6 +4,7 @@
 //! the compositor and shell pick changes up live, as they do for hand
 //! edits. Usage: `cnde-settings [page]`, e.g. `cnde-settings displays`.
 
+mod arrange;
 mod pages;
 mod view;
 mod wallpapers;
@@ -117,6 +118,9 @@ struct App {
     pointer_pos: (f64, f64),
     /// The slider being dragged: its row's key, and where the slider is.
     dragging: Option<(Key, cnde_ui::Rect)>,
+    /// A monitor being dragged on the arrangement: where the pointer and
+    /// the monitor started.
+    arranging: Option<((f64, f64), (i32, i32))>,
     last_header_click: Option<Instant>,
     error_timer: Option<RegistrationToken>,
     /// Commands for the Wi-Fi worker, started when its page first opens.
@@ -250,6 +254,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dragging: None,
             wifi: None,
             wifi_join: None,
+            arranged: None,
+            arranging: None,
         },
         res: Res {
             fonts,
@@ -274,6 +280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         modifiers: Modifiers::default(),
         pointer_pos: (0.0, 0.0),
         dragging: None,
+        arranging: None,
         last_header_click: None,
         error_timer: None,
         wifi: None,
@@ -615,7 +622,8 @@ impl App {
                 if !model.trim().is_empty() && !model.contains("Unknown") {
                     parts.push(model.trim().to_string());
                 }
-                if let Some(mode) = info.modes.iter().find(|m| m.current) {
+                let current = info.modes.iter().find(|m| m.current);
+                if let Some(mode) = current {
                     parts.push(format!(
                         "{}×{} at {:.0} Hz",
                         mode.dimensions.0,
@@ -623,15 +631,34 @@ impl App {
                         mode.refresh_rate as f64 / 1000.0
                     ));
                 }
+                let triple = |m: &smithay_client_toolkit::output::Mode| {
+                    (m.dimensions.0, m.dimensions.1, m.refresh_rate)
+                };
+                let (x, y) = info.logical_position.unwrap_or(info.location);
+                let (w, h) = info.logical_size.unwrap_or_else(|| {
+                    let (w, h) = current.map_or((1920, 1080), |m| m.dimensions);
+                    let s = info.scale_factor.max(1);
+                    (w / s, h / s)
+                });
                 Some(Display {
                     name,
                     description: parts.join(" · "),
+                    x,
+                    y,
+                    w,
+                    h,
+                    modes: info.modes.iter().map(triple).collect(),
+                    current: current.map(triple),
+                    preferred: info.modes.iter().find(|m| m.preferred).map(triple),
                 })
             })
             .collect();
         displays.sort_by(|a, b| a.name.cmp(&b.name));
         if displays != self.ui.displays {
             self.ui.displays = displays;
+            if self.arranging.is_none() {
+                self.ui.arranged = None;
+            }
             self.redraw();
         }
     }
@@ -809,6 +836,22 @@ impl App {
                     self.write(&[(key, Value::Str(hex.to_string()))]);
                 }
             }
+            Target::Screen(i) => {
+                if let Some(d) = self.ui.displays.get(i) {
+                    let at = self
+                        .ui
+                        .arranged
+                        .as_ref()
+                        .and_then(|a| a.get(i).copied())
+                        .unwrap_or((d.x, d.y));
+                    self.arranging = Some((position, at));
+                    self.ui.arranging = Some(i);
+                    if self.ui.arranged.is_none() {
+                        self.ui.arranged =
+                            Some(self.ui.displays.iter().map(|d| (d.x, d.y)).collect());
+                    }
+                }
+            }
             Target::AddWallpaper => self.add_wallpaper(),
             Target::Advanced => {
                 let page = self.ui.page;
@@ -819,6 +862,77 @@ impl App {
             Target::Choice(_) => {}
         }
         self.redraw();
+    }
+
+    /// Move the dragged monitor with the pointer, snapped against the others.
+    fn arrange_drag(&mut self, position: (f64, f64)) {
+        let (Some((grab, start)), Some(i), Some(arranged)) =
+            (self.arranging, self.ui.arranging, self.ui.arranged.as_mut())
+        else {
+            return;
+        };
+        let scale = self.painted.arrange_scale.max(0.001) as f64;
+        let want = (
+            start.0 + ((position.0 - grab.0) / scale).round() as i32,
+            start.1 + ((position.1 - grab.1) / scale).round() as i32,
+        );
+        let screens: Vec<arrange::Screen> = self
+            .ui
+            .displays
+            .iter()
+            .zip(arranged.iter())
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, (d, &(x, y)))| arrange::Screen {
+                x,
+                y,
+                w: d.w,
+                h: d.h,
+            })
+            .collect();
+        let Some(d) = self.ui.displays.get(i) else {
+            return;
+        };
+        // Edges line up within about 10 window px.
+        let snap = (10.0 / scale).round() as i32;
+        let placed = arrange::place(&screens, d.w, d.h, want, snap);
+        if arranged[i] != placed {
+            arranged[i] = placed;
+            self.redraw();
+        }
+    }
+
+    /// Dropped: save every monitor's position.
+    fn arrange_drop(&mut self) {
+        self.arranging = None;
+        self.ui.arranging = None;
+        let Some(mut positions) = self.ui.arranged.clone() else {
+            return;
+        };
+        let mut before: Vec<(i32, i32)> = self.ui.displays.iter().map(|d| (d.x, d.y)).collect();
+        arrange::normalize(&mut positions);
+        arrange::normalize(&mut before);
+        if positions == before {
+            self.ui.arranged = None;
+            self.redraw();
+            return;
+        }
+        let changes: Vec<(Key, Value)> = self
+            .ui
+            .displays
+            .iter()
+            .zip(&positions)
+            .map(|(d, &(x, y))| {
+                (
+                    Key::Output {
+                        name: d.name.clone(),
+                        field: "position",
+                    },
+                    Value::Point(x as i64, y as i64),
+                )
+            })
+            .collect();
+        self.write(&changes);
     }
 
     /// Set the dragged slider from the pointer's x.
@@ -1301,6 +1415,10 @@ impl PointerHandler for App {
                         self.drag(event.position.0);
                         continue;
                     }
+                    if self.arranging.is_some() {
+                        self.arrange_drag(event.position);
+                        continue;
+                    }
                     let hover = self.painted.hit(event.position);
                     if hover != self.ui.hover {
                         self.ui.hover = hover;
@@ -1322,6 +1440,9 @@ impl PointerHandler for App {
                 } => {
                     self.dragging = None;
                     self.ui.dragging = None;
+                    if self.arranging.is_some() {
+                        self.arrange_drop();
+                    }
                 }
                 PointerEventKind::Axis { vertical, .. } => {
                     if self.ui.popover.is_some() {

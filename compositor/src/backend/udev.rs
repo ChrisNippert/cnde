@@ -36,7 +36,7 @@ use smithay::{
             EventLoop, LoopHandle, RegistrationToken,
             timer::{TimeoutAction, Timer},
         },
-        drm::control::{ModeTypeFlags, connector, crtc},
+        drm::control::{Mode as DrmMode, ModeFlags, ModeTypeFlags, connector, crtc},
         input::{Device as InputDevice, Libinput},
         rustix::fs::OFlags,
         wayland_server::backend::GlobalId,
@@ -95,6 +95,9 @@ struct Gpu {
 struct Surface {
     output: Output,
     drm_output: GbmOutput,
+    /// What the connector offers, and what it's running.
+    modes: Vec<DrmMode>,
+    mode: DrmMode,
     global: GlobalId,
     redraw: RedrawState,
     /// Pending throttled frame callbacks after an empty render.
@@ -444,7 +447,14 @@ impl State {
             connector.interface().as_str(),
             connector.interface_id()
         );
-        let Some(drm_mode) = pick_mode(&connector) else {
+        let modes: Vec<DrmMode> = connector
+            .modes()
+            .iter()
+            .filter(|m| !m.flags().contains(ModeFlags::INTERLACE))
+            .copied()
+            .collect();
+        let config = self.config.output(&name).and_then(|c| c.mode);
+        let Some(drm_mode) = pick_mode(&modes, config.as_ref()) else {
             warn!(%name, "connector has no modes");
             return;
         };
@@ -463,7 +473,13 @@ impl State {
         let global = output.create_global::<State>(&self.display_handle);
 
         // Parked off to the side; `apply_output_layout` below places it.
-        output.set_preferred(wl_mode);
+        // Every mode, so Settings can offer them.
+        for mode in &modes {
+            output.add_mode(WlMode::from(*mode));
+        }
+        if let Some(preferred) = pick_mode(&modes, None) {
+            output.set_preferred(WlMode::from(preferred));
+        }
         output.change_current_state(
             Some(wl_mode),
             Some(Transform::Normal),
@@ -504,6 +520,8 @@ impl State {
             Surface {
                 output,
                 drm_output,
+                modes,
+                mode: drm_mode,
                 global,
                 redraw: RedrawState::Idle,
                 frame_callback_timer: None,
@@ -553,6 +571,7 @@ impl State {
         if !matches!(self.backend, Backend::Udev(_)) {
             return;
         }
+        self.apply_output_modes();
         let outputs: Vec<Output> = self.space.outputs().cloned().collect();
         let mut placed: Vec<(Output, Point<i32, smithay::utils::Logical>, f64)> = Vec::new();
         let mut auto = Vec::new();
@@ -590,6 +609,48 @@ impl State {
         self.fixup_window_positions();
         self.workspaces_after_output_change();
         self.queue_pointer_refresh();
+    }
+
+    /// Switch monitors whose configured resolution or refresh changed.
+    fn apply_output_modes(&mut self) {
+        let config = self.config.clone();
+        let Some(gpu) = self.udev().and_then(|u| u.gpu.as_mut()) else {
+            return;
+        };
+        let mut changed = Vec::new();
+        for (crtc, surface) in &mut gpu.surfaces {
+            let name = surface.output.name();
+            let wanted = config.output(&name).and_then(|c| c.mode);
+            let Some(mode) = pick_mode(&surface.modes, wanted.as_ref()) else {
+                continue;
+            };
+            if mode == surface.mode {
+                continue;
+            }
+            if let Err(err) = surface.drm_output.use_mode(
+                mode,
+                &mut gpu.renderer,
+                &DrmOutputRenderElements::<_, render::OutputElement>::default(),
+            ) {
+                warn!(%name, ?err, "monitor refused the new mode");
+                continue;
+            }
+            let wl_mode = WlMode::from(mode);
+            info!(
+                %name,
+                size = ?wl_mode.size,
+                refresh_hz = wl_mode.refresh as f64 / 1000.0,
+                "mode changed"
+            );
+            surface.mode = mode;
+            surface
+                .output
+                .change_current_state(Some(wl_mode), None, None, None);
+            changed.push(*crtc);
+        }
+        for crtc in changed {
+            self.queue_output_redraw(crtc);
+        }
     }
 
     /// Pull windows that ended up on no monitor (after an unplug) back onto one.
@@ -964,10 +1025,23 @@ impl State {
     }
 }
 
-/// The monitor's preferred resolution at the highest refresh rate it offers
-/// for that resolution (EDID "preferred" is often 60 Hz on high-refresh panels).
-fn pick_mode(connector: &connector::Info) -> Option<smithay::reexports::drm::control::Mode> {
-    let modes = connector.modes();
+/// The configured mode (the closest refresh at that size), else the
+/// monitor's preferred resolution at the highest refresh rate it offers for
+/// it (EDID "preferred" is often 60 Hz on high-refresh panels).
+fn pick_mode(modes: &[DrmMode], config: Option<&cnde_config::ModeConfig>) -> Option<DrmMode> {
+    let hz = |m: &DrmMode| WlMode::from(*m).refresh as f64 / 1000.0;
+    if let Some(config) = config {
+        let size = (config.width as u16, config.height as u16);
+        let fits = modes.iter().filter(|m| m.size() == size);
+        let picked = match config.refresh {
+            Some(want) => fits.min_by(|a, b| (hz(a) - want).abs().total_cmp(&(hz(b) - want).abs())),
+            None => fits.max_by(|a, b| hz(a).total_cmp(&hz(b))),
+        };
+        if let Some(mode) = picked {
+            return Some(*mode);
+        }
+        warn!(?config, "monitor has no such mode; using its preferred one");
+    }
     let preferred = modes
         .iter()
         .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
@@ -975,7 +1049,7 @@ fn pick_mode(connector: &connector::Info) -> Option<smithay::reexports::drm::con
     modes
         .iter()
         .filter(|m| m.size() == preferred.size())
-        .max_by_key(|m| m.vrefresh())
+        .max_by(|a, b| hz(a).total_cmp(&hz(b)))
         .copied()
 }
 

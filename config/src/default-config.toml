@@ -33,6 +33,7 @@
 # name = "DP-2"
 # position = { x = 0, y = 0 }
 # scale = 1.0
+# mode = { width = 2560, height = 1440, refresh = 180 }   # default: preferred size, fastest refresh
 # main = true              # anchor for workspaces; default is the leftmost
 
 [appearance]
