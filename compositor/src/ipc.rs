@@ -107,19 +107,22 @@ impl State {
             Generic::new(stream, Interest::READ, Mode::Level),
             move |_, stream, state| {
                 let mut buf = [0u8; 4096];
+                // One-off clients (the shell's Lock and Log Out) write a
+                // request and hang up at once: what they sent still counts.
+                let mut closed = false;
                 loop {
                     // Safety: we never drop or replace the stream ourselves.
                     match unsafe { stream.get_mut() }.read(&mut buf) {
                         Ok(0) => {
-                            state.ipc.clients.retain(|(other, _)| *other != id);
-                            return Ok(PostAction::Remove);
+                            closed = true;
+                            break;
                         }
                         Ok(n) => pending.extend_from_slice(&buf[..n]),
                         Err(err) if err.kind() == ErrorKind::WouldBlock => break,
                         Err(err) if err.kind() == ErrorKind::Interrupted => continue,
                         Err(_) => {
-                            state.ipc.clients.retain(|(other, _)| *other != id);
-                            return Ok(PostAction::Remove);
+                            closed = true;
+                            break;
                         }
                     }
                 }
@@ -134,6 +137,10 @@ impl State {
                 // this forever.
                 if pending.len() > 64 * 1024 {
                     pending.clear();
+                }
+                if closed {
+                    state.ipc.clients.retain(|(other, _)| *other != id);
+                    return Ok(PostAction::Remove);
                 }
                 Ok(PostAction::Continue)
             },

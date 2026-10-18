@@ -53,7 +53,6 @@ pub enum Hit {
     SettingsPage(&'static str),
     Lock,
     LogOut,
-    Suspend,
     Reboot,
     PowerOff,
 }
@@ -285,28 +284,22 @@ pub fn layout(
 
     let power_menu = power_menu_open.then(|| {
         let gap = theme.qs_gap;
-        let tile_w = (inner - 4.0 * gap) / 5.0;
-        let items = [
-            Hit::Lock,
-            Hit::LogOut,
-            Hit::Suspend,
-            Hit::Reboot,
-            Hit::PowerOff,
-        ]
-        .iter()
-        .enumerate()
-        .map(|(i, &hit)| {
-            (
-                Rect {
-                    x: pad + i as f32 * (tile_w + gap),
-                    y,
-                    w: tile_w,
-                    h: POWER_TILE_HEIGHT,
-                },
-                hit,
-            )
-        })
-        .collect();
+        let tile_w = (inner - 3.0 * gap) / 4.0;
+        let items = [Hit::Lock, Hit::LogOut, Hit::Reboot, Hit::PowerOff]
+            .iter()
+            .enumerate()
+            .map(|(i, &hit)| {
+                (
+                    Rect {
+                        x: pad + i as f32 * (tile_w + gap),
+                        y,
+                        w: tile_w,
+                        h: POWER_TILE_HEIGHT,
+                    },
+                    hit,
+                )
+            })
+            .collect();
         y += POWER_TILE_HEIGHT + gap;
         items
     });
@@ -687,11 +680,10 @@ impl QuickSettings {
                 crate::apps::open_settings(Some(page));
                 return true;
             }
-            Some(hit @ (Hit::Lock | Hit::LogOut | Hit::Suspend | Hit::Reboot | Hit::PowerOff)) => {
+            Some(hit @ (Hit::Lock | Hit::LogOut | Hit::Reboot | Hit::PowerOff)) => {
                 actions.run(match hit {
                     Hit::Lock => Action::Lock,
                     Hit::LogOut => Action::LogOut,
-                    Hit::Suspend => Action::Suspend,
                     Hit::Reboot => Action::Reboot,
                     _ => Action::PowerOff,
                 });
@@ -1201,7 +1193,6 @@ fn paint(
         let (icon, label) = match hit {
             Hit::Lock => ("system-lock-screen-symbolic", "Lock"),
             Hit::LogOut => ("system-log-out-symbolic", "Log Out"),
-            Hit::Suspend => ("media-playback-pause-symbolic", "Suspend"),
             Hit::Reboot => ("system-reboot-symbolic", "Restart"),
             _ => ("system-shutdown-symbolic", "Power Off"),
         };
@@ -1440,7 +1431,7 @@ mod tests {
         let closed = layout(&theme, false, false, Features::default());
         let open = layout(&theme, true, false, Features::default());
         assert!(open.height > closed.height);
-        let reboot = open.power_menu.as_ref().unwrap()[3].0;
+        let reboot = open.power_menu.as_ref().unwrap()[2].0;
         assert_eq!(
             open.hit(((reboot.x + 5.0) as f64, (reboot.y + 5.0) as f64)),
             Some(Hit::Reboot)

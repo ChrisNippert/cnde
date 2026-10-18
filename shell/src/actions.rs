@@ -31,7 +31,6 @@ pub enum Action {
     ConnectBluetooth(String, bool),
     Lock,
     LogOut,
-    Suspend,
     Reboot,
     PowerOff,
 }
@@ -100,7 +99,6 @@ fn perform(action: Action) {
         }
         Action::Lock => compositor(&cnde_ipc::Request::LockScreen),
         Action::LogOut => compositor(&cnde_ipc::Request::LogOut),
-        Action::Suspend => login1("Suspend"),
         Action::Reboot => login1("Reboot"),
         Action::PowerOff => login1("PowerOff"),
     };
