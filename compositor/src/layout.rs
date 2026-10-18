@@ -771,13 +771,19 @@ impl State {
             return;
         }
         let windows = self.workspaces.list[index].windows.clone();
-        let origin = self
-            .slot_of(index)
-            .and_then(|slot| {
-                let (outputs, _) = self.strip_outputs();
-                self.space.output_geometry(outputs.get(slot)?)
-            })
+        let (outputs, _) = self.strip_outputs();
+        let output = self.slot_of(index).and_then(|slot| outputs.get(slot));
+        let origin = output
+            .and_then(|o| self.space.output_geometry(o))
             .map(|g| g.loc);
+        // Where windows that opened as tiles float: off screen, the size
+        // the main monitor would give them.
+        let usable = output.or(outputs.first()).and_then(|o| {
+            let geo = self.space.output_geometry(o)?;
+            let usable = self.usable_area(o)?;
+            Some(Rectangle::new(usable.loc - geo.loc, usable.size))
+        });
+        let mut cascade = 0;
         for window in windows {
             if !Self::tileable(&window) {
                 continue;
@@ -795,7 +801,19 @@ impl State {
                     with_state(&window, |s| s.untiled = Some(rect));
                 }
                 WindowLayout::Floating => {
-                    let back = with_state(&window, |s| s.untiled.take()).or(rect);
+                    let (untiled, kept) =
+                        with_state(&window, |s| (s.untiled.take(), s.keep_floating));
+                    // Opened as a tile, it never floated: rather than float
+                    // in its tile (and look like nothing happened), it gets a
+                    // fresh spot, centred and cascading like new windows.
+                    let back = match untiled {
+                        Some(back) => Some(back),
+                        None if kept => rect,
+                        None => usable.map(|area| {
+                            cascade += 1;
+                            floating_spot(area, cascade - 1)
+                        }),
+                    };
                     let Some(back) = back else {
                         continue;
                     };
@@ -1185,6 +1203,16 @@ fn with_bar(rect: Rectangle<i32, Logical>, window: &Window) -> Rectangle<i32, Lo
         rect.loc - Point::from((0, bar)),
         rect.size + Size::from((0, bar)),
     )
+}
+
+/// A floating spot in `area` for the `n`th window that never floated: two
+/// thirds of the area, centred, each one stepped down and right of the last.
+fn floating_spot(area: Rectangle<i32, Logical>, n: i32) -> Rectangle<i32, Logical> {
+    let size = Size::from((area.size.w * 2 / 3, area.size.h * 2 / 3));
+    let step = 32 * (n % 6);
+    let x = area.loc.x + (area.size.w - size.w) / 2 - 80 + step;
+    let y = area.loc.y + (area.size.h - size.h) / 2 - 80 + step;
+    Rectangle::new((x.max(area.loc.x), y.max(area.loc.y)).into(), size)
 }
 
 #[cfg(test)]

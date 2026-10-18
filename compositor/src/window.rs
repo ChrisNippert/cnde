@@ -40,6 +40,9 @@ pub struct WindowState {
     pub placement: Placement,
     /// Floating geometry to return to when leaving maximize/snap/fullscreen.
     pub restore: Option<Rectangle<i32, Logical>>,
+    /// Maximized or snapped before going fullscreen: where leaving
+    /// fullscreen returns to, instead of floating.
+    pub before_fullscreen: Option<Placement>,
     pub open_anim: Option<Animation>,
     pub resize_anim: Option<ResizeAnim>,
     pub pending_size: Option<PendingSize>,
@@ -333,6 +336,12 @@ impl State {
             return;
         };
         let current = Self::placement_of(window);
+        // A video leaving fullscreen in a maximized browser stays maximized.
+        let target = if current == Placement::Fullscreen && target == Placement::Floating {
+            with_state(window, |s| s.before_fullscreen.take()).unwrap_or(target)
+        } else {
+            target
+        };
         debug!(from = ?current, to = ?target, "set_placement");
         if current == target && output.is_none() {
             return;
@@ -357,6 +366,9 @@ impl State {
                 && let Some(loc) = mapped_location
             {
                 s.restore = Some(Rectangle::new(loc, window.geometry().size));
+            }
+            if target == Placement::Fullscreen && current != Placement::Fullscreen {
+                s.before_fullscreen = (current != Placement::Floating).then_some(current);
             }
             s.placement = target;
             s.restore
