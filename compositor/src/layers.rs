@@ -8,6 +8,7 @@
 //! overlay. A fullscreen window covers the top layer (the panel hides).
 
 use smithay::{
+    backend::renderer::utils::with_renderer_surface_state,
     delegate_layer_shell,
     desktop::{LayerSurface, PopupKind, WindowSurfaceType, layer_map_for_output},
     output::Output,
@@ -147,6 +148,13 @@ impl State {
         };
         if !initial_configure_sent {
             layer.layer_surface().send_configure();
+        }
+        // The panel's first buffer ends the black hold at startup.
+        if layer.namespace() == "cnde-panel"
+            && with_renderer_surface_state(surface, |s| s.buffer().is_some()).unwrap_or(false)
+            && self.night_light.release_intro()
+        {
+            self.queue_redraw();
         }
 
         // A panel appeared or changed size: maximized/snapped windows refit.

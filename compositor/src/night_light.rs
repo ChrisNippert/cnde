@@ -40,6 +40,11 @@ const FADE: Params = Params {
 /// Idle dimming: how much of full brightness is left once dimmed.
 pub const DIMMED: f32 = 0.5;
 
+/// Startup: how long to hold the screen black for the shell's panel before
+/// fading in anyway, and how long that fade takes.
+const INTRO_TIMEOUT: Duration = Duration::from_millis(1500);
+const INTRO_FADE: Duration = Duration::from_millis(300);
+
 /// Outputs the filter's colour; blending does the multiplying.
 const SHADER: &str = r#"
 #ifdef GL_FRAGMENT_PRECISION_HIGH
@@ -100,9 +105,37 @@ impl Dim {
     }
 }
 
+/// The startup fade-in, a brightness factor like the idle dimming and
+/// multiplied with it, so the two stay independent.
+#[derive(Default, Clone, Copy)]
+enum Intro {
+    /// Black until the panel draws. Holds the time of the first frame.
+    Hold(Option<Instant>),
+    Fade(Instant),
+    #[default]
+    Done,
+}
+
+impl Intro {
+    fn brightness(self, now: Instant) -> f32 {
+        match self {
+            Self::Hold(_) => 0.0,
+            Self::Fade(start) => {
+                let params = Params {
+                    duration: INTRO_FADE,
+                    curve: Curve::Linear,
+                };
+                Animation::progress_since(start, params, now) as f32
+            }
+            Self::Done => 1.0,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct NightLight {
     dim: Dim,
+    intro: Intro,
     /// The temperature it's on at, or `None` when off.
     target: Option<u32>,
     /// What's on screen: fading from `from` towards the target's colour.
@@ -147,6 +180,46 @@ impl NightLight {
         true
     }
 
+    /// Hold the screen black until `release_intro` (or a timeout after the
+    /// first frame), then fade in. For compositor startup only.
+    pub fn hold_intro(&mut self) {
+        self.intro = Intro::Hold(None);
+    }
+
+    /// The shell has drawn (or isn't coming): fade in. Whether that's a
+    /// change (needing frames).
+    pub fn release_intro(&mut self) -> bool {
+        if !matches!(self.intro, Intro::Hold(_)) {
+            return false;
+        }
+        self.intro = Intro::Fade(Instant::now());
+        true
+    }
+
+    /// Never hold the screen black over the lock screen.
+    pub fn skip_intro(&mut self) {
+        self.intro = Intro::Done;
+    }
+
+    /// Move the intro along: start the timeout on the first frame, and
+    /// end it once faded.
+    fn advance_intro(&mut self, now: Instant) {
+        match &mut self.intro {
+            Intro::Hold(first) => {
+                let first = *first.get_or_insert(now);
+                if now.saturating_duration_since(first) >= INTRO_TIMEOUT {
+                    self.intro = Intro::Fade(now);
+                }
+            }
+            Intro::Fade(start) => {
+                if now.saturating_duration_since(*start) >= INTRO_FADE {
+                    self.intro = Intro::Done;
+                }
+            }
+            Intro::Done => {}
+        }
+    }
+
     fn color_of(target: Option<u32>) -> [f32; 3] {
         target.map_or(WHITE, |kelvin| {
             let (r, g, b) = color_temperature(kelvin as f64);
@@ -156,7 +229,7 @@ impl NightLight {
 
     /// The colour every pixel is multiplied by at `now`.
     fn current(&self, now: Instant) -> [f32; 3] {
-        let dim = self.dim.current(now);
+        let dim = self.dim.current(now) * self.intro.brightness(now);
         let color = self.temperature_color(now);
         color.map(|c| c * dim)
     }
@@ -170,7 +243,9 @@ impl NightLight {
     }
 
     pub fn is_animating(&mut self, now: Instant) -> bool {
-        let mut animating = false;
+        // Still holding or fading in: frames until it's done.
+        let mut animating = !matches!(self.intro, Intro::Done);
+        self.advance_intro(now);
         if let Some((start, _)) = self.fade {
             if Animation::progress_since(start, FADE, now) >= 1.0 {
                 self.fade = None;
@@ -198,6 +273,7 @@ impl NightLight {
         output: &Output,
         now: Instant,
     ) -> Option<Filter> {
+        self.advance_intro(now);
         let color = self.current(now);
         if color == WHITE {
             self.elements.remove(&output.name());
@@ -423,5 +499,27 @@ mod tests {
         assert!(light.set_dim(1.0, Duration::ZERO));
         assert_eq!(light.current(Instant::now()), WHITE);
         assert!(!light.set_dim(1.0, Duration::ZERO));
+    }
+
+    #[test]
+    fn intro_holds_then_fades() {
+        let mut light = NightLight::default();
+        assert!(!light.release_intro(), "not holding by default");
+        light.hold_intro();
+        let t0 = Instant::now();
+        light.advance_intro(t0);
+        assert_eq!(light.current(t0), [0.0; 3]);
+        // Times out without the panel.
+        light.advance_intro(t0 + INTRO_TIMEOUT);
+        assert!(matches!(light.intro, Intro::Fade(_)));
+        light.advance_intro(t0 + INTRO_TIMEOUT + INTRO_FADE);
+        assert_eq!(light.current(Instant::now()), WHITE);
+        // The panel drawing ends the hold early, and stacks with dimming.
+        light.hold_intro();
+        assert!(light.release_intro());
+        assert!(!light.release_intro());
+        light.skip_intro();
+        light.set_dim(DIMMED, Duration::ZERO);
+        assert_eq!(light.current(Instant::now()), [DIMMED; 3]);
     }
 }

@@ -160,6 +160,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Before the D-Bus and audio setup below, which wait on other processes:
     // the shell is what the user is waiting to see.
     if state.config.panel.enabled {
+        // Black until its panel draws, so the bar doesn't pop in late.
+        state.night_light.hold_intro();
         spawn::supervise_shell(&state.client_env(), &state.config.autostart.shell);
     }
     if !nested {
