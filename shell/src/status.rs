@@ -76,6 +76,21 @@ pub struct Battery {
     pub full: bool,
 }
 
+impl Battery {
+    /// Running down and below `threshold` percent (0: never low).
+    pub fn is_low(&self, threshold: u8) -> bool {
+        threshold > 0 && !self.charging && !self.full && self.percent < f64::from(threshold)
+    }
+}
+
+/// True once per crossing into low: `warned` remembers that we've said so
+/// and re-arms when the battery is charging or back above the threshold.
+pub fn low_battery_edge(warned: &mut bool, low: bool) -> bool {
+    let fire = low && !*warned;
+    *warned = low;
+    fire
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Network {
     /// No network service we know how to talk to.
@@ -672,5 +687,36 @@ mod tests {
         assert_eq!(dbm_to_percent(-95.0), 0);
         assert_eq!(dbm_to_percent(-70.0), 50);
         assert_eq!(dbm_to_percent(-40.0), 100);
+    }
+}
+
+#[cfg(test)]
+mod battery_tests {
+    use super::*;
+
+    fn battery(percent: f64, charging: bool, full: bool) -> Battery {
+        Battery {
+            percent,
+            charging,
+            full,
+        }
+    }
+
+    #[test]
+    fn low_means_discharging_below_the_threshold() {
+        assert!(battery(14.0, false, false).is_low(15));
+        assert!(!battery(15.0, false, false).is_low(15));
+        assert!(!battery(5.0, true, false).is_low(15));
+        assert!(!battery(5.0, false, false).is_low(0), "0 turns it off");
+    }
+
+    #[test]
+    fn warns_once_per_crossing() {
+        let mut warned = false;
+        let fired: Vec<bool> = [false, true, true, false, true]
+            .into_iter()
+            .map(|low| low_battery_edge(&mut warned, low))
+            .collect();
+        assert_eq!(fired, [false, true, false, false, true]);
     }
 }

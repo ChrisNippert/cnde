@@ -38,6 +38,10 @@ pub struct Draw<'a> {
     pub overview_open: bool,
     pub quick_settings_open: bool,
     pub clock_position: ClockPosition,
+    /// Number beside the battery icon.
+    pub battery_percent: bool,
+    /// Below the warning level: the battery is drawn in the error colour.
+    pub battery_low: bool,
     /// A window is against the bar: no see-through, whatever the style.
     pub solid: bool,
 }
@@ -288,6 +292,8 @@ impl Panel {
             overview_open,
             quick_settings_open,
             clock_position,
+            battery_percent,
+            battery_low,
             solid,
         } = ctx;
         if self.width == 0 {
@@ -399,7 +405,7 @@ impl Panel {
         if let Some(battery) = status.battery {
             items.push(battery_icon(battery));
         }
-        let mut percent = status.battery.map(|battery| {
+        let mut percent = status.battery.filter(|_| battery_percent).map(|battery| {
             fonts.layout(
                 &format!("{:.0}%", battery.percent),
                 theme.font_size,
@@ -425,14 +431,24 @@ impl Panel {
             quick_settings_open,
         );
         let mut x = region.0 + pad;
+        let battery_name = status.battery.map(battery_icon);
         for name in &items {
-            canvas.icon(icons, name, x, icon_y, icon, fg);
+            let low = battery_low && battery_name.as_ref() == Some(name);
+            canvas.icon(
+                icons,
+                name,
+                x,
+                icon_y,
+                icon,
+                if low { theme.error } else { fg },
+            );
             x += icon + theme.status_spacing;
         }
         if let Some(text) = &mut percent {
             let x = x - theme.status_spacing + theme.status_icon_text_gap;
             let text_y = ((height - text.height) / 2.0).round();
-            canvas.text(fonts, text, x.round(), text_y, fg);
+            let color = if battery_low { theme.error } else { fg };
+            canvas.text(fonts, text, x.round(), text_y, color);
         }
 
         // Editing: a Done button left of the status icons.
@@ -572,7 +588,7 @@ pub fn volume_icon(volume: Volume) -> &'static str {
 }
 
 /// Adwaita has an icon per 10% (battery-level-40-charging-symbolic, ...).
-fn battery_icon(battery: Battery) -> String {
+pub fn battery_icon(battery: Battery) -> String {
     if battery.full {
         return "battery-level-100-charged-symbolic".into();
     }

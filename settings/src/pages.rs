@@ -2480,6 +2480,39 @@ fn power(c: &Config, d: &Config) -> Vec<Group> {
                 .sub("Needs a lock command"),
             ],
         ),
+        group(
+            "Battery",
+            vec![
+                Row::new(
+                    "power.battery_percent",
+                    "Show percentage",
+                    Control::switch(),
+                    Value::Bool(c.power.battery_percent),
+                    Value::Bool(d.power.battery_percent),
+                )
+                .sub("Next to the battery icon in the top bar"),
+                Row::new(
+                    "power.low_battery",
+                    "Low battery warning",
+                    Control::Slider {
+                        min: 0.0,
+                        max: 50.0,
+                        step: 5.0,
+                        int: true,
+                        format: |v| {
+                            if v == 0.0 {
+                                "Off".to_string()
+                            } else {
+                                format!("{v:.0}%")
+                            }
+                        },
+                    },
+                    Value::Int(c.power.low_battery as i64),
+                    Value::Int(d.power.low_battery as i64),
+                )
+                .sub("Warns when the charge falls below this while unplugged"),
+            ],
+        ),
         Group {
             title: "On battery".into(),
             description: "Videos playing keep the computer awake".into(),
@@ -2574,7 +2607,14 @@ mod tests {
         };
         let displays = [display("DP-1"), display("DP-2")];
         for page in Page::ALL {
-            for group in build(page, &config, &displays, WifiView::default(), None, Some(50)) {
+            for group in build(
+                page,
+                &config,
+                &displays,
+                WifiView::default(),
+                None,
+                Some(50),
+            ) {
                 for row in group.rows {
                     let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();
                     let value = match &row.control {

@@ -860,15 +860,11 @@ impl App {
                     return;
                 };
                 match &row.control {
-                    Control::Network { .. } => {
-                        match &row.key {
-                            Key::Wifi(WifiKey::Network(ssid)) => self.wifi_clicked(&ssid.clone()),
-                            Key::Wifi(WifiKey::Saved(ssid)) => {
-                                self.open_sub_page(Some(ssid.clone()))
-                            }
-                            _ => {}
-                        }
-                    }
+                    Control::Network { .. } => match &row.key {
+                        Key::Wifi(WifiKey::Network(ssid)) => self.wifi_clicked(&ssid.clone()),
+                        Key::Wifi(WifiKey::Saved(ssid)) => self.open_sub_page(Some(ssid.clone())),
+                        _ => {}
+                    },
                     Control::Switch { on, off } => {
                         let value = if row.is_on() { off } else { on };
                         self.write(&[(row.key.clone(), value.clone())]);

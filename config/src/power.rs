@@ -21,6 +21,11 @@ pub struct Power {
     pub lock_on_screen_off: bool,
     /// Lock before suspending.
     pub lock_before_suspend: bool,
+    /// Show the charge as a number next to the battery icon in the top bar.
+    pub battery_percent: bool,
+    /// Warn when the charge drops below this percent while discharging; 0
+    /// turns the warning off.
+    pub low_battery: u8,
     /// While running on the battery.
     pub battery: PowerProfile,
     /// While plugged in.
@@ -55,6 +60,8 @@ impl Default for Power {
         Self {
             lock_on_screen_off: true,
             lock_before_suspend: true,
+            battery_percent: true,
+            low_battery: 15,
             battery: PowerProfile::default(),
             ac: PowerProfile {
                 dim_after: 300,
@@ -114,6 +121,12 @@ impl PowerProfile {
 }
 
 pub(crate) fn validate(config: &Config) -> Result<(), Error> {
+    if config.power.low_battery > 100 {
+        return Err(Error::Invalid(format!(
+            "power.low_battery must be 0 (off) to 100 percent, got {}",
+            config.power.low_battery
+        )));
+    }
     for (name, profile) in [("battery", &config.power.battery), ("ac", &config.power.ac)] {
         for (key, secs) in [
             ("dim_after", profile.dim_after),
@@ -143,6 +156,8 @@ mod tests {
         let power = Power::default();
         assert!(power.lock_on_screen_off);
         assert!(power.lock_before_suspend);
+        assert!(power.battery_percent);
+        assert_eq!(power.low_battery, 15);
         assert_eq!(power.battery.dim_after, 120);
         assert_eq!(power.battery.screen_off_after, 300);
         assert_eq!(power.battery.suspend_after, 900);
@@ -169,6 +184,16 @@ mod tests {
         assert!(!config.power.lock_on_screen_off);
         assert!(!config.power.lock_before_suspend);
         assert_eq!(config.power.battery, PowerProfile::default());
+    }
+
+    #[test]
+    fn battery_display_options_parse() {
+        let config = Config::parse("[power]\nbattery_percent = false\nlow_battery = 0\n").unwrap();
+        assert!(!config.power.battery_percent);
+        assert_eq!(config.power.low_battery, 0);
+        assert!(Config::parse("[power]\nlow_battery = 101\n").is_err());
+        assert!(Config::parse("[power]\nlow_battery = -1\n").is_err());
+        assert!(Config::parse("[power]\nlow_battery = 100\n").is_ok());
     }
 
     #[test]
