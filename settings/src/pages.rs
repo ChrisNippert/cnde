@@ -1771,6 +1771,13 @@ fn window_layout(v: cnde_config::WindowLayout) -> Value {
     })
 }
 
+fn tiling_style(v: cnde_config::TilingStyle) -> Value {
+    s(match v {
+        cnde_config::TilingStyle::Dwindle => "dwindle",
+        cnde_config::TilingStyle::Master => "master",
+    })
+}
+
 fn windows(c: &Config, d: &Config) -> Vec<Group> {
     let (t, dt) = (&c.tiling, &d.tiling);
     let px = |v: f64| format!("{v:.0} px");
@@ -1787,10 +1794,21 @@ fn windows(c: &Config, d: &Config) -> Vec<Group> {
                 window_layout(t.layout),
                 window_layout(dt.layout),
             )
-            .sub("Tiling puts one main window on the left and stacks the rest. Super+T switches one workspace"),
+            .sub("Tiled windows share the screen without overlapping. Super+T switches one workspace"),
+            Row::new(
+                "tiling.style",
+                "Tiling style",
+                Control::Segmented(choices(&[
+                    ("Split", s("dwindle")),
+                    ("Main + Stack", s("master")),
+                ])),
+                tiling_style(t.style),
+                tiling_style(dt.style),
+            )
+            .sub("Split halves the last window for each new one; Main + Stack stacks the rest beside one main window"),
             Row::new(
                 "tiling.master_ratio",
-                "Main window width",
+                "First window width",
                 Control::Slider {
                     min: 0.1,
                     max: 0.9,

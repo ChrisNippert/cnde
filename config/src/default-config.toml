@@ -77,8 +77,9 @@
 # Super+T switches the current workspace between floating and tiling;
 # Super+Enter swaps the focused window with the main one, Super+[ and
 # Super+] narrow and widen the main window, Super+Shift+T floats one window.
-# layout = "floating"      # how workspaces start: "floating", or "tiling" (main window left, the rest stacked right)
-# master_ratio = 0.55      # share of the width the main window takes (0.1-0.9)
+# layout = "floating"      # how workspaces start: "floating" or "tiling"
+# style = "dwindle"        # "dwindle": each new window halves the last one (Hyprland's default); "master": main window left, the rest stacked right
+# master_ratio = 0.5       # share of the width the first window takes (0.1-0.9)
 # gap = 8                  # px between tiled windows (0-64)
 # outer_gap = 8            # px between tiled windows and the screen's edges (0-128)
 

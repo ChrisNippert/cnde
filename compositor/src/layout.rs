@@ -26,7 +26,7 @@ use smithay::{
 };
 use tracing::debug;
 
-use cnde_config::WindowLayout;
+use cnde_config::{TilingStyle, WindowLayout};
 
 use crate::{
     decorations::{content_rect, titlebar_height},
@@ -101,6 +101,87 @@ impl Layout for MasterStack {
     }
 }
 
+/// Hyprland's "dwindle" layout: each window after the first splits the
+/// previous one's space along its longer side, spiralling inwards. The
+/// first split puts `ratio` of the space on the first window.
+pub struct Dwindle {
+    pub ratio: f64,
+    /// Between windows.
+    pub gap: i32,
+    /// Between windows and the area's edges.
+    pub outer_gap: i32,
+}
+
+impl Layout for Dwindle {
+    fn arrange(
+        &self,
+        area: Rectangle<i32, Logical>,
+        own: &[Rectangle<i32, Logical>],
+    ) -> Vec<Rectangle<i32, Logical>> {
+        dwindle(area, own.len(), self.ratio, self.gap, self.outer_gap)
+    }
+
+    fn tiles(&self) -> bool {
+        true
+    }
+}
+
+/// The dwindle rects for `count` windows in `area`.
+pub fn dwindle(
+    area: Rectangle<i32, Logical>,
+    count: usize,
+    ratio: f64,
+    gap: i32,
+    outer_gap: i32,
+) -> Vec<Rectangle<i32, Logical>> {
+    let mut rest = inset(area, outer_gap);
+    let mut rects = Vec::with_capacity(count);
+    for i in 0..count {
+        if i + 1 == count {
+            rects.push(rest);
+            break;
+        }
+        let share = if i == 0 {
+            ratio.clamp(MIN_RATIO, MAX_RATIO)
+        } else {
+            0.5
+        };
+        // Side by side when wider than tall, else one above the other.
+        let wide = rest.size.w >= rest.size.h;
+        let total = if wide { rest.size.w } else { rest.size.h };
+        let first = (((total - gap) as f64 * share).round() as i32).max(1);
+        let second = (total - first - gap).max(1);
+        let (a, b) = if wide {
+            (
+                Rectangle::new(rest.loc, Size::from((first, rest.size.h))),
+                Rectangle::new(
+                    rest.loc + Point::from((first + gap, 0)),
+                    Size::from((second, rest.size.h)),
+                ),
+            )
+        } else {
+            (
+                Rectangle::new(rest.loc, Size::from((rest.size.w, first))),
+                Rectangle::new(
+                    rest.loc + Point::from((0, first + gap)),
+                    Size::from((rest.size.w, second)),
+                ),
+            )
+        };
+        rects.push(a);
+        rest = b;
+    }
+    rects
+}
+
+/// `area` shrunk by `by` on every side.
+fn inset(area: Rectangle<i32, Logical>, by: i32) -> Rectangle<i32, Logical> {
+    Rectangle::new(
+        area.loc + Point::from((by, by)),
+        Size::from(((area.size.w - 2 * by).max(1), (area.size.h - 2 * by).max(1))),
+    )
+}
+
 /// Split `total` into `count` lengths with `gap` between them; the first
 /// ones take the remainder, so they always add up exactly.
 fn split(total: i32, count: usize, gap: i32) -> Vec<i32> {
@@ -120,13 +201,7 @@ pub fn master_stack(
     if count == 0 {
         return Vec::new();
     }
-    let inner = Rectangle::new(
-        area.loc + Point::from((outer_gap, outer_gap)),
-        Size::from((
-            (area.size.w - 2 * outer_gap).max(1),
-            (area.size.h - 2 * outer_gap).max(1),
-        )),
-    );
+    let inner = inset(area, outer_gap);
     if count == 1 {
         return vec![inner];
     }
@@ -224,11 +299,25 @@ impl State {
     pub fn layout_of(&self, index: usize) -> Box<dyn Layout> {
         match self.layout_mode(index) {
             WindowLayout::Floating => Box::new(Floating),
-            WindowLayout::Tiling => Box::new(MasterStack {
-                ratio: self.master_ratio(index),
-                gap: self.config.tiling.gap as i32,
-                outer_gap: self.config.tiling.outer_gap as i32,
-            }),
+            WindowLayout::Tiling => {
+                let (ratio, gap, outer_gap) = (
+                    self.master_ratio(index),
+                    self.config.tiling.gap as i32,
+                    self.config.tiling.outer_gap as i32,
+                );
+                match self.config.tiling.style {
+                    TilingStyle::Dwindle => Box::new(Dwindle {
+                        ratio,
+                        gap,
+                        outer_gap,
+                    }),
+                    TilingStyle::Master => Box::new(MasterStack {
+                        ratio,
+                        gap,
+                        outer_gap,
+                    }),
+                }
+            }
         }
     }
 
@@ -766,6 +855,36 @@ mod tests {
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+    }
+
+    #[test]
+    fn dwindle_halves_then_spirals() {
+        let area = rect(0, 0, 1000, 600);
+        assert_eq!(dwindle(area, 1, 0.5, 10, 0), vec![area]);
+        // Two: side by side, split down the middle.
+        assert_eq!(
+            dwindle(area, 2, 0.5, 10, 0),
+            vec![rect(0, 0, 495, 600), rect(505, 0, 495, 600)]
+        );
+        // Three: the second half (taller than wide) splits top and bottom.
+        assert_eq!(
+            dwindle(area, 3, 0.5, 10, 0),
+            vec![
+                rect(0, 0, 495, 600),
+                rect(505, 0, 495, 295),
+                rect(505, 305, 495, 295)
+            ]
+        );
+        // Four: the last quarter (wider than tall) splits side by side.
+        let four = dwindle(area, 4, 0.5, 10, 0);
+        assert_eq!(four[2], rect(505, 305, 243, 295));
+        assert_eq!(four[3], rect(758, 305, 242, 295));
+    }
+
+    #[test]
+    fn dwindle_ratio_sizes_the_first_split_and_gaps_inset() {
+        let rects = dwindle(rect(0, 0, 1000, 600), 2, 0.6, 0, 20);
+        assert_eq!(rects, vec![rect(20, 20, 576, 560), rect(596, 20, 384, 560)]);
     }
 
     #[test]

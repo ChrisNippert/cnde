@@ -555,7 +555,9 @@ impl Default for Autostart {
 pub struct Tiling {
     /// How workspaces arrange their windows unless switched.
     pub layout: WindowLayout,
-    /// Share of the width the main (master) window takes, 0.1 to 0.9.
+    /// How tiling arranges windows.
+    pub style: TilingStyle,
+    /// Share of the width the first window takes, 0.1 to 0.9.
     pub master_ratio: f64,
     /// Logical pixels between tiled windows.
     pub gap: u32,
@@ -567,7 +569,8 @@ impl Default for Tiling {
     fn default() -> Self {
         Self {
             layout: WindowLayout::Floating,
-            master_ratio: 0.55,
+            style: TilingStyle::Dwindle,
+            master_ratio: 0.5,
             gap: 8,
             outer_gap: 8,
         }
@@ -580,8 +583,19 @@ pub enum WindowLayout {
     /// Windows stay where they're put (GNOME).
     #[default]
     Floating,
-    /// One main window on the left, the rest stacked on the right.
+    /// Windows share the screen without overlapping (see [`TilingStyle`]).
     Tiling,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TilingStyle {
+    /// Hyprland's default: each new window splits the last one in half,
+    /// along its longer side.
+    #[default]
+    Dwindle,
+    /// One main window on the left, the rest stacked on the right.
+    Master,
 }
 
 #[derive(Debug)]
@@ -779,6 +793,9 @@ mod tests {
         assert_eq!(config.tiling.master_ratio, 0.6);
         assert_eq!(config.tiling.gap, 0);
         assert!(Config::parse("[tiling]\nmaster_ratio = 0.95\n").is_err());
+        assert_eq!(config.tiling.style, TilingStyle::Dwindle);
+        let master = Config::parse("[tiling]\nstyle = \"master\"\n").unwrap();
+        assert_eq!(master.tiling.style, TilingStyle::Master);
         assert!(Config::parse("[tiling]\ngap = 100\n").is_err());
         assert!(Config::parse("[tiling]\nlayout = \"spiral\"\n").is_err());
     }
