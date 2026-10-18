@@ -144,6 +144,8 @@ impl App {
         self.icons.set_theme(&config.appearance.icon_theme);
         let dock_moved = config.dock.position != self.config.dock.position;
         self.config = config;
+        self.status
+            .set_profile_command(&self.config.power.profile_command);
         if self.config.dock.locked && self.dock_editing {
             self.finish_dock_edit();
         }

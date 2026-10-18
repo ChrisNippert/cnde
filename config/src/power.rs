@@ -26,6 +26,10 @@ pub struct Power {
     /// Warn when the charge drops below this percent while discharging; 0
     /// turns the warning off.
     pub low_battery: u8,
+    /// Command that switches the power mode when no power-profiles daemon
+    /// is running; it gets `power-saver`, `balanced` or `performance` as
+    /// its last argument. Empty: no command.
+    pub profile_command: String,
     /// While running on the battery.
     pub battery: PowerProfile,
     /// While plugged in.
@@ -62,6 +66,7 @@ impl Default for Power {
             lock_before_suspend: true,
             battery_percent: true,
             low_battery: 15,
+            profile_command: String::new(),
             battery: PowerProfile::default(),
             ac: PowerProfile {
                 dim_after: 300,
@@ -158,6 +163,7 @@ mod tests {
         assert!(power.lock_before_suspend);
         assert!(power.battery_percent);
         assert_eq!(power.low_battery, 15);
+        assert_eq!(power.profile_command, "");
         assert_eq!(power.battery.dim_after, 120);
         assert_eq!(power.battery.screen_off_after, 300);
         assert_eq!(power.battery.suspend_after, 900);
@@ -194,6 +200,13 @@ mod tests {
         assert!(Config::parse("[power]\nlow_battery = 101\n").is_err());
         assert!(Config::parse("[power]\nlow_battery = -1\n").is_err());
         assert!(Config::parse("[power]\nlow_battery = 100\n").is_ok());
+    }
+
+    #[test]
+    fn profile_command_parses() {
+        let config = Config::parse("[power]\nprofile_command = \"my-tool set\"\n").unwrap();
+        assert_eq!(config.power.profile_command, "my-tool set");
+        assert!(Config::parse("[power]\nprofile_command = 3\n").is_err());
     }
 
     #[test]

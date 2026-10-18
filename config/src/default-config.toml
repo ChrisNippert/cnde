@@ -74,6 +74,7 @@
 # lock_before_suspend = true   # lock before sleeping
 # battery_percent = true       # show the charge as a number in the top bar
 # low_battery = 15             # warn below this percent while discharging; 0 is off
+# profile_command = ""         # switches the power mode when no power-profiles daemon runs; gets power-saver, balanced or performance added
 # [power.battery]
 # dim_after = 120          # fade the screen to half brightness
 # screen_off_after = 300   # turn the monitors off

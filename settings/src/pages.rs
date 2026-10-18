@@ -135,6 +135,8 @@ pub enum Key {
     Bluetooth(BluetoothKey),
     /// Not in the config: the panel's backlight, set directly.
     Brightness,
+    /// Not in the config: the power mode, set through the power daemon.
+    PowerMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -246,7 +248,7 @@ impl Key {
             }
             // Not the config's business: the window sends these to the
             // Wi-Fi and Bluetooth workers instead.
-            Key::Wifi(_) | Key::Bluetooth(_) | Key::Brightness => {}
+            Key::Wifi(_) | Key::Bluetooth(_) | Key::Brightness | Key::PowerMode => {}
             Key::OutputPosition { name, axis } => {
                 let old = config.output(name).and_then(|o| o.position);
                 let Some(v) = value.as_f64() else {
@@ -559,6 +561,7 @@ pub fn build(
     wifi: WifiView<'_>,
     bluetooth: Option<&crate::bluetooth::State>,
     brightness: Option<u32>,
+    power_mode: Option<&crate::power_mode::State>,
 ) -> Vec<Group> {
     let d = Config::default();
     match page {
@@ -571,7 +574,7 @@ pub fn build(
         Page::Windows => windows(c, &d),
         Page::Panel => panel(c, &d),
         Page::Dock => dock(c, &d),
-        Page::Power => power(c, &d),
+        Page::Power => power(c, &d, power_mode),
         Page::Accessibility => accessibility(c, &d),
     }
 }
@@ -2405,7 +2408,70 @@ fn idle_time_label(secs: u32) -> String {
     }
 }
 
-fn power(c: &Config, d: &Config) -> Vec<Group> {
+/// A row that isn't a config key: the power mode.
+fn power_mode_row(key: Key, title: &str, control: Control, value: Value) -> Row {
+    Row {
+        key,
+        ..wifi_row(WifiKey::Hidden, title, control, value)
+    }
+}
+
+/// The power mode choice (Power Saver, Balanced, Performance) from the
+/// daemon's last report, or a line saying why there isn't one.
+fn power_mode_group(c: &Config, d: &Config, state: Option<&crate::power_mode::State>) -> Group {
+    use crate::power_mode::Availability;
+    let mut group = Group {
+        title: "Power Mode".into(),
+        description: String::new(),
+        rows: Vec::new(),
+    };
+    let ready = state.filter(|s| s.availability == Availability::Ready);
+    match (state, ready) {
+        (None, _) => group.description = "Looking for the power mode service…".into(),
+        (Some(s), None) if s.availability == Availability::Unknown => {
+            group.description = "Looking for the power mode service…".into();
+        }
+        (Some(_), None) => {
+            group.description =
+                "Power modes need power-profiles-daemon, tuned-ppd or tlp-pd, and none is running."
+                    .into();
+        }
+        (Some(_), Some(st)) => {
+            group.description = st.error.clone().unwrap_or_default();
+            let label = |mode: &str| match mode {
+                "power-saver" => "Power Saver",
+                "balanced" => "Balanced",
+                _ => "Performance",
+            };
+            let list: Vec<(&str, Value)> = st.available.iter().map(|m| (label(m), s(m))).collect();
+            if !list.is_empty() {
+                group.rows.push(
+                    power_mode_row(
+                        Key::PowerMode,
+                        "Power mode",
+                        Control::Segmented(choices(&list)),
+                        s(&st.active),
+                    )
+                    .sub("Performance runs faster and hotter; Power Saver lasts longer"),
+                );
+            }
+        }
+    }
+    group.rows.push(
+        Row::new(
+            "power.profile_command",
+            "Power mode command",
+            Control::text("powerprofilesctl set"),
+            s(&c.power.profile_command),
+            s(&d.power.profile_command),
+        )
+        .sub("Without a daemon, run by the top bar's power mode buttons with power-saver, balanced or performance added")
+        .advanced(),
+    );
+    group
+}
+
+fn power(c: &Config, d: &Config, power_mode: Option<&crate::power_mode::State>) -> Vec<Group> {
     use cnde_config::PowerProfile;
     // The usual times, plus a hand-edited one so the row can show it.
     let times = |current: u32| {
@@ -2459,6 +2525,7 @@ fn power(c: &Config, d: &Config) -> Vec<Group> {
         ]
     };
     vec![
+        power_mode_group(c, d, power_mode),
         group(
             "Locking",
             vec![
@@ -2614,6 +2681,7 @@ mod tests {
                 WifiView::default(),
                 None,
                 Some(50),
+                None,
             ) {
                 for row in group.rows {
                     let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();
@@ -2638,6 +2706,47 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn power_mode_group_follows_the_daemon() {
+        use crate::power_mode::{Availability, State};
+        let config = Config::default();
+        let groups = |state: Option<&State>| power(&config, &Config::default(), state);
+        let mode_row = |g: &Vec<Group>| g[0].rows.iter().find(|r| r.key == Key::PowerMode).cloned();
+
+        // Not heard from yet, and no daemon: a line, no buttons, but the
+        // advanced command row stays.
+        let none = groups(None);
+        assert_eq!(none[0].title, "Power Mode");
+        assert!(mode_row(&none).is_none());
+        let gone = groups(Some(&State {
+            availability: Availability::NoService,
+            ..State::default()
+        }));
+        assert!(gone[0].description.contains("tlp-pd"));
+        assert!(mode_row(&gone).is_none());
+        assert!(
+            gone[0]
+                .rows
+                .iter()
+                .any(|r| r.key == Key::Path("power.profile_command") && r.advanced)
+        );
+
+        // A daemon without Performance offers two.
+        let ready = groups(Some(&State {
+            availability: Availability::Ready,
+            active: "balanced".into(),
+            available: vec!["power-saver".into(), "balanced".into()],
+            error: None,
+        }));
+        let row = mode_row(&ready).unwrap();
+        assert_eq!(row.value, Value::Str("balanced".into()));
+        let Control::Segmented(choices) = &row.control else {
+            panic!("a segmented control");
+        };
+        let labels: Vec<_> = choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, ["Power Saver", "Balanced"]);
     }
 
     #[test]

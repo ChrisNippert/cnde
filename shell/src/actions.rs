@@ -12,7 +12,10 @@ use std::{
     thread,
 };
 
+use smithay_client_toolkit::reexports::calloop::channel::Sender as UpdateSender;
 use tracing::warn;
+
+use crate::status::Update;
 use zbus::blocking::{Connection, fdo::PropertiesProxy};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +28,8 @@ pub enum Action {
     /// Percent of the panel's maximum brightness.
     SetBrightness(u32),
     SetPowerProfile(crate::status::PowerProfile),
+    /// No daemon: run `power.profile_command` (the string) with the mode.
+    SetCustomProfile(crate::status::PowerProfile, String),
     /// The Bluetooth adapter on or off.
     SetBluetooth(bool),
     /// Connect (true) or disconnect a paired Bluetooth device, by address.
@@ -39,11 +44,12 @@ pub enum Action {
 pub struct Actions(Sender<Action>);
 
 impl Actions {
-    pub fn start() -> Self {
+    /// `updates` carries what the actions learn back to the status.
+    pub fn start(updates: UpdateSender<Update>) -> Self {
         let (tx, rx) = channel();
         let _ = thread::Builder::new()
             .name("actions".into())
-            .spawn(move || worker(rx));
+            .spawn(move || worker(rx, updates));
         Self(tx)
     }
 
@@ -52,7 +58,7 @@ impl Actions {
     }
 }
 
-fn worker(rx: Receiver<Action>) {
+fn worker(rx: Receiver<Action>, updates: UpdateSender<Update>) {
     let mut queue = VecDeque::new();
     while let Ok(first) = rx.recv() {
         queue.push_back(first);
@@ -69,12 +75,12 @@ fn worker(rx: Receiver<Action>) {
             if superseded {
                 continue;
             }
-            perform(action);
+            perform(action, &updates);
         }
     }
 }
 
-fn perform(action: Action) {
+fn perform(action: Action, updates: &UpdateSender<Update>) {
     let result = match &action {
         Action::SetVolume(percent) => {
             pactl(&["set-sink-volume", "@DEFAULT_SINK@", &format!("{percent}%")])
@@ -84,6 +90,11 @@ fn perform(action: Action) {
         Action::SetWifi(enabled) => set_wifi(*enabled),
         Action::SetBrightness(percent) => set_brightness(*percent),
         Action::SetPowerProfile(profile) => set_power_profile(*profile),
+        Action::SetCustomProfile(profile, command) => {
+            crate::apps::run_command(&custom_profile_line(command, *profile));
+            let _ = updates.send(Update::CustomProfile(*profile));
+            Ok(())
+        }
         Action::SetBluetooth(on) => set_bluetooth(*on),
         Action::ConnectBluetooth(address, connect) => {
             // Connecting takes seconds: don't hold up the sliders.
@@ -247,14 +258,20 @@ fn set_brightness(percent: u32) -> Result<(), String> {
 
 fn set_power_profile(profile: crate::status::PowerProfile) -> Result<(), String> {
     let conn = Connection::system().map_err(|err| err.to_string())?;
+    let (name, path) = crate::status::power_profile_service(&conn);
     set_property(
         &conn,
-        "net.hadess.PowerProfiles",
-        "/net/hadess/PowerProfiles",
-        "net.hadess.PowerProfiles",
+        name,
+        path,
+        name,
         "ActiveProfile",
         profile.dbus_name().into(),
     )
+}
+
+/// What `sh -c` runs for a custom command: the command, then the mode.
+fn custom_profile_line(command: &str, profile: crate::status::PowerProfile) -> String {
+    format!("{} {}", command.trim(), profile.dbus_name())
 }
 
 /// BlueZ's objects (see `status::read_bluez`).
@@ -325,4 +342,22 @@ fn connect_bluetooth(address: &str, connect: bool) -> Result<(), String> {
     )
     .map(|_| ())
     .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::status::PowerProfile;
+
+    #[test]
+    fn custom_profile_line_appends_the_mode() {
+        assert_eq!(
+            custom_profile_line(" my-tool set ", PowerProfile::PowerSaver),
+            "my-tool set power-saver"
+        );
+        assert_eq!(
+            custom_profile_line("x", PowerProfile::Performance),
+            "x performance"
+        );
+    }
 }
