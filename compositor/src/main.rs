@@ -155,14 +155,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     watchdog::start(&event_loop.handle());
     // Before autostart, so launched apps get DISPLAY.
     xwayland::setup(&mut state, &event_loop.handle());
+    // Before the D-Bus and audio setup below, which wait on other processes:
+    // the shell is what the user is waiting to see.
+    if state.config.panel.enabled {
+        spawn::supervise_shell(&state.client_env(), &state.config.autostart.shell);
+    }
     if !nested {
         portals::setup(&state.client_env());
         if state.config.autostart.audio {
             audio::ensure_running();
         }
-    }
-    if state.config.panel.enabled {
-        spawn::supervise_shell(&state.client_env(), &state.config.autostart.shell);
     }
     for command in &state.config.autostart.commands {
         spawn::spawn_command_line(command, &state.client_env());

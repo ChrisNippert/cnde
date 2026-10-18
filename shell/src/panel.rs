@@ -542,6 +542,12 @@ impl Panel {
             self.dirty = true;
         }
         self.layer.commit();
+        static FIRST: std::sync::Once = std::sync::Once::new();
+        FIRST.call_once(|| {
+            if let Some(start) = crate::START.get() {
+                tracing::debug!(elapsed = ?start.elapsed(), "first panel commit");
+            }
+        });
     }
 }
 

@@ -62,7 +62,7 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::ExtWorkspaceManagerV1;
 
 use crate::{
@@ -182,22 +182,43 @@ pub struct App {
     osd: Option<osd::Osd>,
 }
 
+/// When `main` began, for the startup timing logs.
+pub(crate) static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    let started = *START.get_or_init(std::time::Instant::now);
+    // Config first (it names the fonts), then the font scan, the slowest
+    // startup step, runs alongside the Wayland setup.
+    let config = config::load();
+    let theme = config::theme_from(&config);
+    let families = theme.font_families;
+    let fonts_thread = std::thread::Builder::new()
+        .name("fonts".into())
+        .spawn(move || {
+            let begun = std::time::Instant::now();
+            let fonts = Fonts::new(families);
+            debug!(elapsed = ?begun.elapsed(), "fonts loaded");
+            fonts
+        })?;
+    debug!(elapsed = ?started.elapsed(), "config loaded");
+
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue) = registry_queue_init(&conn)?;
     let qh = queue.handle();
     let mut event_loop: EventLoop<App> = EventLoop::try_new()?;
+    debug!(elapsed = ?started.elapsed(), "wayland connected");
 
-    let config = config::load();
-    let theme = config::theme_from(&config);
     cnde_ui::anim::set_speed(config.animations.speed as f32);
     let mut icons = Icons::new();
     icons.set_theme(&config.appearance.icon_theme);
-    let fonts = Fonts::new(theme.font_families);
+    let fonts = fonts_thread
+        .join()
+        .map_err(|_| "the font loader panicked")?;
+    debug!(elapsed = ?started.elapsed(), "fonts ready");
     info!(font = fonts.family(), "cnde-shell starting");
 
     let shm = Shm::bind(&globals, &qh)?;
