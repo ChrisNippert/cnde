@@ -337,12 +337,13 @@ impl App {
                     {
                         app.ui.wifi_join = None;
                     }
-                    // Its details close once it's no longer connected.
+                    // Its details close once it's neither connected nor
+                    // saved (forgotten).
                     if let Some(ssid) = &app.ui.wifi_details
                         && !state
                             .networks
                             .iter()
-                            .any(|n| n.connected && n.ssid == *ssid)
+                            .any(|n| (n.connected || n.known) && n.ssid == *ssid)
                     {
                         app.ui.wifi_details = None;
                     }
@@ -495,6 +496,12 @@ impl App {
             }
             (WifiKey::Actions(ssid), _) if text == "forget" => {
                 self.wifi_command(wifi::Command::Forget(ssid.clone()))
+            }
+            (WifiKey::Actions(ssid), _) if text == "connect" => {
+                self.wifi_command(wifi::Command::Activate(ssid.clone()))
+            }
+            (WifiKey::AutoConnect(ssid), Value::Bool(on)) => {
+                self.wifi_command(wifi::Command::SetAutoConnect(ssid.clone(), *on))
             }
             (WifiKey::Hidden, _) => {
                 self.ui.wifi_join = Some(wifi::Join {
@@ -837,8 +844,12 @@ impl App {
                 };
                 match &row.control {
                     Control::Network { .. } => {
-                        if let Key::Wifi(WifiKey::Network(ssid)) = &row.key {
-                            self.wifi_clicked(&ssid.clone());
+                        match &row.key {
+                            Key::Wifi(WifiKey::Network(ssid)) => self.wifi_clicked(&ssid.clone()),
+                            Key::Wifi(WifiKey::Saved(ssid)) => {
+                                self.open_sub_page(Some(ssid.clone()))
+                            }
+                            _ => {}
                         }
                     }
                     Control::Switch { on, off } => {

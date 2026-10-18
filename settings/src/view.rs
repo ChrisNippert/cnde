@@ -120,7 +120,7 @@ pub struct Ui {
 
 impl Ui {
     /// The sub-page showing, by its title: the Wi-Fi network whose details
-    /// are open, while it's still the connected one.
+    /// are open, while it's still connected or saved.
     pub fn sub_page(&self) -> Option<&str> {
         let ssid = self.wifi_details.as_deref()?;
         let connected = self
@@ -128,7 +128,7 @@ impl Ui {
             .as_ref()?
             .networks
             .iter()
-            .any(|n| n.connected && n.ssid == ssid);
+            .any(|n| (n.connected || n.known) && n.ssid == ssid);
         (self.page == Page::Wifi && connected).then_some(ssid)
     }
 }
@@ -716,14 +716,17 @@ fn paint_row(
             signal,
             secured,
             connected,
+            details,
         } => {
-            // Right to left: if connected, an arrow to its details and a
-            // check; the lock, the signal.
+            // Right to left: an arrow to its details, a check if connected,
+            // the lock, the signal (none when out of range).
             let mut x = right;
-            if *connected {
+            if *details {
                 x -= 16.0;
                 p.icon("go-next-symbolic", x + 8.0, cy, 14.0, t.window_dim);
                 x -= 10.0;
+            }
+            if *connected {
                 x -= 18.0;
                 p.icon("object-select-symbolic", x + 9.0, cy, 16.0, t.accent);
                 x -= 10.0;
@@ -733,14 +736,16 @@ fn paint_row(
                 p.icon("changes-prevent-symbolic", x + 8.0, cy, 14.0, t.window_dim);
                 x -= 8.0;
             }
-            let bars = match signal {
-                0..=24 => "network-wireless-signal-weak-symbolic",
-                25..=49 => "network-wireless-signal-ok-symbolic",
-                50..=74 => "network-wireless-signal-good-symbolic",
-                _ => "network-wireless-signal-excellent-symbolic",
-            };
-            x -= 18.0;
-            p.icon(bars, x + 9.0, cy, 16.0, t.window_text);
+            if let Some(signal) = signal {
+                let bars = match signal {
+                    0..=24 => "network-wireless-signal-weak-symbolic",
+                    25..=49 => "network-wireless-signal-ok-symbolic",
+                    50..=74 => "network-wireless-signal-good-symbolic",
+                    _ => "network-wireless-signal-excellent-symbolic",
+                };
+                x -= 18.0;
+                p.icon(bars, x + 9.0, cy, 16.0, t.window_text);
+            }
             x
         }
         Control::Password => {
@@ -1318,6 +1323,8 @@ mod tests {
             security,
             known,
             connected,
+            in_range: signal > 0,
+            autoconnect: known,
         };
         ui.wifi = Some(State {
             backend: Backend::NetworkManager,
@@ -1328,6 +1335,7 @@ mod tests {
                 network("Cafe Guest", 55, Security::Open, false, false),
                 network("Neighbour 5G", 30, Security::Sae, false, false),
                 network("eduroam", 64, Security::Enterprise, false, false),
+                network("Office", 0, Security::Psk, true, false),
             ],
             connecting: None,
             error: None,
@@ -1361,6 +1369,9 @@ mod tests {
             Key::Wifi(WifiKey::Join(JoinField::Identity))
         ));
         assert!(!painted.hits.iter().any(|(_, t)| *t == Target::Back));
+        // Saved networks out of range are listed apart, not to join.
+        assert!(has(&painted, Key::Wifi(WifiKey::Saved("Office".into()))));
+        assert!(!has(&painted, Key::Wifi(WifiKey::Network("Office".into()))));
 
         // The connected network's details are a page of their own.
         ui.wifi_details = Some("Home".into());
@@ -1376,6 +1387,13 @@ mod tests {
         ui.wifi_details = Some("Cafe Guest".into());
         let painted = render(&ui, "wifi-not-connected");
         assert!(!painted.hits.iter().any(|(_, t)| *t == Target::Back));
+        // A saved one's, out of range: forget it or stop it joining.
+        ui.wifi_details = Some("Office".into());
+        let painted = render(&ui, "wifi-saved");
+        assert!(painted.hits.iter().any(|(_, t)| *t == Target::Back));
+        assert!(has(&painted, Key::Wifi(WifiKey::AutoConnect("Office".into()))));
+        assert!(has(&painted, Key::Wifi(WifiKey::Actions("Office".into()))));
+        assert!(!has(&painted, Key::Wifi(WifiKey::Detail("Band".into()))));
         ui.wifi_details = None;
 
         ui.wifi_join = Some(Join {

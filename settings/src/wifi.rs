@@ -239,6 +239,17 @@ pub struct Network {
     /// Saved: connects without asking for the password.
     pub known: bool,
     pub connected: bool,
+    /// Seen by the last scan (saved networks show even when they aren't).
+    pub in_range: bool,
+    /// A saved network that's joined by itself when it's around.
+    pub autoconnect: bool,
+}
+
+/// A saved NetworkManager connection (or several with the same name).
+struct Saved {
+    paths: Vec<OwnedObjectPath>,
+    security: Security,
+    autoconnect: bool,
 }
 
 /// About the connection that's up.
@@ -286,6 +297,8 @@ pub enum Command {
     Join(Join),
     Disconnect,
     Forget(String),
+    /// Join a saved network by itself when it's around, or not.
+    SetAutoConnect(String, bool),
 }
 
 impl Command {
@@ -446,7 +459,12 @@ impl Worker {
         state.error = self.error.clone();
         state.connecting = self.connecting.clone();
         state.networks.sort_by(|a, b| {
-            (b.connected, b.known, b.signal).cmp(&(a.connected, a.known, a.signal))
+            (b.connected, b.in_range, b.known, b.signal).cmp(&(
+                a.connected,
+                a.in_range,
+                a.known,
+                a.signal,
+            ))
         });
         state
     }
@@ -501,9 +519,9 @@ impl Worker {
         })
     }
 
-    /// Saved Wi-Fi connections: SSID -> settings path.
-    fn nm_known(&self) -> HashMap<String, Vec<OwnedObjectPath>> {
-        let mut known: HashMap<String, Vec<OwnedObjectPath>> = HashMap::new();
+    /// Saved Wi-Fi connections, by SSID.
+    fn nm_known(&self) -> HashMap<String, Saved> {
+        let mut known: HashMap<String, Saved> = HashMap::new();
         let paths: Vec<OwnedObjectPath> = self
             .call(
                 NM,
@@ -528,9 +546,31 @@ impl Worker {
                 .get("802-11-wireless")
                 .and_then(|w| value::<Vec<u8>>(w, "ssid"))
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
-            if let Some(ssid) = ssid {
-                known.entry(ssid).or_default().push(path);
-            }
+            let Some(ssid) = ssid else {
+                continue;
+            };
+            let autoconnect = settings
+                .get("connection")
+                .and_then(|c| value::<bool>(c, "autoconnect"))
+                .unwrap_or(true);
+            let security = settings
+                .get("802-11-wireless-security")
+                .map_or(Security::Open, |w| {
+                    match value::<String>(w, "key-mgmt").as_deref() {
+                        Some("wpa-psk") => Security::Psk,
+                        Some("sae") => Security::Sae,
+                        Some("owe") => Security::EnhancedOpen,
+                        Some("wpa-eap" | "wpa-eap-suite-b-192") => Security::Enterprise,
+                        _ => Security::Wep,
+                    }
+                });
+            let saved = known.entry(ssid).or_insert(Saved {
+                paths: Vec::new(),
+                security,
+                autoconnect: false,
+            });
+            saved.paths.push(path);
+            saved.autoconnect |= autoconnect;
         }
         known
     }
@@ -581,11 +621,26 @@ impl Worker {
                 }
                 None => networks.push(Network {
                     known: known.contains_key(&ssid),
+                    autoconnect: known.get(&ssid).is_some_and(|s| s.autoconnect),
                     ssid,
                     signal,
                     security,
                     connected,
+                    in_range: true,
                 }),
+            }
+        }
+        for (ssid, saved) in known {
+            if !networks.iter().any(|n| n.ssid == ssid) {
+                networks.push(Network {
+                    ssid,
+                    signal: 0,
+                    security: saved.security,
+                    known: true,
+                    connected: false,
+                    in_range: false,
+                    autoconnect: saved.autoconnect,
+                });
             }
         }
         let details = active
@@ -687,7 +742,8 @@ impl Worker {
                 }
             }
             Command::Forget(ssid) => {
-                for path in self.nm_known().remove(ssid).unwrap_or_default() {
+                let paths = self.nm_known().remove(ssid).map(|s| s.paths);
+                for path in paths.unwrap_or_default() {
                     self.call::<_, ()>(
                         NM,
                         path.as_str(),
@@ -702,7 +758,8 @@ impl Worker {
                     return Err(zbus::Error::Failure("no Wi-Fi device".into()));
                 };
                 let root = ObjectPath::try_from("/").map_err(zbus::Error::from)?;
-                match self.nm_known().remove(ssid).unwrap_or_default().first() {
+                let paths = self.nm_known().remove(ssid).map(|s| s.paths);
+                match paths.unwrap_or_default().first() {
                     Some(path) => {
                         self.call::<_, OwnedObjectPath>(
                             NM,
@@ -737,7 +794,8 @@ impl Worker {
                 };
                 let root = ObjectPath::try_from("/").map_err(zbus::Error::from)?;
                 // Replace what's saved, so the new details are the ones used.
-                for path in self.nm_known().remove(&join.ssid).unwrap_or_default() {
+                let paths = self.nm_known().remove(&join.ssid).map(|s| s.paths);
+                for path in paths.unwrap_or_default() {
                     let _: zbus::Result<()> = self.call(
                         NM,
                         path.as_str(),
@@ -753,6 +811,20 @@ impl Worker {
                     "AddAndActivateConnection",
                     &(nm_settings(join), &device, &root),
                 )?;
+            }
+            Command::SetAutoConnect(ssid, on) => {
+                let paths = self.nm_known().remove(ssid).map(|s| s.paths);
+                for path in paths.unwrap_or_default() {
+                    let iface = "org.freedesktop.NetworkManager.Settings.Connection";
+                    let mut settings: HashMap<String, HashMap<String, OwnedValue>> =
+                        self.call(NM, path.as_str(), iface, "GetSettings", &())?;
+                    settings
+                        .entry("connection".into())
+                        .or_default()
+                        .insert("autoconnect".into(), OwnedValue::from(*on));
+                    // Secrets left out of an update are kept.
+                    self.call::<_, ()>(NM, path.as_str(), iface, "Update", &(settings,))?;
+                }
             }
         }
         Ok(())
@@ -809,14 +881,38 @@ impl Worker {
                     continue;
                 }
                 let kind: String = value(props, "Type").unwrap_or_default();
+                let known = value::<OwnedObjectPath>(props, "KnownNetwork")
+                    .and_then(|path| objects.get(&path)?.get("net.connman.iwd.KnownNetwork"));
                 networks.push(Network {
                     ssid,
                     signal: dbm_to_percent(rssi as f64 / 100.0),
                     security: iwd_security(&kind),
-                    known: props.contains_key("KnownNetwork"),
+                    known: known.is_some(),
                     connected: value::<bool>(props, "Connected").unwrap_or(false),
+                    in_range: true,
+                    autoconnect: known
+                        .is_some_and(|k| value::<bool>(k, "AutoConnect").unwrap_or(true)),
                 });
             }
+        }
+        for props in objects
+            .values()
+            .filter_map(|i| i.get("net.connman.iwd.KnownNetwork"))
+        {
+            let ssid: String = value(props, "Name").unwrap_or_default();
+            if ssid.is_empty() || networks.iter().any(|n| n.ssid == ssid) {
+                continue;
+            }
+            let kind: String = value(props, "Type").unwrap_or_default();
+            networks.push(Network {
+                ssid,
+                signal: 0,
+                security: iwd_security(&kind),
+                known: true,
+                connected: false,
+                in_range: false,
+                autoconnect: value::<bool>(props, "AutoConnect").unwrap_or(true),
+            });
         }
         let details = networks
             .iter()
@@ -856,6 +952,14 @@ impl Worker {
         // In 100 kbit/s.
         details.bitrate = value::<u32>(&diagnostics, "TxBitrate").map(|b| b / 10);
         details
+    }
+
+    /// The saved network called `ssid`, in range or not.
+    fn iwd_known(&self, ssid: &str) -> Option<OwnedObjectPath> {
+        self.iwd_objects().into_iter().find_map(|(path, ifaces)| {
+            let props = ifaces.get("net.connman.iwd.KnownNetwork")?;
+            (value::<String>(props, "Name").as_deref() == Some(ssid)).then_some(path)
+        })
     }
 
     /// The network object called `ssid`.
@@ -904,9 +1008,7 @@ impl Worker {
                 }
             }
             Command::Forget(ssid) => {
-                if let Some((_, props)) = self.iwd_network(ssid)
-                    && let Some(known) = value::<OwnedObjectPath>(&props, "KnownNetwork")
-                {
+                if let Some(known) = self.iwd_known(ssid) {
                     self.call::<_, ()>(
                         IWD,
                         known.as_str(),
@@ -928,6 +1030,16 @@ impl Worker {
                     "Connect",
                     &(),
                 )?;
+            }
+            Command::SetAutoConnect(ssid, on) => {
+                if let Some(known) = self.iwd_known(ssid) {
+                    self.props(IWD, known.as_str())?.set(
+                        InterfaceName::try_from("net.connman.iwd.KnownNetwork")
+                            .map_err(zbus::Error::from)?,
+                        "AutoConnect",
+                        Value::from(*on),
+                    )?;
+                }
             }
             Command::Join(join) => {
                 if join.security == Security::Wep {
@@ -1271,6 +1383,7 @@ fn describe(command: &Command, err: &zbus::Error) -> String {
         Command::Join(join) => format!("Couldn't connect to {}", join.ssid),
         Command::Disconnect => "Couldn't disconnect".to_string(),
         Command::Forget(ssid) => format!("Couldn't forget {ssid}"),
+        Command::SetAutoConnect(ssid, _) => format!("Couldn't change {ssid}"),
     };
     if denied {
         return format!("{what}: not allowed (polkit)");

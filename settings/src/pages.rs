@@ -152,6 +152,10 @@ pub enum WifiKey {
     Enabled,
     /// A network in the list (clicking it connects).
     Network(String),
+    /// A saved network (clicking it opens its details).
+    Saved(String),
+    /// Join a saved network by itself.
+    AutoConnect(String),
     /// Disconnect from or forget a network.
     Actions(String),
     /// A read-only line about the connection.
@@ -302,12 +306,14 @@ pub enum Control {
     },
     /// The wallpaper picker's grid of pictures.
     Wallpapers,
-    /// A Wi-Fi network: its signal, a lock if it needs a password, a check
-    /// if connected. Clicking the row joins it.
+    /// A Wi-Fi network: its signal (if in range), a lock if it needs a
+    /// password, a check if connected, an arrow if clicking opens its
+    /// details. Otherwise clicking the row joins it.
     Network {
-        signal: u8,
+        signal: Option<u8>,
         secured: bool,
         connected: bool,
+        details: bool,
     },
     /// A text entry that shows dots.
     Password,
@@ -632,7 +638,7 @@ fn wifi_page(view: WifiView<'_>) -> Vec<Group> {
         state
             .networks
             .iter()
-            .find(|n| n.connected && n.ssid == ssid)
+            .find(|n| (n.connected || n.known) && n.ssid == ssid)
     }) {
         return details_page(network, state.details.as_ref());
     }
@@ -640,24 +646,28 @@ fn wifi_page(view: WifiView<'_>) -> Vec<Group> {
     let join = view.join;
     let joining = |ssid: &str| join.is_some_and(|j| !j.hidden && j.ssid == ssid);
 
-    let network_row = |network: &crate::wifi::Network| {
+    let network_row = |network: &crate::wifi::Network, key: WifiKey| {
         let connecting = state.connecting.as_deref() == Some(network.ssid.as_str());
+        let saved_list = matches!(key, WifiKey::Saved(_));
         let status = if network.connected {
             "Connected"
         } else if connecting {
             "Connecting…"
-        } else if network.known {
+        } else if !network.in_range {
+            "Not in range"
+        } else if network.known && !saved_list {
             "Saved"
         } else {
             ""
         };
         let mut row = wifi_row(
-            WifiKey::Network(network.ssid.clone()),
+            key,
             &network.ssid,
             Control::Network {
-                signal: network.signal,
+                signal: network.in_range.then_some(network.signal),
                 secured: network.security.secured(),
                 connected: network.connected,
+                details: network.connected || saved_list,
             },
             Value::Unset,
         );
@@ -670,12 +680,13 @@ fn wifi_page(view: WifiView<'_>) -> Vec<Group> {
 
     // Clicking it opens its details.
     if let Some(network) = state.networks.iter().find(|n| n.connected) {
-        groups.push(group("Connected", vec![network_row(network)]));
+        let key = WifiKey::Network(network.ssid.clone());
+        groups.push(group("Connected", vec![network_row(network, key)]));
     }
 
     let mut rows = Vec::new();
-    for network in state.networks.iter().filter(|n| !n.connected) {
-        rows.push(network_row(network));
+    for network in state.networks.iter().filter(|n| !n.connected && n.in_range) {
+        rows.push(network_row(network, WifiKey::Network(network.ssid.clone())));
         if joining(&network.ssid)
             && let Some(join) = join
         {
@@ -703,29 +714,81 @@ fn wifi_page(view: WifiView<'_>) -> Vec<Group> {
         description: description.into(),
         rows,
     });
+
+    // Clicking one opens its details, to change or forget it without
+    // connecting.
+    let saved: Vec<Row> = state
+        .networks
+        .iter()
+        .filter(|n| n.known && !n.connected)
+        .map(|n| network_row(n, WifiKey::Saved(n.ssid.clone())))
+        .collect();
+    if !saved.is_empty() {
+        groups.push(group("Saved Networks", saved));
+    }
     groups
 }
 
-/// The connected network's own page: how the connection's doing, and
-/// disconnecting or forgetting it.
+/// A network's own page. The connected one: how the connection's doing,
+/// and disconnecting or forgetting it; a saved one: connecting or
+/// forgetting it. Either can be set to join by itself.
 fn details_page(
     network: &crate::wifi::Network,
     details: Option<&crate::wifi::Details>,
 ) -> Vec<Group> {
     let mut rows = Vec::new();
-    if let Some(details) = details {
-        rows.extend(detail_rows(network, details));
+    if network.connected {
+        if let Some(details) = details {
+            rows.extend(detail_rows(network, details));
+        }
+    } else {
+        let info = |title: &str, text: &str| {
+            wifi_row(
+                WifiKey::Detail(title.to_string()),
+                title,
+                Control::Info,
+                s(text),
+            )
+        };
+        rows.push(info(
+            "Status",
+            if network.in_range {
+                "In range"
+            } else {
+                "Not in range"
+            },
+        ));
+        rows.push(info("Security", network.security.label()));
     }
+    if network.known {
+        let mut auto = wifi_row(
+            WifiKey::AutoConnect(network.ssid.clone()),
+            "Connect automatically",
+            Control::switch(),
+            Value::Bool(network.autoconnect),
+        );
+        auto.subtitle = "Join it whenever it's in range".into();
+        rows.push(auto);
+    }
+    let actions: &[(&str, Value)] = if network.connected {
+        &[("Disconnect", s("disconnect")), ("Forget", s("forget"))]
+    } else if network.in_range {
+        &[("Connect", s("connect")), ("Forget", s("forget"))]
+    } else {
+        &[("Forget", s("forget"))]
+    };
     rows.push(wifi_row(
         WifiKey::Actions(network.ssid.clone()),
         "",
-        Control::Segmented(choices(&[
-            ("Disconnect", s("disconnect")),
-            ("Forget", s("forget")),
-        ])),
+        Control::Segmented(choices(actions)),
         Value::Unset,
     ));
-    vec![group("Connection", rows)]
+    let title = if network.connected {
+        "Connection"
+    } else {
+        "Saved Network"
+    };
+    vec![group(title, rows)]
 }
 
 /// Read-only rows about the connection that's up.
