@@ -11,7 +11,10 @@
 //!
 //! Turning on and off, or a new temperature, fades over a few seconds.
 
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use smithay::{
     backend::renderer::{
@@ -33,6 +36,9 @@ const FADE: Params = Params {
     duration: std::time::Duration::from_secs(3),
     curve: Curve::Linear,
 };
+
+/// Idle dimming: how much of full brightness is left once dimmed.
+pub const DIMMED: f32 = 0.5;
 
 /// Outputs the filter's colour; blending does the multiplying.
 const SHADER: &str = r#"
@@ -60,8 +66,43 @@ void main() {
 /// No change.
 const WHITE: [f32; 3] = [1.0, 1.0, 1.0];
 
+/// The idle dimming (power.rs): a brightness factor multiplied into the
+/// filter's colour, so dimming is the same full-screen quad as the night
+/// light and is left out of screen captures the same way.
+struct Dim {
+    /// What it fades from.
+    from: f32,
+    target: f32,
+    fade: Option<(Instant, Duration)>,
+}
+
+impl Default for Dim {
+    fn default() -> Self {
+        Self {
+            from: 1.0,
+            target: 1.0,
+            fade: None,
+        }
+    }
+}
+
+impl Dim {
+    fn current(&self, now: Instant) -> f32 {
+        let Some((start, duration)) = self.fade else {
+            return self.target;
+        };
+        let params = Params {
+            duration,
+            curve: Curve::Linear,
+        };
+        let t = Animation::progress_since(start, params, now) as f32;
+        self.from + (self.target - self.from) * t
+    }
+}
+
 #[derive(Default)]
 pub struct NightLight {
+    dim: Dim,
     /// The temperature it's on at, or `None` when off.
     target: Option<u32>,
     /// What's on screen: fading from `from` towards the target's colour.
@@ -93,6 +134,19 @@ impl NightLight {
         true
     }
 
+    /// Fade to `brightness` (1.0 is no dimming) over `fade`; a zero `fade`
+    /// jumps. Whether that's a change (needing frames).
+    pub fn set_dim(&mut self, brightness: f32, fade: Duration) -> bool {
+        if self.dim.target == brightness {
+            return false;
+        }
+        let now = Instant::now();
+        self.dim.from = self.dim.current(now);
+        self.dim.target = brightness;
+        self.dim.fade = (!fade.is_zero()).then_some((now, fade));
+        true
+    }
+
     fn color_of(target: Option<u32>) -> [f32; 3] {
         target.map_or(WHITE, |kelvin| {
             let (r, g, b) = color_temperature(kelvin as f64);
@@ -102,6 +156,12 @@ impl NightLight {
 
     /// The colour every pixel is multiplied by at `now`.
     fn current(&self, now: Instant) -> [f32; 3] {
+        let dim = self.dim.current(now);
+        let color = self.temperature_color(now);
+        color.map(|c| c * dim)
+    }
+
+    fn temperature_color(&self, now: Instant) -> [f32; 3] {
         let Some((start, to)) = self.fade else {
             return Self::color_of(self.target);
         };
@@ -110,15 +170,25 @@ impl NightLight {
     }
 
     pub fn is_animating(&mut self, now: Instant) -> bool {
-        let Some((start, _)) = self.fade else {
-            return false;
-        };
-        if Animation::progress_since(start, FADE, now) >= 1.0 {
-            self.fade = None;
-            // One more frame, to draw the end of it.
-            return true;
+        let mut animating = false;
+        if let Some((start, _)) = self.fade {
+            if Animation::progress_since(start, FADE, now) >= 1.0 {
+                self.fade = None;
+            }
+            // Past the end, one more frame to draw the end of it.
+            animating = true;
         }
-        true
+        if let Some((start, duration)) = self.dim.fade {
+            let params = Params {
+                duration,
+                curve: Curve::Linear,
+            };
+            if Animation::progress_since(start, params, now) >= 1.0 {
+                self.dim.fade = None;
+            }
+            animating = true;
+        }
+        animating
     }
 
     /// The filter over `output`, top of everything (or `None` when off).
@@ -334,5 +404,24 @@ mod tests {
         let mid = light.current(start + FADE.duration / 2);
         assert!(mid[2] < 1.0 && mid[2] > to[2]);
         assert!(!light.set(Some(4000)), "no change");
+    }
+
+    #[test]
+    fn dims_and_undims() {
+        let mut light = NightLight::default();
+        assert!(
+            !light.set_dim(1.0, Duration::from_secs(1)),
+            "already bright"
+        );
+        assert!(light.set_dim(DIMMED, Duration::from_secs(1)));
+        let (start, duration) = light.dim.fade.unwrap();
+        assert_eq!(light.current(start), WHITE);
+        let mid = light.current(start + duration / 2)[0];
+        assert!(mid < 1.0 && mid > DIMMED);
+        assert_eq!(light.current(start + duration), [DIMMED; 3]);
+        // Waking jumps straight back.
+        assert!(light.set_dim(1.0, Duration::ZERO));
+        assert_eq!(light.current(Instant::now()), WHITE);
+        assert!(!light.set_dim(1.0, Duration::ZERO));
     }
 }

@@ -65,6 +65,20 @@
 # For sunset and sunrise, worked out on this computer: nothing is looked up online.
 # coordinates = ""         # "latitude, longitude" in degrees, north and east positive, e.g. "52.52, 13.40"
 
+[power]
+# What to do when nothing is typed or clicked, with separate times on battery
+# and plugged in (desktops use the plugged-in ones). Seconds; 0 skips a step.
+# Video players and browsers playing video keep the computer awake. Suspending
+# locks first if [lock] has a command.
+# [power.battery]
+# dim_after = 120          # fade the screen to half brightness
+# screen_off_after = 300   # turn the monitors off
+# suspend_after = 900      # sleep
+# [power.ac]
+# dim_after = 300
+# screen_off_after = 600
+# suspend_after = 0        # never
+
 [wallpaper]
 # light = ""               # image path (PNG, JPEG, WebP), e.g. "~/Pictures/day.jpg"
 # dark = ""                # used in dark mode; empty uses `light` for both

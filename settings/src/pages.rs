@@ -15,11 +15,12 @@ pub enum Page {
     Windows,
     Panel,
     Dock,
+    Power,
     Accessibility,
 }
 
 impl Page {
-    pub const ALL: [Page; 10] = [
+    pub const ALL: [Page; 11] = [
         Page::Appearance,
         Page::Displays,
         Page::Wifi,
@@ -29,6 +30,7 @@ impl Page {
         Page::Windows,
         Page::Panel,
         Page::Dock,
+        Page::Power,
         Page::Accessibility,
     ];
 
@@ -43,6 +45,7 @@ impl Page {
             Page::Windows => "Windows",
             Page::Panel => "Top Bar",
             Page::Dock => "Dock",
+            Page::Power => "Power",
             Page::Accessibility => "Accessibility",
         }
     }
@@ -58,6 +61,7 @@ impl Page {
             Page::Windows => "window-restore-symbolic",
             Page::Panel => "focus-top-bar-symbolic",
             Page::Dock => "view-app-grid-symbolic",
+            Page::Power => "battery-symbolic",
             Page::Accessibility => "preferences-desktop-accessibility-symbolic",
         }
     }
@@ -558,6 +562,7 @@ pub fn build(
         Page::Windows => windows(c, &d),
         Page::Panel => panel(c, &d),
         Page::Dock => dock(c, &d),
+        Page::Power => power(c, &d),
         Page::Accessibility => accessibility(c, &d),
     }
 }
@@ -2287,6 +2292,102 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
         );
     }
     vec![group("Dock", rows)]
+}
+
+/// Idle timeouts offered, in seconds (0 is "Never").
+const IDLE_TIMES: [u32; 8] = [0, 60, 120, 300, 600, 900, 1800, 3600];
+
+fn idle_time_label(secs: u32) -> String {
+    match secs {
+        0 => "Never".into(),
+        3600 => "1 hour".into(),
+        s if s % 3600 == 0 => format!("{} hours", s / 3600),
+        60 => "1 minute".into(),
+        s if s % 60 == 0 => format!("{} minutes", s / 60),
+        s => format!("{s} seconds"),
+    }
+}
+
+fn power(c: &Config, d: &Config) -> Vec<Group> {
+    use cnde_config::PowerProfile;
+    // The usual times, plus a hand-edited one so the row can show it.
+    let times = |current: u32| {
+        let mut list = IDLE_TIMES.to_vec();
+        if !list.contains(&current) {
+            list.push(current);
+            list.sort_unstable();
+        }
+        Control::Dropdown(
+            list.into_iter()
+                .map(|secs| Choice {
+                    label: idle_time_label(secs),
+                    value: Value::Int(secs as i64),
+                })
+                .collect(),
+        )
+    };
+    let rows = |keys: [&'static str; 3], now: &PowerProfile, default: &PowerProfile| {
+        let row = |key, title: &str, sub: &str, now: u32, default: u32| {
+            Row::new(
+                key,
+                title,
+                times(now),
+                Value::Int(now as i64),
+                Value::Int(default as i64),
+            )
+            .sub(sub)
+        };
+        vec![
+            row(
+                keys[0],
+                "Dim the screen",
+                "After no input; any key or movement undoes it",
+                now.dim_after,
+                default.dim_after,
+            ),
+            row(
+                keys[1],
+                "Turn the screen off",
+                "",
+                now.screen_off_after,
+                default.screen_off_after,
+            ),
+            row(
+                keys[2],
+                "Suspend",
+                "Locks first if a lock command is set",
+                now.suspend_after,
+                default.suspend_after,
+            ),
+        ]
+    };
+    vec![
+        Group {
+            title: "On battery".into(),
+            description: "Videos playing keep the computer awake".into(),
+            rows: rows(
+                [
+                    "power.battery.dim_after",
+                    "power.battery.screen_off_after",
+                    "power.battery.suspend_after",
+                ],
+                &c.power.battery,
+                &d.power.battery,
+            ),
+        },
+        group(
+            "Plugged in",
+            rows(
+                [
+                    "power.ac.dim_after",
+                    "power.ac.screen_off_after",
+                    "power.ac.suspend_after",
+                ],
+                &c.power.ac,
+                &d.power.ac,
+            ),
+        ),
+    ]
 }
 
 fn accessibility(c: &Config, d: &Config) -> Vec<Group> {

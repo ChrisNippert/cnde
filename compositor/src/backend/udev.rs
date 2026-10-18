@@ -247,6 +247,14 @@ pub fn init(
     Ok(())
 }
 
+/// DPMS off for one monitor: nothing scanned out, no frame pending.
+fn blank(surface: &mut Surface) {
+    if let Err(err) = surface.drm_output.with_compositor(|c| c.clear()) {
+        warn!(name = %surface.output.name(), ?err, "can't turn the monitor off");
+    }
+    surface.redraw = RedrawState::Idle;
+}
+
 impl State {
     fn udev(&mut self) -> Option<&mut UdevBackend> {
         match &mut self.backend {
@@ -717,12 +725,17 @@ impl State {
     /// [`udev_render_queued`](Self::udev_render_queued) at the end of the
     /// loop iteration, so several requests cost one frame.
     fn queue_output_redraw(&mut self, crtc: crtc::Handle) {
+        let screens_off = self.idle.screens_off;
         let Some(udev) = self.udev() else {
             return;
         };
         // Switched to another VT: the GPU isn't ours until we're resumed
         // (which queues a full redraw).
         if !udev.session.is_active() {
+            return;
+        }
+        // Monitors off for being idle: the first input queues a redraw.
+        if screens_off {
             return;
         }
         let Some(surface) = udev
@@ -739,6 +752,20 @@ impl State {
                 surface.redraw = RedrawState::WaitingForVblank {
                     redraw_needed: true,
                 };
+            }
+        }
+    }
+
+    /// Idle: turn the monitors off (DPMS). Drawing stops until input; the
+    /// next frame turns them back on. A monitor with a frame in flight is
+    /// blanked when it lands.
+    pub fn udev_screens_off(&mut self) {
+        let Some(gpu) = self.udev().and_then(|u| u.gpu.as_mut()) else {
+            return;
+        };
+        for surface in gpu.surfaces.values_mut() {
+            if !matches!(surface.redraw, RedrawState::WaitingForVblank { .. }) {
+                blank(surface);
             }
         }
     }
@@ -762,6 +789,7 @@ impl State {
     }
 
     fn render_output(&mut self, crtc: crtc::Handle) {
+        let screens_off = self.idle.screens_off;
         let now = std::time::Instant::now();
         let elapsed = self.start_time.elapsed();
         let pointer = self.seat.get_pointer().map(|p| p.current_location());
@@ -786,6 +814,9 @@ impl State {
             return;
         }
         surface.redraw = RedrawState::Idle;
+        if screens_off {
+            return;
+        }
         let output = surface.output.clone();
 
         // An app starting: the plain arrow shows it's busy meanwhile.
@@ -1000,6 +1031,7 @@ impl State {
     }
 
     fn on_vblank(&mut self, crtc: crtc::Handle, _metadata: &mut Option<DrmEventMetadata>) {
+        let screens_off = self.idle.screens_off;
         let Some(surface) = self
             .udev()
             .and_then(|u| u.gpu.as_mut())
@@ -1009,6 +1041,11 @@ impl State {
         };
         if let Err(err) = surface.drm_output.frame_submitted() {
             warn!(?err, "frame_submitted failed");
+        }
+        // The monitors went off while this frame was on its way.
+        if screens_off {
+            blank(surface);
+            return;
         }
         let redraw_needed = matches!(
             surface.redraw,
