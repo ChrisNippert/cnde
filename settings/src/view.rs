@@ -193,9 +193,16 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
 
     // The page first: it scrolls under the header bar drawn after it.
     let content = Rect::new(sw, hh, w - sw, h - hh);
-    // A new page fades in, rising a little.
+    // A new page fades in, sliding a little from the left. The slide stays
+    // inside the column's 24px side margin, so it never draws over the
+    // sidebar. Set PAGE_SLIDE to 0.0 for a plain fade.
+    const PAGE_SLIDE: f32 = 16.0;
     let appear = a.get(AnimKey::Page, 1.0, MEDIUM);
-    page(ui, a, &mut p, &mut out, content, 10.0 * (1.0 - appear));
+    let slid = Rect {
+        x: content.x - PAGE_SLIDE * (1.0 - appear),
+        ..content
+    };
+    page(ui, a, &mut p, &mut out, slid, 0.0);
     if appear < 1.0 {
         let veil = t.window_background.with_alpha(1.0 - appear);
         p.canvas
