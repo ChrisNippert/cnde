@@ -16,6 +16,8 @@ cnde-ipc = { path = "../ipc" }
 cnde-ui = { path = "../ui" }
 # inotify for config hot-reload (same major version smithay uses).
 rustix = { version = "1", features = ["fs"] }
+# Thread id and signals for the stall watchdog (already in the tree via smithay).
+libc = "0.2"
 # Connector scanning for monitor hotplug. Its EDID (`display-info`) feature
 # wants an older libdisplay-info than Arch ships, so it's off for now.
 smithay-drm-extras = { version = "0.1", default-features = false }

@@ -44,7 +44,9 @@ use std::path::PathBuf;
 
 use cnde_config::Config;
 
-use crate::{backend::Backend, effects::ClosingWindow, keybinds::ModKey, snap::SnapPreview};
+use crate::{
+    backend::Backend, effects::ClosingWindow, keybinds::ModKey, snap::SnapPreview, watchdog::Phase,
+};
 
 /// How long the pointer stays busy after a launch with no window opening.
 pub const LAUNCH_FEEDBACK: std::time::Duration = std::time::Duration::from_secs(5);
@@ -270,6 +272,7 @@ impl State {
 
     /// Runs after every batch of events: housekeeping, then ask for a frame if needed.
     pub fn on_loop_iteration(&mut self) {
+        crate::watchdog::beat(Phase::Housekeeping);
         self.space.refresh();
         self.popups.cleanup();
         self.finish_workspace_motion(Instant::now());
@@ -300,9 +303,11 @@ impl State {
         // Why render here and not in an idle callback: calloop runs idles
         // *before* this hook, so an idle queued from here sat until some
         // unrelated event woke the loop. Typing showed up late.
+        crate::watchdog::beat(Phase::Render);
         if matches!(self.backend, Backend::Udev(_)) {
             self.udev_render_queued();
         }
+        crate::watchdog::beat(Phase::Finish);
         // Window captures don't wait for a monitor to redraw: the window may
         // be on a hidden workspace.
         if self.capture.has_pending()
@@ -318,6 +323,7 @@ impl State {
         if let Err(err) = self.display_handle.flush_clients() {
             warn!(?err, "failed to flush clients");
         }
+        crate::watchdog::beat(Phase::Dispatch);
     }
 
     /// Tell clients visible on `output` to draw their next frame.

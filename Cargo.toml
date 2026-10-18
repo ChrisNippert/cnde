@@ -11,6 +11,10 @@ license = "GPL-3.0-or-later"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Line tables only: readable backtraces (stall watchdog, panics) without full debuginfo.
+[profile.release]
+debug = "line-tables-only"
+
 [profile.dev]
 # Smithay and the renderer are painfully slow unoptimized; keep our own code debuggable.
 opt-level = 1

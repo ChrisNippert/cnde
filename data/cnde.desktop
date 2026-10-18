@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=cnde
 Comment=A small, configurable Wayland desktop
-Exec=cnde-compositor
+Exec=env RUST_BACKTRACE=1 cnde-compositor
 Type=Application
 DesktopNames=cnde
