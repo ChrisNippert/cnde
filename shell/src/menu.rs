@@ -46,6 +46,8 @@ pub enum Action {
     Config(Vec<(&'static str, Value)>),
     /// Start an app (a desktop file ID): a new window.
     Launch(String),
+    /// Run a shell command line, detached.
+    Run(String),
     Activate(u64),
     /// Close these windows (quitting an app).
     Close(Vec<u64>),

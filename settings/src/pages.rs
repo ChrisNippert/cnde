@@ -2353,6 +2353,17 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
             )
             .sub("Icons and the dock can't be dragged or edited"),
         );
+        rows.push(
+            Row::new(
+                "dock.system_monitor",
+                "System monitor",
+                Control::text("gnome-system-monitor"),
+                s(&c.dock.system_monitor),
+                s(&d.dock.system_monitor),
+            )
+            .sub("Run by System Monitor in the dock's menu; empty hides it")
+            .advanced(),
+        );
     }
     vec![group("Dock", rows)]
 }
