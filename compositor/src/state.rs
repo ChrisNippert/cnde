@@ -95,6 +95,8 @@ pub struct State {
     /// Dark mode on a timer.
     pub schedules: crate::schedule::Schedules,
     pub night_light: crate::night_light::NightLight,
+    /// Dimming, screen off and suspend when idle.
+    pub idle: crate::power::Idle,
     pub decorations: crate::decorations::Decorations,
     pub bar_input: crate::decorations::BarInput,
     pub overview: crate::overview::Overview,
@@ -165,6 +167,7 @@ impl State {
             smithay::wayland::session_lock::SessionLockManagerState::new::<Self, _>(&dh, |_| true),
         );
         crate::ext_workspace::init(&dh);
+        let idle = crate::power::Idle::new(&dh, event_loop.handle());
         let capture = crate::capture::CaptureState::new(&dh);
         let mut seat_state = SeatState::new();
 
@@ -206,6 +209,7 @@ impl State {
             crossfade: Default::default(),
             schedules: Default::default(),
             night_light: Default::default(),
+            idle,
             decorations: Default::default(),
             bar_input: Default::default(),
             overview: crate::overview::Overview::new(),
@@ -275,6 +279,7 @@ impl State {
         crate::watchdog::beat(Phase::Housekeeping);
         self.space.refresh();
         self.popups.cleanup();
+        self.update_idle_inhibit();
         self.finish_workspace_motion(Instant::now());
         self.finish_overview_animation(Instant::now());
         self.popup_anims.finish(Instant::now());

@@ -24,6 +24,7 @@ mod night_light;
 mod overview;
 mod popup_anim;
 mod portals;
+mod power;
 mod render;
 mod schedule;
 mod screenshot;
@@ -152,6 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config::watch(&event_loop.handle(), path);
     }
     schedule::start(&event_loop.handle());
+    power::start(&event_loop.handle());
     watchdog::start(&event_loop.handle());
     // Before autostart, so launched apps get DISPLAY.
     xwayland::setup(&mut state, &event_loop.handle());

@@ -35,6 +35,17 @@ const BTN_RIGHT: u32 = 0x111;
 
 impl State {
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+        // Anything the user does; waking a dark screen with a click
+        // shouldn't also press whatever is under the pointer.
+        let woke = self.idle_activity();
+        if woke
+            && matches!(
+                event,
+                InputEvent::PointerButton { .. } | InputEvent::PointerAxis { .. }
+            )
+        {
+            return;
+        }
         match event {
             InputEvent::Keyboard { event, .. } => self.on_keyboard::<I>(event),
             InputEvent::PointerMotionAbsolute { event, .. } => {
@@ -281,7 +292,7 @@ impl State {
             return;
         }
         match action {
-            Action::Lock =>self.lock_screen(),
+            Action::Lock => self.lock_screen(),
             Action::Quit => self.loop_signal.stop(),
             Action::SpawnTerminal => spawn::spawn_terminal(&self.client_env()),
             Action::SpawnBrowser => spawn::spawn_browser(&self.client_env()),

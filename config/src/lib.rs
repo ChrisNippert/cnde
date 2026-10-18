@@ -11,6 +11,8 @@ use serde::Deserialize;
 
 mod edit;
 pub use edit::ConfigFile;
+pub mod power;
+pub use power::{IdleStage, Power, PowerProfile};
 pub mod schedule;
 pub use schedule::{DarkMode, DarkSchedule, Location, NightLight, NightSchedule};
 // The value type `ConfigFile::set` takes.
@@ -41,6 +43,8 @@ pub struct Config {
     pub night_light: NightLight,
     /// For sunset and sunrise (schedule.rs).
     pub location: Location,
+    /// Dimming, screen off and suspend when idle.
+    pub power: Power,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -760,6 +764,7 @@ impl Config {
             }
         }
         schedule::validate(self)?;
+        power::validate(self)?;
         Ok(())
     }
 

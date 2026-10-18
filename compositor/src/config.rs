@@ -170,6 +170,9 @@ impl State {
             publish_accent(&self.config.appearance);
         }
         self.schedules_config_changed(old);
+        if old.is_none_or(|old| old.power != self.config.power) {
+            self.idle_reevaluate();
+        }
     }
 
     /// Apply mouse/touchpad settings to one libinput device.
