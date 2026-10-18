@@ -5,6 +5,7 @@
 //! edits. Usage: `cnde-settings [page]`, e.g. `cnde-settings displays`.
 
 mod arrange;
+mod backlight;
 mod bluetooth;
 mod pages;
 mod view;
@@ -259,6 +260,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wifi_join: None,
             wifi_details: None,
             bluetooth: None,
+            brightness: backlight::read(),
             arranged: None,
             arranging: None,
         },
@@ -381,6 +383,17 @@ impl App {
         if let Some(tx) = &self.bluetooth {
             let _ = tx.send(command);
         }
+    }
+
+    /// The brightness slider sets the panel's backlight directly.
+    fn write_brightness(&mut self, value: &Value) {
+        let Some(percent) = value.as_f64() else {
+            return;
+        };
+        if let Err(err) = backlight::set(percent as u32) {
+            self.show_error(err);
+        }
+        self.ui.brightness = backlight::read();
     }
 
     /// The Bluetooth switch and device buttons go to the worker.
@@ -609,6 +622,7 @@ impl App {
             match key {
                 Key::Wifi(wifi) => self.write_wifi(wifi, value),
                 Key::Bluetooth(key) => self.write_bluetooth(key, value),
+                Key::Brightness => self.write_brightness(value),
                 _ => config_changes.push((key.clone(), value.clone())),
             }
         }
@@ -799,6 +813,9 @@ impl App {
                     }
                     if page == Page::Bluetooth {
                         self.open_bluetooth();
+                    }
+                    if page == Page::Displays {
+                        self.ui.brightness = backlight::read();
                     }
                 }
             }
