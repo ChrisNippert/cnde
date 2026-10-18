@@ -10,7 +10,8 @@
 //! calls `Backtrace::force_capture`. That is not async-signal-safe (it
 //! allocates), so if the main thread hung inside malloc the capture never
 //! arrives; the watchdog gives up after a second and logs without it. It is a
-//! last-resort diagnostic on an already hung process, which is why that's fine.
+//! last-resort diagnostic on an already hung process; and the signal is only
+//! sent while the thread is blocked in the kernel, never inside malloc.
 //! The handler only fills a buffer: all logging happens on the watchdog thread,
 //! since the main thread might be stuck holding the stderr lock.
 
@@ -138,18 +139,6 @@ fn report(age: Duration) {
         .copied()
         .unwrap_or("?");
 
-    CAPTURED.store(false, Ordering::Release);
-    // Safety: tgkill on our own main thread.
-    unsafe { libc::syscall(libc::SYS_tgkill, libc::getpid(), tid, libc::SIGUSR2) };
-    let mut backtrace = None;
-    for _ in 0..10 {
-        thread::sleep(Duration::from_millis(100));
-        if CAPTURED.load(Ordering::Acquire) {
-            backtrace = BACKTRACE.lock().ok().map(|trace| trace.clone());
-            break;
-        }
-    }
-
     let proc = |file: &str| {
         std::fs::read_to_string(format!("/proc/self/task/{tid}/{file}"))
             .map(|text| text.trim().to_string())
@@ -160,8 +149,27 @@ fn report(age: Duration) {
     let state = stat
         .rsplit_once(')')
         .and_then(|(_, rest)| rest.split_whitespace().next())
-        .unwrap_or("?");
-    error!(
+        .unwrap_or("?")
+        .to_string();
+
+    // Only interrupt a thread that's blocked in the kernel: one running
+    // user code could be inside malloc, and the handler's allocation would
+    // then deadlock it for good.
+    let mut backtrace = None;
+    if state == "S" || state == "D" {
+        CAPTURED.store(false, Ordering::Release);
+        // Safety: tgkill on our own main thread.
+        unsafe { libc::syscall(libc::SYS_tgkill, libc::getpid(), tid, libc::SIGUSR2) };
+        for _ in 0..10 {
+            thread::sleep(Duration::from_millis(100));
+            if CAPTURED.load(Ordering::Acquire) {
+                backtrace = BACKTRACE.lock().ok().map(|trace| trace.clone());
+                break;
+            }
+        }
+    }
+
+    let text = format!(
         "main loop stalled for {} s in phase: {phase}\n\
          main thread state: {state} (R running, S sleeping, D uninterruptible, e.g. GPU/DRM)\n\
          wchan: {}\nsyscall: {}\nkernel stack: {}\nbacktrace:\n{}",
@@ -169,8 +177,35 @@ fn report(age: Duration) {
         proc("wchan"),
         proc("syscall"),
         proc("stack"),
-        backtrace
-            .as_deref()
-            .unwrap_or("<not captured: main thread unresponsive to signals>"),
+        backtrace.as_deref().unwrap_or(
+            "<not captured: main thread running user code, or unresponsive to signals>"
+        ),
     );
+    error!("{text}");
+    save(&text);
+}
+
+/// Also keep the report on disk, synced: the journal's last lines are lost
+/// if the machine is then hard-reset.
+fn save(text: &str) {
+    use std::io::Write;
+    let Some(dir) = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".local/state")))
+    else {
+        return;
+    };
+    let dir = dir.join("cnde");
+    let path = dir.join("stall.log");
+    let written = std::fs::create_dir_all(&dir).and_then(|()| {
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        writeln!(file, "--- unix time {stamp}\n{text}\n")?;
+        file.sync_all()
+    });
+    if let Err(err) = written {
+        error!(?err, path = %path.display(), "could not save the stall report");
+    }
 }
