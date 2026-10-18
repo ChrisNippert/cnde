@@ -59,6 +59,50 @@ impl<'a> Canvas<'a> {
         );
     }
 
+    /// [`Canvas::rounded_rect`], drawing only inside `clip` (logical x, y, w, h).
+    #[allow(clippy::too_many_arguments)]
+    pub fn rounded_rect_clipped(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        color: Color,
+        clip: (f32, f32, f32, f32),
+    ) {
+        let s = self.scale;
+        let Some(clip_rect) = Rect::from_xywh(clip.0 * s, clip.1 * s, clip.2 * s, clip.3 * s)
+        else {
+            return;
+        };
+        let (x, y, w, h) = (x * s, y * s, w * s, h * s);
+        let r = (radius * s).min(w / 2.0).min(h / 2.0).max(0.0);
+        let Some(path) = rounded_rect_path(x, y, w, h, r) else {
+            return;
+        };
+        let Some(mut mask) = Mask::new(self.pixmap.width(), self.pixmap.height()) else {
+            return;
+        };
+        mask.fill_path(
+            &PathBuilder::from_rect(clip_rect),
+            FillRule::Winding,
+            false,
+            Transform::identity(),
+        );
+        // Keep only what the rounded rectangle covers inside the clip.
+        let mut paint = Paint::default();
+        paint.set_color(skia_color(color));
+        paint.anti_alias = true;
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            Some(&mask),
+        );
+    }
+
     /// The outline of a rounded rectangle, `width` logical px thick, drawn
     /// inside the rectangle's edge.
     #[allow(clippy::too_many_arguments)]
