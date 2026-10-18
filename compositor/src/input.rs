@@ -559,6 +559,7 @@ impl State {
             }
         }
 
+        let was_grabbed = pointer.is_grabbed();
         pointer.button(
             self,
             &ButtonEvent {
@@ -569,6 +570,22 @@ impl State {
             },
         );
         pointer.frame(self);
+        // A press outside an open menu dismisses its popup grab; the same
+        // click also focuses and raises what is under the pointer.
+        if button_state == ButtonState::Pressed
+            && was_grabbed
+            && !pointer.is_grabbed()
+            && !self.overview.is_open()
+        {
+            let location = pointer.current_location();
+            if self
+                .layer_surface_under(self.layers_above_windows(location), location)
+                .is_none()
+            {
+                let window = self.space.element_under(location).map(|(w, _)| w.clone());
+                self.focus_window(window.as_ref());
+            }
+        }
     }
 
     fn on_pointer_axis<I: InputBackend>(&mut self, event: I::PointerAxisEvent) {
