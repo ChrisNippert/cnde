@@ -271,8 +271,17 @@ impl State {
         if self.lock.is_locked() && !matches!(action, Action::Media(_) | Action::SwitchVt(_)) {
             return;
         }
+        // Framing a screenshot: the tool owns the keyboard.
+        if self.screenshot.active
+            && !matches!(
+                action,
+                Action::Media(_) | Action::Quit | Action::SwitchVt(_) | Action::CancelScreenshot
+            )
+        {
+            return;
+        }
         match action {
-            Action::Lock => self.lock_screen(),
+            Action::Lock =>self.lock_screen(),
             Action::Quit => self.loop_signal.stop(),
             Action::SpawnTerminal => spawn::spawn_terminal(&self.client_env()),
             Action::SpawnBrowser => spawn::spawn_browser(&self.client_env()),
@@ -305,7 +314,6 @@ impl State {
             }
             Action::Media(key) => self.ipc.broadcast(&cnde_ipc::Event::MediaKey { key }),
             Action::Screenshot => self.start_screenshot(),
-            Action::Launcher if self.screenshot.active => {}
             Action::Launcher => {
                 let command = self.config.launcher.command.clone();
                 if command.trim().is_empty() {
@@ -423,6 +431,29 @@ impl State {
                 },
             );
             pointer.frame(self);
+            return;
+        }
+        // Framing a screenshot: only its overlay gets clicks. Releases always
+        // reach it (a drag may end anywhere); a press with no overlay under
+        // it, e.g. on a monitor whose overlay isn't mapped yet, is dropped.
+        if self.screenshot.active {
+            let location = pointer.current_location();
+            if button_state == ButtonState::Released
+                || self
+                    .layer_surface_under(&[WlrLayer::Overlay], location)
+                    .is_some()
+            {
+                pointer.button(
+                    self,
+                    &ButtonEvent {
+                        button,
+                        state: button_state,
+                        serial,
+                        time,
+                    },
+                );
+                pointer.frame(self);
+            }
             return;
         }
         debug!(button, ?button_state, location = ?pointer.current_location(), "pointer button");
@@ -556,7 +587,7 @@ impl State {
             let pos = p.current_location();
             self.surface_under(pos).is_some()
         });
-        if self.overview.is_open() && !over_layer {
+        if self.overview.is_open() && !self.screenshot.active && !over_layer {
             if let Some(v120) = event.amount_v120(Axis::Vertical) {
                 self.overview_scroll(v120);
             }
