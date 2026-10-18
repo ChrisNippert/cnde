@@ -515,6 +515,16 @@ impl State {
         !fixed
     }
 
+    /// Whether `window`, not yet open, will join tiles: the workspace under
+    /// the pointer (where it opens) tiles and it isn't a dialog.
+    pub fn opens_tiled(&self, window: &Window) -> bool {
+        window.toplevel().is_some_and(|t| t.parent().is_none())
+            && self
+                .output_under_pointer()
+                .and_then(|o| self.workspace_on(&o))
+                .is_some_and(|index| self.layout_of(index).tiles())
+    }
+
     /// The windows workspace `index` tiles, main window first; empty when
     /// it floats.
     fn tiled_windows(&self, index: usize) -> Vec<Window> {

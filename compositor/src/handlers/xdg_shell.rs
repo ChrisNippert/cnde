@@ -184,6 +184,18 @@ impl State {
     fn placement_request(&mut self, surface: &ToplevelSurface, target: Placement) {
         debug!(?target, "client requested placement");
         match self.window_for_surface(surface.wl_surface()) {
+            // Apps that remember being maximized (Discord, VS Code) ask
+            // before their first frame; on a tiling workspace they tile
+            // instead. Their maximize button still works once open.
+            Some(window)
+                if target == Placement::Maximized
+                    && self.unmapped.contains(&window)
+                    && self.opens_tiled(&window) =>
+            {
+                if surface.is_initial_configure_sent() {
+                    surface.send_configure();
+                }
+            }
             Some(window) => self.set_placement(&window, target, true),
             // The protocol requires a configure in reply even if we change nothing.
             None => {
