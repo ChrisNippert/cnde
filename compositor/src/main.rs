@@ -166,7 +166,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if !nested {
         portals::setup(&state.client_env());
-        if state.config.autostart.audio {
+        // Unless autostart starts it too: two launchers at once kill each
+        // other's daemons and leave two wireplumbers fighting over the card.
+        let autostarted = state
+            .config
+            .autostart
+            .commands
+            .iter()
+            .any(|c| c.contains("pipewire"));
+        if state.config.autostart.audio && !autostarted {
             audio::ensure_running();
         }
     }
