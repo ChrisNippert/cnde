@@ -268,11 +268,20 @@ impl State {
                 let zone = smithay::desktop::layer_map_for_output(output).non_exclusive_zone();
                 let zone = smithay::utils::Rectangle::new(zone.loc + geo.loc, zone.size);
                 for window in self.space.elements_for_output(output) {
-                    let Some(rect) = self.space.element_geometry(window) else {
+                    let Some(mut rect) = self.space.element_geometry(window) else {
                         continue;
                     };
                     if crate::window::with_state(window, |s| s.minimized) {
                         continue;
+                    }
+                    // A new tile's committed size lags its configure (it
+                    // maps at the client's own, maybe full-screen, size), which
+                    // would flash the bars solid; judge tiles by their slot.
+                    if self.is_tiled(window)
+                        && !self.workspaces.is_moving()
+                        && let Some(slot) = self.tile_rect_now(window)
+                    {
+                        rect = slot;
                     }
                     // A server-drawn titlebar sits above the geometry.
                     let top = rect.loc.y - crate::decorations::titlebar_height(window);
