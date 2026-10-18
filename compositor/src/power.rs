@@ -55,6 +55,8 @@ pub struct Idle {
     suspended: bool,
     /// Monitors are off (DPMS); udev.rs stops drawing to them.
     pub screens_off: bool,
+    /// The locker was started in this idle period.
+    lock_started: bool,
     on_battery: bool,
     timer: Option<RegistrationToken>,
     /// Surfaces that asked (zwp_idle_inhibitor_v1) for the screen to stay on.
@@ -72,6 +74,7 @@ impl Idle {
             stage: IdleStage::Active,
             suspended: false,
             screens_off: false,
+            lock_started: false,
             on_battery: on_battery(Path::new(POWER_SUPPLY)),
             timer: None,
             inhibitors: Vec::new(),
@@ -253,6 +256,7 @@ impl State {
             IdleStage::Active => {
                 // Back at once: waking shouldn't take a second.
                 self.night_light.set_dim(1.0, Duration::ZERO);
+                self.idle.lock_started = false;
             }
             IdleStage::Dimmed => {
                 let fade = if before == IdleStage::ScreenOff {
@@ -271,21 +275,37 @@ impl State {
             self.idle.screens_off = off;
             if off {
                 self.udev_screens_off();
+                if self.config.power.lock_on_screen_off {
+                    self.idle_lock();
+                }
             }
         }
         // Waking, dimming, and the first frame after DPMS off.
         self.queue_redraw();
     }
 
-    /// Lock (if there's a locker to start), then suspend.
+    /// Start the locker unless the screen is locked or it was already
+    /// started in this idle period. Doesn't wait for it.
+    fn idle_lock(&mut self) {
+        if self.idle.lock_started
+            || self.lock.is_locked()
+            || self.config.lock.command.trim().is_empty()
+        {
+            return;
+        }
+        self.idle.lock_started = true;
+        self.lock_screen();
+    }
+
+    /// Lock (if enabled and there's a locker to start), then suspend.
     fn idle_suspend(&mut self) {
         info!("idle: suspending");
         let command = self.config.lock.command.trim();
-        if self.lock.is_locked() || command.is_empty() {
+        if !self.config.power.lock_before_suspend || self.lock.is_locked() || command.is_empty() {
             self.run_suspend();
             return;
         }
-        self.lock_screen();
+        self.idle_lock();
         let started = Instant::now();
         let result = self.loop_handle.insert_source(
             Timer::from_duration(Duration::from_millis(200)),
