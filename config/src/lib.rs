@@ -145,6 +145,22 @@ pub struct OutputConfig {
     /// "the current one"). Default: the leftmost monitor.
     #[serde(default)]
     pub main: bool,
+    /// Variable refresh rate (FreeSync / Adaptive-Sync): the monitor waits
+    /// for each frame instead of refreshing on a fixed clock.
+    #[serde(default)]
+    pub vrr: Vrr,
+}
+
+/// `vrr = "off" | "on" | "fullscreen"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Vrr {
+    #[default]
+    Off,
+    /// Always; some monitors flicker at low frame rates on the desktop.
+    On,
+    /// Only while a fullscreen window (a game, a video) is on top.
+    Fullscreen,
 }
 
 /// `mode = { width = 2560, height = 1440, refresh = 179.96 }`

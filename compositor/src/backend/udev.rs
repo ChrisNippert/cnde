@@ -17,7 +17,7 @@ use smithay::{
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
         },
         drm::{
-            DrmDevice, DrmDeviceFd, DrmEvent, DrmEventMetadata, DrmNode, NodeType,
+            DrmDevice, DrmDeviceFd, DrmEvent, DrmEventMetadata, DrmNode, NodeType, VrrSupport,
             compositor::FrameFlags,
             exporter::gbm::GbmFramebufferExporter,
             output::{DrmOutput, DrmOutputManager, DrmOutputRenderElements},
@@ -48,7 +48,9 @@ use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 use tracing::{debug, error, info, warn};
 
 use super::Backend;
-use crate::{cursor::Cursors, render, state::State};
+use cnde_config::Vrr;
+
+use crate::{cursor::Cursors, render, state::State, window::Placement};
 
 /// 10-bit first for less banding, 8-bit as the universal fallback.
 const COLOR_FORMATS: &[Fourcc] = &[
@@ -98,6 +100,8 @@ struct Surface {
     /// What the connector offers, and what it's running.
     modes: Vec<DrmMode>,
     mode: DrmMode,
+    /// Whether the monitor can do variable refresh (FreeSync).
+    vrr: VrrSupport,
     global: GlobalId,
     redraw: RedrawState,
     /// Pending throttled frame callbacks after an empty render.
@@ -509,10 +513,14 @@ impl State {
                 return;
             }
         };
+        let vrr = drm_output
+            .with_compositor(|c| c.vrr_supported(connector.handle()))
+            .unwrap_or(VrrSupport::NotSupported);
         info!(
             %name,
             size = ?wl_mode.size,
             refresh_hz = wl_mode.refresh as f64 / 1000.0,
+            ?vrr,
             "monitor connected"
         );
         gpu.surfaces.insert(
@@ -522,6 +530,7 @@ impl State {
                 drm_output,
                 modes,
                 mode: drm_mode,
+                vrr,
                 global,
                 redraw: RedrawState::Idle,
                 frame_callback_timer: None,
@@ -904,6 +913,29 @@ impl State {
         let filtered = night.is_some();
         if let Some(night) = night {
             elements.insert(cursor_count, render::OutputElement::Night(night));
+        }
+        let wanted = match self.config.output(&output.name()).map(|c| c.vrr) {
+            Some(Vrr::On) => true,
+            Some(Vrr::Fullscreen) => {
+                !self.lock.is_locked()
+                    && self
+                        .space
+                        .elements_for_output(&output)
+                        .last()
+                        .is_some_and(|w| State::placement_of(w) == Placement::Fullscreen)
+            }
+            Some(Vrr::Off) | None => false,
+        };
+        if surface.vrr != VrrSupport::NotSupported
+            && surface.drm_output.with_compositor(|c| c.vrr_enabled()) != wanted
+        {
+            match surface.drm_output.with_compositor(|c| c.use_vrr(wanted)) {
+                Ok(()) => info!(name = %output.name(), on = wanted, "variable refresh"),
+                Err(err) => {
+                    warn!(name = %output.name(), ?err, "monitor refused variable refresh");
+                    surface.vrr = VrrSupport::NotSupported;
+                }
+            }
         }
         let rendered = match surface.drm_output.render_frame(
             &mut gpu.renderer,

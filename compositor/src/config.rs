@@ -156,6 +156,8 @@ impl State {
         }
         if old.is_none_or(|old| old.outputs != self.config.outputs) {
             self.apply_output_layout();
+            // Variable refresh is switched as each monitor draws.
+            self.queue_redraw();
         }
         if let Some(old) = old.filter(|old| old.tiling != self.config.tiling) {
             self.tiling_config_changed(&old.tiling);

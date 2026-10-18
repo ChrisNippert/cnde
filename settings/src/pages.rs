@@ -1445,6 +1445,24 @@ fn displays_page(c: &Config, displays: &[Display]) -> Vec<Group> {
                 default: Value::Unset,
                 advanced: false,
             });
+            let vrr = match output.map(|o| o.vrr) {
+                Some(cnde_config::Vrr::On) => s("on"),
+                Some(cnde_config::Vrr::Fullscreen) => s("fullscreen"),
+                _ => Value::Unset,
+            };
+            rows.push(Row {
+                key: output_key("vrr"),
+                title: "Variable refresh rate".into(),
+                subtitle: "FreeSync: smoother games on monitors that support it".into(),
+                control: Control::Dropdown(choices(&[
+                    ("Off", Value::Unset),
+                    ("Fullscreen only", s("fullscreen")),
+                    ("Always", s("on")),
+                ])),
+                value: vrr,
+                default: Value::Unset,
+                advanced: false,
+            });
             rows.push(coordinate('x'));
             rows.push(coordinate('y'));
             Group {
