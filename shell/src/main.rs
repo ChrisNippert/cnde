@@ -84,20 +84,52 @@ pub struct Status {
     pub network: status::Network,
     pub wifi_enabled: Option<bool>,
     pub volume: Option<status::Volume>,
+    /// What quick settings shows: the daemon's, else the custom command's.
     pub power_profiles: Option<status::PowerProfiles>,
+    /// What the power-modes daemon reported, if one is running.
+    pub daemon_profiles: Option<status::PowerProfiles>,
+    /// `power.profile_command`, empty if unset.
+    pub profile_command: String,
+    /// The mode last chosen through the command (balanced until then).
+    pub custom_profile: Option<status::PowerProfile>,
     pub bluetooth: Option<status::Bluetooth>,
     /// Read when quick settings opens; `None` on desktops.
     pub backlight: Option<status::Backlight>,
 }
 
 impl Status {
+    /// Settles `power_profiles`: the daemon's, else all three modes if a
+    /// command is set.
+    pub fn sync_profiles(&mut self) {
+        self.power_profiles = self.daemon_profiles.clone().or_else(|| {
+            (!self.profile_command.is_empty()).then(|| status::PowerProfiles {
+                active: self
+                    .custom_profile
+                    .unwrap_or(status::PowerProfile::Balanced),
+                available: status::PowerProfile::ALL.to_vec(),
+            })
+        });
+    }
+
+    pub fn set_profile_command(&mut self, command: &str) {
+        self.profile_command = command.trim().to_string();
+        self.sync_profiles();
+    }
+
     fn apply(&mut self, update: Update) {
         match update {
             Update::Battery(battery) => self.battery = battery,
             Update::Network(network) => self.network = network,
             Update::WifiEnabled(enabled) => self.wifi_enabled = enabled,
             Update::Volume(volume) => self.volume = volume,
-            Update::PowerProfiles(profiles) => self.power_profiles = profiles,
+            Update::PowerProfiles(profiles) => {
+                self.daemon_profiles = profiles;
+                self.sync_profiles();
+            }
+            Update::CustomProfile(profile) => {
+                self.custom_profile = Some(profile);
+                self.sync_profiles();
+            }
             Update::Bluetooth(bluetooth) => self.bluetooth = bluetooth,
         }
     }
@@ -257,6 +289,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })?;
 
+    let (status_tx, status_rx) = channel::channel();
+    let profile_command = config.power.profile_command.clone();
     let mut app = App {
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
@@ -272,10 +306,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         theme,
         fonts,
         icons,
-        status: Status::default(),
+        status: {
+            let mut status = Status::default();
+            status.set_profile_command(&profile_command);
+            status
+        },
         panels: Vec::new(),
         workspaces: Workspaces::default(),
-        actions: Actions::start(),
+        actions: Actions::start(status_tx.clone()),
         quick_settings: None,
         calendar: None,
         calendar_dismissed: None,
@@ -325,7 +363,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config::watch(&event_loop.handle());
 
     // Battery, network and volume, each from its own background thread.
-    let (status_tx, status_rx) = channel::channel();
     event_loop
         .handle()
         .insert_source(status_rx, |event, _, app| {
@@ -1761,3 +1798,37 @@ impl ProvidesRegistryState for App {
 
 delegate_registry!(App);
 delegate_dispatch2!(App);
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn a_command_stands_in_for_a_missing_daemon() {
+        let mut status = Status::default();
+        status.apply(Update::PowerProfiles(None));
+        assert!(status.power_profiles.is_none());
+
+        status.set_profile_command("my-tool");
+        let shown = status.power_profiles.clone().unwrap();
+        assert_eq!(shown.available, status::PowerProfile::ALL.to_vec());
+        assert_eq!(shown.active, status::PowerProfile::Balanced);
+
+        status.apply(Update::CustomProfile(status::PowerProfile::PowerSaver));
+        assert_eq!(
+            status.power_profiles.as_ref().unwrap().active,
+            status::PowerProfile::PowerSaver
+        );
+
+        // A running daemon wins.
+        let daemon = status::PowerProfiles {
+            active: status::PowerProfile::Performance,
+            available: vec![
+                status::PowerProfile::Balanced,
+                status::PowerProfile::Performance,
+            ],
+        };
+        status.apply(Update::PowerProfiles(Some(daemon.clone())));
+        assert_eq!(status.power_profiles, Some(daemon));
+    }
+}

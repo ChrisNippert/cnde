@@ -34,6 +34,8 @@ pub enum Update {
     WifiEnabled(Option<bool>),
     Volume(Option<Volume>),
     PowerProfiles(Option<PowerProfiles>),
+    /// The mode last chosen through `power.profile_command`.
+    CustomProfile(PowerProfile),
     /// `None` without BlueZ or an adapter.
     Bluetooth(Option<Bluetooth>),
 }
@@ -419,15 +421,37 @@ fn volume(tx: &Sender<Update>) -> zbus::Result<()> {
 
 // --- Power mode: power-profiles-daemon.
 
+/// The bus name, path and interface of the power-modes service, newest
+/// first: `org.freedesktop.UPower.PowerProfiles` (power-profiles-daemon,
+/// tuned-ppd, tlp-pd), then the older `net.hadess.PowerProfiles`.
+pub const POWER_PROFILE_SERVICES: [(&str, &str); 2] = [
+    (
+        "org.freedesktop.UPower.PowerProfiles",
+        "/org/freedesktop/UPower/PowerProfiles",
+    ),
+    ("net.hadess.PowerProfiles", "/net/hadess/PowerProfiles"),
+];
+
+/// The first of [`POWER_PROFILE_SERVICES`] that answers (asking starts an
+/// activatable one), else the preferred name.
+pub fn power_profile_service(conn: &Connection) -> (&'static str, &'static str) {
+    POWER_PROFILE_SERVICES
+        .into_iter()
+        .find(|(name, path)| {
+            props(conn, name, path)
+                .ok()
+                .and_then(|p| get_all(&p, name))
+                .is_some()
+        })
+        .unwrap_or(POWER_PROFILE_SERVICES[0])
+}
+
 fn power_profiles(tx: &Sender<Update>) -> zbus::Result<()> {
     let conn = Connection::system()?;
-    let daemon = props(
-        &conn,
-        "net.hadess.PowerProfiles",
-        "/net/hadess/PowerProfiles",
-    )?;
+    let (name, path) = power_profile_service(&conn);
+    let daemon = props(&conn, name, path)?;
     let read = || -> Option<PowerProfiles> {
-        let all = get_all(&daemon, "net.hadess.PowerProfiles")?;
+        let all = get_all(&daemon, name)?;
         let active: String = value(&all, "ActiveProfile")?;
         let profiles: Vec<HashMap<String, OwnedValue>> =
             value(&all, "Profiles").unwrap_or_default();

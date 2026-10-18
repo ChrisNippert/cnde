@@ -8,6 +8,7 @@ mod arrange;
 mod backlight;
 mod bluetooth;
 mod pages;
+mod power_mode;
 mod view;
 mod wallpapers;
 mod wifi;
@@ -143,6 +144,8 @@ struct App {
     wifi: Option<std::sync::mpsc::Sender<wifi::Command>>,
     /// Commands for the Bluetooth worker, started when its page first opens.
     bluetooth: Option<std::sync::mpsc::Sender<bluetooth::Command>>,
+    /// Commands for the power mode worker, started when the Power page opens.
+    power_mode: Option<std::sync::mpsc::Sender<power_mode::Command>>,
     /// Where a picture chosen through "Add" arrives.
     picked: Option<channel::Sender<Result<Option<wallpapers::Thumb>, String>>>,
 }
@@ -286,6 +289,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wifi_join: None,
             wifi_details: None,
             bluetooth: None,
+            power_mode: None,
             brightness: backlight::read(),
             arranged: None,
             arranging: None,
@@ -321,6 +325,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         error_timer: None,
         wifi: None,
         bluetooth: None,
+        power_mode: None,
         picked: Some(picked_tx),
     };
     WaylandSource::new(conn.clone(), queue).insert(event_loop.handle())?;
@@ -330,6 +335,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if app.ui.page == Page::Bluetooth {
         app.open_bluetooth();
+    }
+    if app.ui.page == Page::Power {
+        app.open_power();
     }
 
     let mut lost = None;
@@ -412,6 +420,41 @@ impl App {
     fn bluetooth_command(&mut self, command: bluetooth::Command) {
         if let Some(tx) = &self.bluetooth {
             let _ = tx.send(command);
+        }
+    }
+
+    /// The Power page is showing: start the worker (once) and look again.
+    fn open_power(&mut self) {
+        if self.power_mode.is_none() {
+            let (tx, rx) = channel::channel::<power_mode::State>();
+            let inserted = self
+                .loop_handle
+                .insert_source(rx, |event, _, app: &mut App| {
+                    if let channel::Event::Msg(state) = event {
+                        app.ui.power_mode = Some(state);
+                        if app.ui.page == Page::Power {
+                            app.redraw();
+                        }
+                    }
+                });
+            if inserted.is_ok() {
+                self.power_mode = Some(power_mode::start(tx));
+            }
+        } else if let Some(tx) = &self.power_mode {
+            let _ = tx.send(power_mode::Command::Refresh);
+        }
+    }
+
+    /// The power mode buttons go to the worker.
+    fn write_power_mode(&mut self, value: &Value) {
+        if let (Some(tx), mode @ ("power-saver" | "balanced" | "performance")) =
+            (&self.power_mode, value.as_str())
+        {
+            // Show it at once; the worker confirms (or corrects) shortly.
+            if let Some(state) = &mut self.ui.power_mode {
+                state.active = mode.to_string();
+            }
+            let _ = tx.send(power_mode::Command::Set(mode.to_string()));
         }
     }
 
@@ -689,6 +732,7 @@ impl App {
                 Key::Wifi(wifi) => self.write_wifi(wifi, value),
                 Key::Bluetooth(key) => self.write_bluetooth(key, value),
                 Key::Brightness => self.write_brightness(value),
+                Key::PowerMode => self.write_power_mode(value),
                 _ => config_changes.push((key.clone(), value.clone())),
             }
         }
@@ -879,6 +923,9 @@ impl App {
                     }
                     if page == Page::Bluetooth {
                         self.open_bluetooth();
+                    }
+                    if page == Page::Power {
+                        self.open_power();
                     }
                     if page == Page::Displays {
                         self.ui.brightness = backlight::read();

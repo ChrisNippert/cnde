@@ -632,7 +632,11 @@ impl QuickSettings {
                     .and_then(|p| p.available.get(i))
                 {
                     self.profile_override = Some((*profile, Instant::now()));
-                    actions.run(Action::SetPowerProfile(*profile));
+                    actions.run(if status.daemon_profiles.is_some() {
+                        Action::SetPowerProfile(*profile)
+                    } else {
+                        Action::SetCustomProfile(*profile, status.profile_command.clone())
+                    });
                 }
             }
             Some(Hit::Mute) => actions.run(Action::ToggleMute),
@@ -1606,6 +1610,7 @@ mod tests {
                     },
                 ],
             }),
+            ..Status::default()
         };
         let mut fonts = Fonts::new(theme.font_families);
         let mut icons = Icons::new();
