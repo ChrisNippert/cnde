@@ -161,6 +161,15 @@ pub enum Request {
     FakeMediaKey {
         key: MediaKey,
     },
+    /// Debug builds only: run the key binding for keysym `sym` with the
+    /// mod key (and Shift, Alt) held, as if pressed.
+    FakeKey {
+        sym: u32,
+        #[serde(default)]
+        shift: bool,
+        #[serde(default)]
+        alt: bool,
+    },
 }
 
 /// The overview while the app grid shows: workspace thumbnails in a row

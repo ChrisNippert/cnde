@@ -28,6 +28,8 @@ use tracing::debug;
 
 use cnde_config::{TilingStyle, WindowLayout};
 
+use crate::keybinds::Direction;
+
 use crate::{
     decorations::{content_rect, titlebar_height},
     effects::{PendingSize, ResizeAnim},
@@ -126,7 +128,8 @@ impl Layout for Dwindle {
     }
 }
 
-/// The dwindle rects for `count` windows in `area`.
+/// The dwindle rects for `count` windows in `area`, each new one having
+/// split the one before it.
 pub fn dwindle(
     area: Rectangle<i32, Logical>,
     count: usize,
@@ -134,44 +137,211 @@ pub fn dwindle(
     gap: i32,
     outer_gap: i32,
 ) -> Vec<Rectangle<i32, Logical>> {
-    let mut rest = inset(area, outer_gap);
-    let mut rects = Vec::with_capacity(count);
+    let mut tree = SplitTree::default();
     for i in 0..count {
-        if i + 1 == count {
-            rects.push(rest);
-            break;
+        tree.insert(i, i.checked_sub(1).as_ref());
+    }
+    tree.arrange(area, ratio, gap, outer_gap)
+        .into_iter()
+        .map(|(_, rect)| rect)
+        .collect()
+}
+
+/// Dwindle's binary tree of splits: each leaf is a window, each split
+/// halves its space along the longer side (decided when arranging, so it
+/// follows the monitor it's shown on). The root split takes `ratio`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitTree<W> {
+    root: Option<Node<W>>,
+}
+
+impl<W> Default for SplitTree<W> {
+    fn default() -> Self {
+        Self { root: None }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Node<W> {
+    Leaf(W),
+    Split(Box<Node<W>>, Box<Node<W>>),
+}
+
+impl<W: PartialEq + Clone> Node<W> {
+    fn contains(&self, w: &W) -> bool {
+        match self {
+            Node::Leaf(leaf) => leaf == w,
+            Node::Split(a, b) => a.contains(w) || b.contains(w),
         }
-        let share = if i == 0 {
-            ratio.clamp(MIN_RATIO, MAX_RATIO)
-        } else {
-            0.5
+    }
+
+    fn leaves(&self, out: &mut Vec<W>) {
+        match self {
+            Node::Leaf(leaf) => out.push(leaf.clone()),
+            Node::Split(a, b) => {
+                a.leaves(out);
+                b.leaves(out);
+            }
+        }
+    }
+
+    /// Split the leaf holding `target` (false if there's none).
+    fn split(&mut self, target: &W, new: &W) -> bool {
+        match self {
+            Node::Leaf(leaf) if leaf == target => {
+                let old = Node::Leaf(leaf.clone());
+                *self = Node::Split(Box::new(old), Box::new(Node::Leaf(new.clone())));
+                true
+            }
+            Node::Leaf(_) => false,
+            Node::Split(a, b) => a.split(target, new) || b.split(target, new),
+        }
+    }
+
+    /// Take out the leaf holding `w`; its sibling takes the split's place.
+    /// `None` when `w` was this whole node.
+    fn remove(self, w: &W) -> Option<Node<W>> {
+        match self {
+            Node::Leaf(leaf) => (leaf != *w).then_some(Node::Leaf(leaf)),
+            Node::Split(a, b) => match (a.remove(w), b.remove(w)) {
+                (Some(a), Some(b)) => Some(Node::Split(Box::new(a), Box::new(b))),
+                (one, other) => one.or(other),
+            },
+        }
+    }
+
+    /// `a` and `b` trade leaves.
+    fn trade(&mut self, a: &W, b: &W) {
+        match self {
+            Node::Leaf(leaf) if leaf == a => *leaf = b.clone(),
+            Node::Leaf(leaf) if leaf == b => *leaf = a.clone(),
+            Node::Leaf(_) => {}
+            Node::Split(x, y) => {
+                x.trade(a, b);
+                y.trade(a, b);
+            }
+        }
+    }
+
+    fn place(
+        &self,
+        rect: Rectangle<i32, Logical>,
+        ratio: f64,
+        gap: i32,
+        out: &mut Vec<(W, Rectangle<i32, Logical>)>,
+    ) {
+        let (a, b) = match self {
+            Node::Leaf(leaf) => return out.push((leaf.clone(), rect)),
+            Node::Split(a, b) => (a, b),
         };
         // Side by side when wider than tall, else one above the other.
-        let wide = rest.size.w >= rest.size.h;
-        let total = if wide { rest.size.w } else { rest.size.h };
-        let first = (((total - gap) as f64 * share).round() as i32).max(1);
+        let wide = rect.size.w >= rect.size.h;
+        let total = if wide { rect.size.w } else { rect.size.h };
+        let first = (((total - gap) as f64 * ratio).round() as i32).max(1);
         let second = (total - first - gap).max(1);
-        let (a, b) = if wide {
+        let (ra, rb) = if wide {
             (
-                Rectangle::new(rest.loc, Size::from((first, rest.size.h))),
+                Rectangle::new(rect.loc, Size::from((first, rect.size.h))),
                 Rectangle::new(
-                    rest.loc + Point::from((first + gap, 0)),
-                    Size::from((second, rest.size.h)),
+                    rect.loc + Point::from((first + gap, 0)),
+                    Size::from((second, rect.size.h)),
                 ),
             )
         } else {
             (
-                Rectangle::new(rest.loc, Size::from((rest.size.w, first))),
+                Rectangle::new(rect.loc, Size::from((rect.size.w, first))),
                 Rectangle::new(
-                    rest.loc + Point::from((0, first + gap)),
-                    Size::from((rest.size.w, second)),
+                    rect.loc + Point::from((0, first + gap)),
+                    Size::from((rect.size.w, second)),
                 ),
             )
         };
-        rects.push(a);
-        rest = b;
+        a.place(ra, 0.5, gap, out);
+        b.place(rb, 0.5, gap, out);
     }
-    rects
+}
+
+impl<W: PartialEq + Clone> SplitTree<W> {
+    pub fn contains(&self, w: &W) -> bool {
+        self.root.as_ref().is_some_and(|r| r.contains(w))
+    }
+
+    /// Its windows, in reading order of the splits.
+    pub fn leaves(&self) -> Vec<W> {
+        let mut out = Vec::new();
+        if let Some(root) = &self.root {
+            root.leaves(&mut out);
+        }
+        out
+    }
+
+    /// Add `new` by splitting `target`'s space (the last window's if
+    /// `target` isn't in the tree).
+    pub fn insert(&mut self, new: W, target: Option<&W>) {
+        let Some(root) = &mut self.root else {
+            self.root = Some(Node::Leaf(new));
+            return;
+        };
+        let target = target
+            .filter(|t| root.contains(t))
+            .cloned()
+            .or_else(|| self.leaves().pop());
+        if let (Some(root), Some(target)) = (&mut self.root, target) {
+            root.split(&target, &new);
+        }
+    }
+
+    pub fn remove(&mut self, w: &W) {
+        self.root = self.root.take().and_then(|r| r.remove(w));
+    }
+
+    /// Swap two windows' places. If only `b` is in the tree, `a` splits
+    /// its space instead (a window dropped onto a tile from elsewhere).
+    pub fn swap(&mut self, a: &W, b: &W) {
+        let Some(root) = &mut self.root else {
+            return;
+        };
+        match (root.contains(a), root.contains(b)) {
+            (true, true) => root.trade(a, b),
+            (false, true) => {
+                root.split(b, a);
+            }
+            _ => {}
+        }
+    }
+
+    /// Make the tree hold exactly `windows`: drop the ones gone, and add
+    /// new ones by splitting `target` (see [`insert`](Self::insert)).
+    pub fn sync(&mut self, windows: &[W], target: Option<&W>) {
+        for gone in self.leaves().into_iter().filter(|w| !windows.contains(w)) {
+            self.remove(&gone);
+        }
+        for w in windows {
+            if !self.contains(w) {
+                self.insert(w.clone(), target);
+            }
+        }
+    }
+
+    /// Each window's rect in `area`, the root split taking `ratio`.
+    pub fn arrange(
+        &self,
+        area: Rectangle<i32, Logical>,
+        ratio: f64,
+        gap: i32,
+        outer_gap: i32,
+    ) -> Vec<(W, Rectangle<i32, Logical>)> {
+        let mut out = Vec::new();
+        if let Some(root) = &self.root {
+            root.place(
+                inset(area, outer_gap),
+                ratio.clamp(MIN_RATIO, MAX_RATIO),
+                gap,
+                &mut out,
+            );
+        }
+        out
+    }
 }
 
 /// `area` shrunk by `by` on every side.
@@ -275,6 +445,7 @@ impl<W: PartialEq + Clone> Workspace<W> {
             order.swap(i, j);
         }
         self.tiles = order;
+        self.splits.swap(a, b);
     }
 }
 
@@ -381,14 +552,53 @@ impl State {
             let rect = layout.arrange(area, &[own]).first().copied()?;
             return Some(content_rect(rect, titlebar_height(window)));
         }
-        let windows = self.tiled_windows(index);
-        let i = windows.iter().position(|w| w == window)?;
-        let own: Vec<_> = windows
-            .iter()
-            .map(|w| with_bar(floating_rest(w, geo), w))
-            .collect();
-        let rect = layout.arrange(area, &own).get(i).copied()?;
+        let rect = self
+            .tile_rects(index, area)
+            .into_iter()
+            .find(|(w, _)| w == window)?
+            .1;
         Some(content_rect(rect, titlebar_height(window)))
+    }
+
+    /// Where workspace `index`'s tiles rest within `area`.
+    fn tile_rects(
+        &self,
+        index: usize,
+        area: Rectangle<i32, Logical>,
+    ) -> Vec<(Window, Rectangle<i32, Logical>)> {
+        let windows = self.tiled_windows(index);
+        let (ratio, gap, outer_gap) = self.tile_params(index);
+        match self.config.tiling.style {
+            TilingStyle::Dwindle => {
+                // Normally already in step (relayout_workspace); a copy
+                // keeps this read-only either way.
+                let mut splits = self.workspaces.list[index].splits.clone();
+                splits.sync(&windows, None);
+                splits.arrange(area, ratio, gap, outer_gap)
+            }
+            TilingStyle::Master => {
+                let rects = master_stack(area, windows.len(), ratio, gap, outer_gap);
+                windows.into_iter().zip(rects).collect()
+            }
+        }
+    }
+
+    fn tile_params(&self, index: usize) -> (f64, i32, i32) {
+        (
+            self.master_ratio(index),
+            self.config.tiling.gap as i32,
+            self.config.tiling.outer_gap as i32,
+        )
+    }
+
+    /// Bring workspace `index`'s splits in step with its tiles; new ones
+    /// split the focused window, like Hyprland.
+    fn sync_splits(&mut self, index: usize) {
+        let windows = self.tiled_windows(index);
+        let focused = self.focused_window().filter(|w| windows.contains(w));
+        self.workspaces.list[index]
+            .splits
+            .sync(&windows, focused.as_ref());
     }
 
     /// The tile `window` rests in on the monitor showing it now.
@@ -418,6 +628,7 @@ impl State {
             return;
         }
         self.workspaces.list[index].sync_tiles();
+        self.sync_splits(index);
         let Some(slot) = self.slot_of(index) else {
             return;
         };
@@ -649,6 +860,110 @@ impl State {
         self.relayout_workspace(index, true);
     }
 
+    /// Whether the workspace the keys act on tiles.
+    pub fn tiling_here(&self) -> bool {
+        self.current_workspace()
+            .is_some_and(|index| self.layout_of(index).tiles())
+    }
+
+    /// Super+arrow on a tiling workspace: focus the window next to the
+    /// focused one that way, on any monitor.
+    pub fn focus_direction(&mut self, direction: Direction) {
+        let Some(window) = self.focused_window() else {
+            return;
+        };
+        if let Some(next) = self.neighbour(&window, direction, false) {
+            self.focus_window(Some(&next));
+        }
+    }
+
+    /// Super+Shift+arrow on a tiling workspace: swap the focused tile with
+    /// the tile next to it that way. With none there, left and right move
+    /// it onto the next monitor's workspace (if it tiles), at the end.
+    pub fn move_tile(&mut self, direction: Direction) {
+        let Some(window) = self.focused_window() else {
+            return;
+        };
+        if !self.is_tiled(&window) {
+            return;
+        }
+        let Some(from) = self.workspaces.index_of(&window) else {
+            return;
+        };
+        self.overview_before_relayout();
+        if let Some(other) = self.neighbour(&window, direction, true) {
+            let Some(dest) = self.workspaces.index_of(&other) else {
+                return;
+            };
+            if dest != from {
+                self.workspaces.remove_window(&window);
+                self.workspaces.list[dest].windows.push(window.clone());
+            }
+            self.workspaces.list[dest].swap_tiles(&window, &other);
+        } else {
+            let step = match direction {
+                Direction::Left => -1,
+                Direction::Right => 1,
+                Direction::Up | Direction::Down => return,
+            };
+            let Some(slot) = self.slot_of(from) else {
+                return;
+            };
+            let (outputs, _) = self.strip_outputs();
+            let Some(output) = outputs.get(slot.wrapping_add_signed(step)) else {
+                return;
+            };
+            let Some(dest) = self.workspace_on(output) else {
+                return;
+            };
+            if !self.layout_of(dest).tiles() {
+                return;
+            }
+            self.workspaces.remove_window(&window);
+            self.workspaces.list[dest].windows.push(window.clone());
+            self.normalize_workspaces();
+        }
+        self.relayout_visible(true);
+        self.focus_window(Some(&window));
+    }
+
+    /// The window on screen nearest `window` in `direction` (only tiles
+    /// with `tiles_only`): among those beyond its edge that way, the one
+    /// sharing the most of its side, then the closest.
+    fn neighbour(&self, window: &Window, direction: Direction, tiles_only: bool) -> Option<Window> {
+        let from = with_bar(self.space.element_geometry(window)?, window);
+        // Tiles touch across a gap; a little slack for rounding.
+        let slack = self.config.tiling.gap as i32 + 4;
+        self.space
+            .elements()
+            .filter(|w| *w != window)
+            .filter(|w| !tiles_only || self.is_tiled(w))
+            .filter_map(|w| {
+                let to = with_bar(self.space.element_geometry(w)?, w);
+                let (distance, overlap) = match direction {
+                    Direction::Left => (
+                        from.loc.x - (to.loc.x + to.size.w),
+                        span_overlap(from.loc.y, from.size.h, to.loc.y, to.size.h),
+                    ),
+                    Direction::Right => (
+                        to.loc.x - (from.loc.x + from.size.w),
+                        span_overlap(from.loc.y, from.size.h, to.loc.y, to.size.h),
+                    ),
+                    Direction::Up => (
+                        from.loc.y - (to.loc.y + to.size.h),
+                        span_overlap(from.loc.x, from.size.w, to.loc.x, to.size.w),
+                    ),
+                    Direction::Down => (
+                        to.loc.y - (from.loc.y + from.size.h),
+                        span_overlap(from.loc.x, from.size.w, to.loc.x, to.size.w),
+                    ),
+                };
+                (distance >= -slack && overlap > 0).then(|| (w.clone(), overlap, distance))
+            })
+            .min_by_key(|(_, overlap, distance)| (distance.max(&0) / 64, -overlap))
+            .map(|(w, _, _)| w)
+    }
+
     /// Super+[ / ]: narrow or widen the current workspace's main window.
     pub fn adjust_master_ratio(&mut self, delta: f64) {
         let Some(index) = self.current_workspace() else {
@@ -824,10 +1139,28 @@ impl State {
         let Some((_, area)) = self.slot_areas(&outputs, slot as isize) else {
             return;
         };
-        // It joins at the end of the stack.
-        let count = self.tiled_windows(index).len() + 1;
-        let own = vec![Rectangle::default(); count];
-        let Some(rect) = layout.arrange(area, &own).last().copied() else {
+        let rect = match self.config.tiling.style {
+            // It splits the focused window's space.
+            TilingStyle::Dwindle => {
+                self.sync_splits(index);
+                let focused = self.focused_window();
+                let (ratio, gap, outer_gap) = self.tile_params(index);
+                let splits = &mut self.workspaces.list[index].splits;
+                splits.insert(window.clone(), focused.as_ref());
+                splits
+                    .arrange(area, ratio, gap, outer_gap)
+                    .into_iter()
+                    .find(|(w, _)| *w == window)
+                    .map(|(_, rect)| rect)
+            }
+            // It joins at the end of the stack.
+            TilingStyle::Master => {
+                let count = self.tiled_windows(index).len() + 1;
+                let own = vec![Rectangle::default(); count];
+                layout.arrange(area, &own).last().copied()
+            }
+        };
+        let Some(rect) = rect else {
             return;
         };
         let rect = content_rect(rect, titlebar_height(&window));
@@ -838,6 +1171,11 @@ impl State {
             });
         }
     }
+}
+
+/// How much the spans `a..a+a_len` and `b..b+b_len` share.
+fn span_overlap(a: i32, a_len: i32, b: i32, b_len: i32) -> i32 {
+    (a + a_len).min(b + b_len) - a.max(b)
 }
 
 /// `rect` (a window's geometry) with the title bar cnde draws above it.
@@ -855,6 +1193,60 @@ mod tests {
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+    }
+
+    #[test]
+    fn new_windows_split_the_selected_one() {
+        // Two side by side; selecting the left one, a third goes under it.
+        let mut tree = SplitTree::default();
+        tree.insert(1, None);
+        tree.insert(2, Some(&1));
+        tree.insert(3, Some(&1));
+        let rects = tree.arrange(rect(0, 0, 1000, 600), 0.5, 0, 0);
+        assert_eq!(
+            rects,
+            vec![
+                (1, rect(0, 0, 500, 300)),
+                (3, rect(0, 300, 500, 300)),
+                (2, rect(500, 0, 500, 600)),
+            ]
+        );
+    }
+
+    #[test]
+    fn closing_a_window_gives_its_space_to_its_sibling() {
+        let mut tree = SplitTree::default();
+        for (w, target) in [(1, None), (2, Some(1)), (3, Some(1))] {
+            tree.insert(w, target.as_ref());
+        }
+        tree.remove(&3);
+        let rects = tree.arrange(rect(0, 0, 1000, 600), 0.5, 0, 0);
+        assert_eq!(
+            rects,
+            vec![(1, rect(0, 0, 500, 600)), (2, rect(500, 0, 500, 600))]
+        );
+        tree.remove(&1);
+        assert_eq!(
+            tree.arrange(rect(0, 0, 1000, 600), 0.5, 0, 0),
+            vec![(2, rect(0, 0, 1000, 600))]
+        );
+    }
+
+    #[test]
+    fn swapping_trades_places_and_dropping_in_splits() {
+        let mut tree = SplitTree::default();
+        for (w, target) in [(1, None), (2, Some(1)), (3, Some(2))] {
+            tree.insert(w, target.as_ref());
+        }
+        tree.swap(&1, &3);
+        assert_eq!(tree.leaves(), vec![3, 2, 1]);
+        tree.swap(&2, &3);
+        assert_eq!(tree.leaves(), vec![2, 3, 1]);
+        // 4 isn't in the tree: dropped onto 3, it splits 3's space.
+        tree.swap(&4, &3);
+        assert_eq!(tree.leaves(), vec![2, 3, 4, 1]);
+        tree.sync(&[1, 4], None);
+        assert_eq!(tree.leaves(), vec![4, 1]);
     }
 
     #[test]

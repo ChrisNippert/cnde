@@ -40,6 +40,8 @@ pub struct Workspace<W = Window> {
     pub master_ratio: Option<f64>,
     /// Tiling order, main window first; see layout.rs.
     pub tiles: Vec<W>,
+    /// The dwindle style's splits; see layout.rs.
+    pub splits: crate::layout::SplitTree<W>,
 }
 
 impl<W> Workspace<W> {
@@ -50,6 +52,7 @@ impl<W> Workspace<W> {
             layout: None,
             master_ratio: None,
             tiles: Vec::new(),
+            splits: crate::layout::SplitTree::default(),
         }
     }
 }

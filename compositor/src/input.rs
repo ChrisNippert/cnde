@@ -21,7 +21,7 @@ use tracing::debug;
 
 use crate::{
     grabs::{MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab},
-    keybinds::{self, Action, ModKey},
+    keybinds::{self, Action, Direction, ModKey},
     spawn,
     state::State,
     window::{Placement, with_state},
@@ -244,6 +244,29 @@ impl State {
         }
     }
 
+    /// Debug aid (IPC `fake_key`): the binding for `sym` with the mod key
+    /// held, run as if pressed.
+    pub fn fake_key(&mut self, sym: u32, shift: bool, alt: bool) {
+        let mut mods = smithay::input::keyboard::ModifiersState {
+            shift,
+            ..Default::default()
+        };
+        match self.mod_key {
+            ModKey::Super => {
+                mods.logo = true;
+                mods.alt = alt;
+            }
+            ModKey::Alt => {
+                mods.alt = true;
+                mods.ctrl = alt;
+            }
+        }
+        let sym = smithay::input::keyboard::Keysym::from(sym);
+        if let Some(action) = keybinds::action_for(self.mod_key, &mods, sym) {
+            self.run_action(action);
+        }
+    }
+
     fn run_action(&mut self, action: Action) {
         if self.lock.is_locked() && !matches!(action, Action::Media(_) | Action::SwitchVt(_)) {
             return;
@@ -254,10 +277,16 @@ impl State {
             Action::SpawnTerminal => spawn::spawn_terminal(&self.client_env()),
             Action::SpawnBrowser => spawn::spawn_browser(&self.client_env()),
             Action::CloseWindow => self.close_focused(),
+            // On a tiling workspace the arrows move focus between tiles.
+            Action::Maximize if self.tiling_here() => self.focus_direction(Direction::Up),
+            Action::Restore if self.tiling_here() => self.focus_direction(Direction::Down),
+            Action::SnapLeft if self.tiling_here() => self.focus_direction(Direction::Left),
+            Action::SnapRight if self.tiling_here() => self.focus_direction(Direction::Right),
             Action::Maximize => self.set_focused_placement(Placement::Maximized),
             Action::Restore => self.set_focused_placement(Placement::Floating),
             Action::SnapLeft => self.set_focused_placement(Placement::SnappedLeft),
             Action::SnapRight => self.set_focused_placement(Placement::SnappedRight),
+            Action::MoveTile(direction) => self.move_tile(direction),
             Action::ToggleFullscreen => self.toggle_focused_fullscreen(),
             Action::ToggleTiling => self.toggle_tiling(),
             Action::ToggleFloating => self.toggle_focused_floating(),

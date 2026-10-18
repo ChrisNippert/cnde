@@ -52,6 +52,18 @@ pub enum Action {
     SwapMaster,
     /// Super+] widens the main tile (+1), Super+[ narrows it (-1).
     MasterRatio(i8),
+    /// Super+Shift+arrow on a tiling workspace: swap the focused tile with
+    /// its neighbour that way, or move it to the next monitor's tiles.
+    MoveTile(Direction),
+}
+
+/// An arrow key's direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 /// The volume and brightness keys, with or without modifiers.
@@ -146,6 +158,10 @@ pub fn action_for(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> Option
         (true, keysyms::KEY_f) => Action::ToggleFullscreen,
         (true, keysyms::KEY_s) => Action::Screenshot,
         (true, keysyms::KEY_t) => Action::ToggleFloating,
+        (true, keysyms::KEY_Left) => Action::MoveTile(Direction::Left),
+        (true, keysyms::KEY_Right) => Action::MoveTile(Direction::Right),
+        (true, keysyms::KEY_Up) => Action::MoveTile(Direction::Up),
+        (true, keysyms::KEY_Down) => Action::MoveTile(Direction::Down),
         _ => return None,
     };
     Some(action)
@@ -208,6 +224,15 @@ mod tests {
     fn tiling_bindings() {
         let m = mods(true, false, false, false);
         let at = |m: &ModifiersState, key| action_for(ModKey::Super, m, Keysym::from(key));
+        let shifted = mods(true, false, false, true);
+        assert_eq!(
+            action_for(ModKey::Super, &shifted, Keysym::from(keysyms::KEY_Left)),
+            Some(Action::MoveTile(Direction::Left))
+        );
+        assert_eq!(
+            action_for(ModKey::Super, &shifted, Keysym::from(keysyms::KEY_Down)),
+            Some(Action::MoveTile(Direction::Down))
+        );
         assert_eq!(at(&m, keysyms::KEY_t), Some(Action::ToggleTiling));
         assert_eq!(at(&m, keysyms::KEY_Return), Some(Action::SwapMaster));
         assert_eq!(

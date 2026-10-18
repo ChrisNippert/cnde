@@ -149,7 +149,9 @@ impl State {
         if self.lock.is_locked()
             && !matches!(
                 request,
-                Request::FakePointer { .. } | Request::FakeMediaKey { .. }
+                Request::FakePointer { .. }
+                    | Request::FakeMediaKey { .. }
+                    | Request::FakeKey { .. }
             )
         {
             return;
@@ -196,6 +198,10 @@ impl State {
                 self.ipc.broadcast(&Event::MediaKey { key })
             }
             Request::FakeMediaKey { .. } => {}
+            Request::FakeKey { sym, shift, alt } if cfg!(debug_assertions) => {
+                self.fake_key(sym, shift, alt)
+            }
+            Request::FakeKey { .. } => {}
             Request::CancelScreenshot => {
                 if self.screenshot.active {
                     self.cancel_screenshot();
