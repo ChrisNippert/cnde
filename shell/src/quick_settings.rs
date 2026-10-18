@@ -1169,26 +1169,28 @@ fn paint(
     // Power row.
     let faded = |c: Color| c.with_alpha(c.a * reveal);
     for (rect, hit) in layout.power_menu.iter().flatten() {
-        // Icons and labels only show inside the room the row has opened so
-        // far, so they don't draw over the rows around it while it grows.
+        // Everything in the row (tile, icon, label) only shows inside the
+        // room it has opened so far, between the rows above and the footer,
+        // so it doesn't draw over its neighbours while it grows or shrinks.
+        // The clip is the row's fixed slot, not the sliding tile.
         let room = POWER_TILE_HEIGHT + theme.qs_gap;
-        let clip = (
-            rect.x,
-            rect.y - shift / 2.0,
-            rect.w,
-            (room - shift - theme.qs_gap).max(0.0),
-        );
+        let visible = (room - shift - theme.qs_gap).max(0.0);
+        if visible <= 0.0 {
+            continue;
+        }
+        let clip = (rect.x, rect.y, rect.w, visible);
         let rect = Rect {
             y: rect.y - shift / 2.0,
             ..*rect
         };
-        canvas.rounded_rect(
+        canvas.rounded_rect_clipped(
             rect.x,
             rect.y,
             rect.w,
             rect.h,
             theme.qs_tile_radius,
             faded(theme.qs_tile),
+            clip,
         );
         let (icon, label) = match hit {
             Hit::Lock => ("system-lock-screen-symbolic", "Lock"),
