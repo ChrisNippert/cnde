@@ -52,6 +52,7 @@ pub enum Hit {
     /// Opens cnde-settings on a page (a section's label or arrow).
     SettingsPage(&'static str),
     Lock,
+    LogOut,
     Suspend,
     Reboot,
     PowerOff,
@@ -284,22 +285,28 @@ pub fn layout(
 
     let power_menu = power_menu_open.then(|| {
         let gap = theme.qs_gap;
-        let tile_w = (inner - 3.0 * gap) / 4.0;
-        let items = [Hit::Lock, Hit::Suspend, Hit::Reboot, Hit::PowerOff]
-            .iter()
-            .enumerate()
-            .map(|(i, &hit)| {
-                (
-                    Rect {
-                        x: pad + i as f32 * (tile_w + gap),
-                        y,
-                        w: tile_w,
-                        h: POWER_TILE_HEIGHT,
-                    },
-                    hit,
-                )
-            })
-            .collect();
+        let tile_w = (inner - 4.0 * gap) / 5.0;
+        let items = [
+            Hit::Lock,
+            Hit::LogOut,
+            Hit::Suspend,
+            Hit::Reboot,
+            Hit::PowerOff,
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, &hit)| {
+            (
+                Rect {
+                    x: pad + i as f32 * (tile_w + gap),
+                    y,
+                    w: tile_w,
+                    h: POWER_TILE_HEIGHT,
+                },
+                hit,
+            )
+        })
+        .collect();
         y += POWER_TILE_HEIGHT + gap;
         items
     });
@@ -680,9 +687,10 @@ impl QuickSettings {
                 crate::apps::open_settings(Some(page));
                 return true;
             }
-            Some(hit @ (Hit::Lock | Hit::Suspend | Hit::Reboot | Hit::PowerOff)) => {
+            Some(hit @ (Hit::Lock | Hit::LogOut | Hit::Suspend | Hit::Reboot | Hit::PowerOff)) => {
                 actions.run(match hit {
                     Hit::Lock => Action::Lock,
+                    Hit::LogOut => Action::LogOut,
                     Hit::Suspend => Action::Suspend,
                     Hit::Reboot => Action::Reboot,
                     _ => Action::PowerOff,
@@ -1169,6 +1177,15 @@ fn paint(
     // Power row.
     let faded = |c: Color| c.with_alpha(c.a * reveal);
     for (rect, hit) in layout.power_menu.iter().flatten() {
+        // Icons and labels only show inside the room the row has opened so
+        // far, so they don't draw over the rows around it while it grows.
+        let room = POWER_TILE_HEIGHT + theme.qs_gap;
+        let clip = (
+            rect.x,
+            rect.y - shift / 2.0,
+            rect.w,
+            (room - shift - theme.qs_gap).max(0.0),
+        );
         let rect = Rect {
             y: rect.y - shift / 2.0,
             ..*rect
@@ -1183,21 +1200,30 @@ fn paint(
         );
         let (icon, label) = match hit {
             Hit::Lock => ("system-lock-screen-symbolic", "Lock"),
+            Hit::LogOut => ("system-log-out-symbolic", "Log Out"),
             Hit::Suspend => ("media-playback-pause-symbolic", "Suspend"),
             Hit::Reboot => ("system-reboot-symbolic", "Restart"),
             _ => ("system-shutdown-symbolic", "Power Off"),
         };
-        canvas.icon(
+        canvas.icon_clipped(
             icons,
             icon,
             rect.x + (rect.w - 20.0) / 2.0,
             rect.y + 12.0,
             20.0,
             faded(theme.popup_text),
+            clip,
         );
         let mut text = fonts.layout(label, theme.qs_label_size, Weight::Normal, s);
         let tx = (rect.x + (rect.w - text.width) / 2.0).round();
-        canvas.text(fonts, &mut text, tx, rect.y + 38.0, faded(theme.qs_dim));
+        canvas.text_clipped(
+            fonts,
+            &mut text,
+            tx,
+            rect.y + 38.0,
+            faded(theme.qs_dim),
+            clip,
+        );
     }
 
     // Footer: battery summary, power button.
@@ -1414,7 +1440,7 @@ mod tests {
         let closed = layout(&theme, false, false, Features::default());
         let open = layout(&theme, true, false, Features::default());
         assert!(open.height > closed.height);
-        let reboot = open.power_menu.as_ref().unwrap()[2].0;
+        let reboot = open.power_menu.as_ref().unwrap()[3].0;
         assert_eq!(
             open.hit(((reboot.x + 5.0) as f64, (reboot.y + 5.0) as f64)),
             Some(Hit::Reboot)

@@ -149,6 +149,8 @@ pub enum Request {
     Launching,
     /// Lock the screen, as Super+L does.
     LockScreen,
+    /// End the session: stop the compositor, as Ctrl+Alt+Backspace does.
+    LogOut,
     /// Testing aid, honoured only by debug builds: move the pointer to
     /// (x, y) in the global space, then press or release the left button.
     FakePointer {

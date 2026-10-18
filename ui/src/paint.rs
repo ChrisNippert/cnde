@@ -251,7 +251,27 @@ impl Canvas<'_> {
         size: f32,
         color: Color,
     ) -> bool {
+        let (w, h) = self.size();
+        self.icon_clipped(icons, name, x, y, size, color, (0.0, 0.0, w, h))
+    }
+
+    /// [`Canvas::icon`], drawing only inside `clip` (logical x, y, w, h).
+    #[allow(clippy::too_many_arguments)]
+    pub fn icon_clipped(
+        &mut self,
+        icons: &mut Icons,
+        name: &str,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: Color,
+        clip: (f32, f32, f32, f32),
+    ) -> bool {
         let s = self.scale;
+        let cx0 = (clip.0 * s).floor() as i32;
+        let cy0 = (clip.1 * s).floor() as i32;
+        let cx1 = ((clip.0 + clip.2) * s).ceil() as i32;
+        let cy1 = ((clip.1 + clip.3) * s).ceil() as i32;
         let px = (size * s).round().max(1.0) as u32;
         let Some(mask) = icons.get(name, px) else {
             return false;
@@ -268,7 +288,12 @@ impl Canvas<'_> {
             for mx in 0..mask.size as i32 {
                 let coverage = mask.alpha[(my * mask.size as i32 + mx) as usize] as f32 * color.a;
                 let (px, py) = (ox + mx, oy + my);
-                if coverage <= 0.0 || px < 0 || py < 0 || px >= width || py >= height {
+                if coverage <= 0.0
+                    || px < cx0.max(0)
+                    || py < cy0.max(0)
+                    || px >= width.min(cx1)
+                    || py >= height.min(cy1)
+                {
                     continue;
                 }
                 let i = ((py * width + px) * 4) as usize;
