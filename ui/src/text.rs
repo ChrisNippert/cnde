@@ -95,9 +95,12 @@ impl Fonts {
             &mut self.cache,
             text_color,
             |x, y, w, h, c| {
+                // cosmic-text drops the colour's own alpha (its glyph alpha
+                // is the coverage alone), so dim text would draw solid.
+                let a = (c.a() as u32 * text_color.a() as u32 / 255) as u8;
                 for dy in 0..h as i32 {
                     for dx in 0..w as i32 {
-                        pixel(x + dx, y + dy, c.a(), [c.r(), c.g(), c.b()]);
+                        pixel(x + dx, y + dy, a, [c.r(), c.g(), c.b()]);
                     }
                 }
             },
