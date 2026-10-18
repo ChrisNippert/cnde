@@ -2362,6 +2362,27 @@ fn power(c: &Config, d: &Config) -> Vec<Group> {
         ]
     };
     vec![
+        group(
+            "Locking",
+            vec![
+                Row::new(
+                    "power.lock_on_screen_off",
+                    "Lock when the screen turns off",
+                    Control::switch(),
+                    Value::Bool(c.power.lock_on_screen_off),
+                    Value::Bool(d.power.lock_on_screen_off),
+                )
+                .sub("Needs a lock command"),
+                Row::new(
+                    "power.lock_before_suspend",
+                    "Lock before suspending",
+                    Control::switch(),
+                    Value::Bool(c.power.lock_before_suspend),
+                    Value::Bool(d.power.lock_before_suspend),
+                )
+                .sub("Needs a lock command"),
+            ],
+        ),
         Group {
             title: "On battery".into(),
             description: "Videos playing keep the computer awake".into(),

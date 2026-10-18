@@ -70,6 +70,8 @@
 # and plugged in (desktops use the plugged-in ones). Seconds; 0 skips a step.
 # Video players and browsers playing video keep the computer awake. Suspending
 # locks first if [lock] has a command.
+# lock_on_screen_off = true    # lock when the monitors turn off
+# lock_before_suspend = true   # lock before sleeping
 # [power.battery]
 # dim_after = 120          # fade the screen to half brightness
 # screen_off_after = 300   # turn the monitors off

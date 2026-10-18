@@ -17,6 +17,10 @@ const MAX_SECONDS: u32 = 24 * 60 * 60;
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Power {
+    /// Lock the session when the monitors turn off.
+    pub lock_on_screen_off: bool,
+    /// Lock before suspending.
+    pub lock_before_suspend: bool,
     /// While running on the battery.
     pub battery: PowerProfile,
     /// While plugged in.
@@ -49,6 +53,8 @@ impl Default for PowerProfile {
 impl Default for Power {
     fn default() -> Self {
         Self {
+            lock_on_screen_off: true,
+            lock_before_suspend: true,
             battery: PowerProfile::default(),
             ac: PowerProfile {
                 dim_after: 300,
@@ -135,6 +141,8 @@ mod tests {
     #[test]
     fn defaults() {
         let power = Power::default();
+        assert!(power.lock_on_screen_off);
+        assert!(power.lock_before_suspend);
         assert_eq!(power.battery.dim_after, 120);
         assert_eq!(power.battery.screen_off_after, 300);
         assert_eq!(power.battery.suspend_after, 900);
@@ -151,6 +159,16 @@ mod tests {
         assert_eq!(config.power.battery.dim_after, 30);
         assert_eq!(config.power.battery.screen_off_after, 300);
         assert_eq!(config.power.ac, Power::default().ac);
+    }
+
+    #[test]
+    fn lock_options_parse() {
+        let config =
+            Config::parse("[power]\nlock_on_screen_off = false\nlock_before_suspend = false\n")
+                .unwrap();
+        assert!(!config.power.lock_on_screen_off);
+        assert!(!config.power.lock_before_suspend);
+        assert_eq!(config.power.battery, PowerProfile::default());
     }
 
     #[test]
