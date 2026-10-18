@@ -31,10 +31,10 @@ const STEP: u32 = 5;
 
 pub struct Osd {
     pub layer: LayerSurface,
-    icon: &'static str,
+    icon: String,
     /// `None`: no level to show (just the icon and a word).
     level: Option<u32>,
-    label: &'static str,
+    label: String,
     scale: i32,
     configured: bool,
     hide: Option<RegistrationToken>,
@@ -95,7 +95,7 @@ impl App {
         }
     }
 
-    fn show_osd(&mut self, icon: &'static str, level: Option<u32>, label: &'static str) {
+    fn show_osd(&mut self, icon: &str, level: Option<u32>, label: &str) {
         if self.osd.is_none() {
             let Some(panel) = self.panels.first() else {
                 return;
@@ -124,9 +124,9 @@ impl App {
             layer.commit();
             self.osd = Some(Osd {
                 layer,
-                icon,
+                icon: icon.to_string(),
                 level,
-                label,
+                label: label.to_string(),
                 scale,
                 configured: false,
                 hide: None,
@@ -135,9 +135,9 @@ impl App {
         let Some(osd) = &mut self.osd else {
             return;
         };
-        osd.icon = icon;
+        osd.icon = icon.to_string();
         osd.level = level;
-        osd.label = label;
+        osd.label = label.to_string();
         if let Some(timer) = osd.hide.take() {
             self.loop_handle.remove(timer);
         }
@@ -149,6 +149,20 @@ impl App {
             })
             .ok();
         self.draw_osd();
+    }
+
+    /// Said once each time the battery drops below `power.low_battery`.
+    pub fn check_low_battery(&mut self) {
+        let low = self
+            .status
+            .battery
+            .filter(|b| b.is_low(self.config.power.low_battery));
+        if crate::status::low_battery_edge(&mut self.low_battery_warned, low.is_some())
+            && let Some(battery) = low
+        {
+            let text = format!("Battery low \u{2014} {:.0}%", battery.percent);
+            self.show_osd(&crate::panel::battery_icon(battery), None, &text);
+        }
     }
 
     pub fn osd_configured(&mut self) {
@@ -186,7 +200,7 @@ impl App {
                 theme: t,
             };
             let cy = lh / 2.0;
-            p.icon(osd.icon, 30.0, cy, 20.0, t.popup_text);
+            p.icon(&osd.icon, 30.0, cy, 20.0, t.popup_text);
             let left = 54.0;
             let right = lw - 22.0;
             match osd.level {
@@ -220,7 +234,7 @@ impl App {
                 }
                 None => {
                     p.label_v(
-                        osd.label,
+                        &osd.label,
                         left,
                         cy,
                         right - left,

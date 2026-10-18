@@ -183,6 +183,8 @@ pub struct App {
     osd: Option<osd::Osd>,
     /// The polkit agent's password dialog.
     polkit: polkit::Polkit,
+    /// The low-battery warning has been shown for this discharge.
+    low_battery_warned: bool,
 }
 
 /// When `main` began, for the startup timing logs.
@@ -300,6 +302,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         launches: apps::LaunchCounts::load(),
         osd: None,
         polkit: polkit::Polkit::default(),
+        low_battery_warned: false,
     };
     app.rescan_apps_if_changed();
     app.workspaces.manager = globals
@@ -321,6 +324,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .insert_source(status_rx, |event, _, app| {
             if let Event::Msg(update) = event {
                 app.status.apply(update);
+                app.check_low_battery();
                 if let Some((qs, _)) = &mut app.quick_settings {
                     qs.status_changed(&app.xdg_shell, &app.theme, &app.status);
                 }
@@ -950,6 +954,11 @@ impl App {
                 overview_open: self.overview_open,
                 quick_settings_open: self.quick_settings.is_some(),
                 clock_position: self.config.panel.clock_position,
+                battery_percent: self.config.power.battery_percent,
+                battery_low: self
+                    .status
+                    .battery
+                    .is_some_and(|b| b.is_low(self.config.power.low_battery)),
                 solid,
             },
         );

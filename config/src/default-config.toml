@@ -72,6 +72,8 @@
 # locks first if [lock] has a command.
 # lock_on_screen_off = true    # lock when the monitors turn off
 # lock_before_suspend = true   # lock before sleeping
+# battery_percent = true       # show the charge as a number in the top bar
+# low_battery = 15             # warn below this percent while discharging; 0 is off
 # [power.battery]
 # dim_after = 120          # fade the screen to half brightness
 # screen_off_after = 300   # turn the monitors off

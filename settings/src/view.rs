@@ -1395,7 +1395,10 @@ mod tests {
         ui.wifi_details = Some("Office".into());
         let painted = render(&ui, "wifi-saved");
         assert!(painted.hits.iter().any(|(_, t)| *t == Target::Back));
-        assert!(has(&painted, Key::Wifi(WifiKey::AutoConnect("Office".into()))));
+        assert!(has(
+            &painted,
+            Key::Wifi(WifiKey::AutoConnect("Office".into()))
+        ));
         assert!(has(&painted, Key::Wifi(WifiKey::Actions("Office".into()))));
         assert!(!has(&painted, Key::Wifi(WifiKey::Detail("Band".into()))));
         ui.wifi_details = None;

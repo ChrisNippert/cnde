@@ -177,9 +177,9 @@ fn report(age: Duration) {
         proc("wchan"),
         proc("syscall"),
         proc("stack"),
-        backtrace.as_deref().unwrap_or(
-            "<not captured: main thread running user code, or unresponsive to signals>"
-        ),
+        backtrace
+            .as_deref()
+            .unwrap_or("<not captured: main thread running user code, or unresponsive to signals>"),
     );
     error!("{text}");
     save(&text);
@@ -191,14 +191,19 @@ fn save(text: &str) {
     use std::io::Write;
     let Some(dir) = std::env::var_os("XDG_STATE_HOME")
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".local/state")))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".local/state"))
+        })
     else {
         return;
     };
     let dir = dir.join("cnde");
     let path = dir.join("stall.log");
     let written = std::fs::create_dir_all(&dir).and_then(|()| {
-        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
