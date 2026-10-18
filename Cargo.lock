@@ -432,6 +432,7 @@ dependencies = [
  "cnde-ipc",
  "cnde-ui",
  "image",
+ "libc",
  "rustix 1.1.5",
  "smithay",
  "smithay-drm-extras",
