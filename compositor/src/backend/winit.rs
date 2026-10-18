@@ -196,6 +196,9 @@ impl State {
                     return;
                 }
             };
+            // First: it uploads a freshly loaded wallpaper, which the frost
+            // is cut from (see udev.rs).
+            let wallpaper = self.wallpapers.element(renderer, &backend.output);
             let frost =
                 self.dock_frost
                     .elements(renderer, &self.wallpapers, &backend.output, &self.config);
@@ -256,7 +259,7 @@ impl State {
                 )
             };
             if self.screenshot.frozen_element(&backend.output).is_none() && !locked {
-                if let Some(wallpaper) = self.wallpapers.element(renderer, &backend.output) {
+                if let Some(wallpaper) = wallpaper {
                     elements.push(render::OutputElement::Wallpaper(wallpaper));
                 }
                 if self.screenshot.wants_freeze(&backend.output) {

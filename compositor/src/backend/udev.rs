@@ -868,6 +868,10 @@ impl State {
             ));
             elements.push(render::OutputElement::Wallpaper(frozen));
         } else {
+            // First: it uploads a freshly loaded wallpaper, which the frost
+            // is cut from. Otherwise the frame it arrives in has no frost,
+            // and nothing redraws to add it.
+            let wallpaper = self.wallpapers.element(&mut gpu.renderer, &output);
             let frost = self.dock_frost.elements(
                 &mut gpu.renderer,
                 &self.wallpapers,
@@ -916,7 +920,7 @@ impl State {
                 &output,
                 now,
             ));
-            if let Some(wallpaper) = self.wallpapers.element(&mut gpu.renderer, &output) {
+            if let Some(wallpaper) = wallpaper {
                 elements.push(render::OutputElement::Wallpaper(wallpaper));
             }
             if self.screenshot.wants_freeze(&output) {
