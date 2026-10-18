@@ -14,6 +14,7 @@ mod launcher;
 mod menu;
 mod osd;
 mod panel;
+mod polkit;
 mod quick_settings;
 mod screenshot;
 mod status;
@@ -180,6 +181,8 @@ pub struct App {
     launches: apps::LaunchCounts,
     /// The volume or brightness level, shown after its key.
     osd: Option<osd::Osd>,
+    /// The polkit agent's password dialog.
+    polkit: polkit::Polkit,
 }
 
 /// When `main` began, for the startup timing logs.
@@ -296,6 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         apps_tx,
         launches: apps::LaunchCounts::load(),
         osd: None,
+        polkit: polkit::Polkit::default(),
     };
     app.rescan_apps_if_changed();
     app.workspaces.manager = globals
@@ -324,6 +328,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })?;
     status::start(status_tx);
+    app.polkit = polkit::start(&event_loop.handle());
 
     // The clock: wake exactly when the minute changes, not every second.
     event_loop
@@ -1110,6 +1115,7 @@ impl LayerShellHandler for App {
         if self.osd.as_ref().is_some_and(|o| &o.layer == layer) {
             self.osd = None;
         }
+        self.polkit_closed(layer.wl_surface());
         if self
             .screenshot
             .as_ref()
@@ -1140,6 +1146,7 @@ impl LayerShellHandler for App {
         {
             self.desktop_holder_configured();
         }
+        self.polkit_configured(layer.wl_surface());
         if self.osd.as_ref().is_some_and(|o| &o.layer == layer) {
             self.osd_configured();
         }
@@ -1237,6 +1244,23 @@ impl PointerHandler for App {
             | PointerEventKind::Release { serial, .. } = event.kind
             {
                 self.last_serial = serial;
+            }
+            if self
+                .polkit
+                .dialog
+                .as_ref()
+                .is_some_and(|d| d.owns(&event.surface))
+            {
+                match event.kind {
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        self.polkit_pointer(event.position, false)
+                    }
+                    PointerEventKind::Press {
+                        button: BTN_LEFT, ..
+                    } => self.polkit_pointer(event.position, true),
+                    _ => {}
+                }
+                continue;
             }
             if let Some(menu) = &mut self.menu
                 && menu.popup.wl_surface() == &event.surface
@@ -1516,6 +1540,9 @@ impl KeyboardHandler for App {
         _: u32,
         event: KeyEvent,
     ) {
+        if self.polkit_key(&event, &self.modifiers.clone()) {
+            return;
+        }
         if let Some(menu) = &mut self.menu {
             match event.keysym {
                 Keysym::Escape => self.close_menu(),
