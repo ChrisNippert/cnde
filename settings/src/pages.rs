@@ -133,6 +133,8 @@ pub enum Key {
     Wifi(WifiKey),
     /// Not in the config: Bluetooth, done through BlueZ.
     Bluetooth(BluetoothKey),
+    /// Not in the config: the panel's backlight, set directly.
+    Brightness,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -244,7 +246,7 @@ impl Key {
             }
             // Not the config's business: the window sends these to the
             // Wi-Fi and Bluetooth workers instead.
-            Key::Wifi(_) | Key::Bluetooth(_) => {}
+            Key::Wifi(_) | Key::Bluetooth(_) | Key::Brightness => {}
             Key::OutputPosition { name, axis } => {
                 let old = config.output(name).and_then(|o| o.position);
                 let Some(v) = value.as_f64() else {
@@ -556,11 +558,12 @@ pub fn build(
     displays: &[Display],
     wifi: WifiView<'_>,
     bluetooth: Option<&crate::bluetooth::State>,
+    brightness: Option<u32>,
 ) -> Vec<Group> {
     let d = Config::default();
     match page {
         Page::Appearance => appearance(c, &d),
-        Page::Displays => displays_page(c, displays),
+        Page::Displays => displays_page(c, displays, brightness),
         Page::Wifi => wifi_page(wifi),
         Page::Bluetooth => bluetooth_page(bluetooth),
         Page::Mouse => mouse(c, &d),
@@ -1399,7 +1402,7 @@ fn sun_today(c: &Config) -> Option<String> {
     })
 }
 
-fn displays_page(c: &Config, displays: &[Display]) -> Vec<Group> {
+fn displays_page(c: &Config, displays: &[Display], brightness: Option<u32>) -> Vec<Group> {
     if displays.is_empty() {
         return vec![Group {
             title: "No displays found".into(),
@@ -1408,6 +1411,26 @@ fn displays_page(c: &Config, displays: &[Display]) -> Vec<Group> {
         }];
     }
     let mut groups = Vec::new();
+    if let Some(percent) = brightness {
+        groups.push(group(
+            "Brightness",
+            vec![Row {
+                key: Key::Brightness,
+                title: "Brightness".into(),
+                subtitle: "The built-in screen".into(),
+                control: Control::Slider {
+                    min: 1.0,
+                    max: 100.0,
+                    step: 1.0,
+                    int: true,
+                    format: |v| format!("{v:.0}%"),
+                },
+                value: Value::Int(percent as i64),
+                default: Value::Int(percent as i64),
+                advanced: false,
+            }],
+        ));
+    }
     if displays.len() > 1 {
         groups.push(Group {
             title: "Arrangement".into(),
@@ -2530,7 +2553,7 @@ mod tests {
         };
         let displays = [display("DP-1"), display("DP-2")];
         for page in Page::ALL {
-            for group in build(page, &config, &displays, WifiView::default(), None) {
+            for group in build(page, &config, &displays, WifiView::default(), None, Some(50)) {
                 for row in group.rows {
                     let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();
                     let value = match &row.control {

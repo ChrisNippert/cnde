@@ -111,6 +111,8 @@ pub struct Ui {
     pub wifi_details: Option<String>,
     /// The Bluetooth worker's last report (once the page has been opened).
     pub bluetooth: Option<crate::bluetooth::State>,
+    /// The backlight's percent; `None` without one, which hides the row.
+    pub brightness: Option<u32>,
     /// Where the arrangement shows each display while one's dragged (and
     /// until the compositor reports the result).
     pub arranged: Option<Vec<(i32, i32)>>,
@@ -414,6 +416,7 @@ fn page(
             details: ui.sub_page(),
         },
         ui.bluetooth.as_ref(),
+        ui.brightness,
     );
     let show_advanced = ui.advanced.contains(&ui.page);
     let has_advanced = groups.iter().flat_map(|g| &g.rows).any(|r| r.advanced);
@@ -1237,6 +1240,7 @@ mod tests {
             wifi_join: None,
             wifi_details: None,
             bluetooth: None,
+            brightness: Some(50),
             arranged: None,
             arranging: None,
         }
