@@ -1514,7 +1514,7 @@ impl KeyboardHandler for App {
                 _ => {}
             }
         } else if let Some(ui) = &mut self.screenshot {
-            let outcome = ui.key(&event);
+            let outcome = ui.key(&event, &self.modifiers);
             self.screenshot_outcome(outcome);
         } else if self.launcher.is_some() {
             self.launcher_key(event);

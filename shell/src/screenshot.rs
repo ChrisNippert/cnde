@@ -17,7 +17,7 @@ use smithay_client_toolkit::{
         QueueHandle,
         protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
     },
-    seat::keyboard::{KeyEvent, Keysym},
+    seat::keyboard::{KeyEvent, Keysym, Modifiers},
     shell::{
         WaylandSurface,
         wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface},
@@ -454,19 +454,24 @@ impl ScreenshotUi {
         }
     }
 
-    pub fn key(&mut self, event: &KeyEvent) -> Outcome {
+    pub fn key(&mut self, event: &KeyEvent, modifiers: &Modifiers) -> Outcome {
+        // Ctrl+C copies, like Enter; other chords don't switch modes.
+        if modifiers.ctrl && matches!(event.keysym, Keysym::c | Keysym::C) {
+            return self.take();
+        }
+        let chord = modifiers.ctrl || modifiers.alt || modifiers.logo;
         match event.keysym {
             Keysym::Escape => Outcome::Cancel,
             Keysym::Return | Keysym::KP_Enter | Keysym::space => self.take(),
-            Keysym::s | Keysym::S => {
+            Keysym::s | Keysym::S if !chord => {
                 self.mode = Mode::Selection;
                 Outcome::Redraw
             }
-            Keysym::c | Keysym::C => {
+            Keysym::c | Keysym::C if !chord => {
                 self.mode = Mode::Screen;
                 Outcome::Redraw
             }
-            Keysym::w | Keysym::W => {
+            Keysym::w | Keysym::W if !chord => {
                 self.mode = Mode::Window;
                 Outcome::Redraw
             }
