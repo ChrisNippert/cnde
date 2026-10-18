@@ -90,6 +90,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.config = config;
         state.config_path = config_path;
         state.space.map_output(&output, (0, 0));
+        // Debug aid: CNDE_NESTED_GHOST=1280x720 adds a second monitor to the
+        // right that is never drawn, to exercise multi-monitor logic.
+        if let Some((w, h)) = std::env::var("CNDE_NESTED_GHOST").ok().and_then(|v| {
+            Some((
+                v.split_once('x')?.0.parse().ok()?,
+                v.split_once('x')?.1.parse().ok()?,
+            ))
+        }) {
+            let ghost = smithay::output::Output::new(
+                "ghost".to_string(),
+                smithay::output::PhysicalProperties {
+                    size: (0, 0).into(),
+                    subpixel: smithay::output::Subpixel::Unknown,
+                    make: "cnde".into(),
+                    model: "ghost".into(),
+                },
+            );
+            let _ = ghost.create_global::<State>(&state.display_handle);
+            let mode = smithay::output::Mode {
+                size: (w, h).into(),
+                refresh: 60_000,
+            };
+            ghost.change_current_state(
+                Some(mode),
+                None,
+                Some(smithay::output::Scale::Integer(1)),
+                None,
+            );
+            ghost.set_preferred(mode);
+            let x = state.space.output_geometry(&output).map_or(0, |g| g.size.w);
+            tracing::info!(x, "ghost output");
+            state.space.map_output(&ghost, (x, 0));
+        }
         // Offer every shm format the renderer can import, not just the two
         // mandatory ones (the udev backend does the same per GPU).
         if let Backend::Winit(winit) = &mut state.backend {

@@ -639,22 +639,17 @@ impl State {
 
     /// A move ended with the pointer at `pointer`. Dropped on a tile (of
     /// any monitor's tiling workspace), the window takes its place and the
-    /// two swap. Otherwise, on a tiling workspace: dropped back on the tile
-    /// it came from (`origin`), it returns there; anywhere else, it stays
-    /// floating where it was let go.
-    pub fn drop_window(
-        &mut self,
-        window: &Window,
-        pointer: Point<f64, Logical>,
-        origin: Option<Rectangle<i32, Logical>>,
-    ) {
+    /// two swap. Anywhere else it rejoins the tiles of the workspace it was
+    /// dropped on (at the end, if that's another one). A window that wasn't
+    /// a tile (`was_tile`) just stays where it was let go.
+    pub fn drop_window(&mut self, window: &Window, pointer: Point<f64, Logical>, was_tile: bool) {
         // It may have been dragged onto another monitor's workspace.
         self.sync_workspace_membership();
-        let tiling = self
-            .workspaces
-            .index_of(window)
-            .is_some_and(|index| self.layout_of(index).tiles());
-        // Whether it could tile at all (dialogs can't).
+        // A window floated on purpose stays floating.
+        if !was_tile {
+            self.relayout_visible(true);
+            return;
+        }
         with_state(window, |s| s.keep_floating = false);
         let tileable = Self::tileable(window);
         let target = self
@@ -667,10 +662,6 @@ impl State {
                 self.workspaces.list[dest].windows.push(window.clone());
             }
             self.workspaces.list[dest].swap_tiles(window, &target);
-        } else if !origin.is_some_and(|r| r.to_f64().contains(pointer)) {
-            // Floating where it was let go (on a floating workspace the
-            // flag makes no difference).
-            with_state(window, |s| s.keep_floating = tiling);
         }
         self.relayout_visible(true);
     }
@@ -722,6 +713,9 @@ impl State {
         };
         if !Self::tileable(&window) {
             return;
+        }
+        if !self.workspaces.is_moving() {
+            self.normalize_workspaces();
         }
         // It opens on the workspace under the pointer (map_new_window).
         let Some(output) = self.output_under_pointer() else {

@@ -79,7 +79,7 @@ impl PointerGrab<State> for MoveSurfaceGrab {
                 crate::window::with_state(&self.window, |s| s.keep_floating = false);
                 data.set_placement_on(&self.window, target, true, Some(output));
             } else {
-                data.drop_window(&self.window, pointer, self.tile);
+                data.drop_window(&self.window, pointer, self.tile.is_some());
             }
         }
     }

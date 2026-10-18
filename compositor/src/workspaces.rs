@@ -259,6 +259,11 @@ impl State {
 
     /// Put a newly mapped window on the workspace showing where it opened.
     pub fn add_window_to_workspace(&mut self, window: &Window) {
+        // Every monitor needs its workspace first: before any window opened,
+        // the ones beside the main monitor may have none yet.
+        if !self.workspaces.is_moving() {
+            self.normalize_workspaces();
+        }
         let index = self
             .output_for(window)
             .and_then(|o| self.workspace_on(&o))
