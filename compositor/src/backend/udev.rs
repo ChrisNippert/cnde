@@ -623,6 +623,7 @@ impl State {
             output.change_current_state(None, None, Some(output_scale), Some(position));
             self.space.map_output(&output, position);
         }
+        self.refresh_fractional_scales();
         self.relayout_after_output_change();
         self.fixup_window_positions();
         self.workspaces_after_output_change();

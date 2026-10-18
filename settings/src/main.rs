@@ -29,6 +29,7 @@ use smithay_client_toolkit::reexports::client::backend::WaylandError;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData},
     delegate_dispatch2, delegate_registry,
+    dispatch2::Dispatch2,
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
@@ -39,9 +40,16 @@ use smithay_client_toolkit::{
         },
         calloop_wayland_source::WaylandSource,
         client::{
-            Connection, QueueHandle,
+            Connection, Proxy, QueueHandle,
             globals::registry_queue_init,
             protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+        },
+        protocols::wp::{
+            fractional_scale::v1::client::{
+                wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+                wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+            },
+            viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
         },
         protocols::xdg::shell::client::xdg_toplevel::ResizeEdge,
     },
@@ -64,7 +72,7 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     pages::{BluetoothKey, Control, Display, JoinField, Key, Page, Value, WifiKey},
@@ -102,6 +110,12 @@ struct App {
 
     size: (u32, u32),
     scale: i32,
+    /// The scale the compositor prefers (wp_fractional_scale), when it has
+    /// the protocol and a viewporter to go with it.
+    fractional: Option<f64>,
+    viewport: Option<WpViewport>,
+    /// Kept alive to keep the preferred-scale events coming.
+    _fractional_object: Option<WpFractionalScaleV1>,
     configured: bool,
     maximized: bool,
     frame_pending: bool,
@@ -192,6 +206,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_title("Settings");
     window.set_app_id("cnde-settings");
     window.set_min_size(Some(MIN_SIZE));
+    // Fractional scale (1.25 and the like) draws at the exact pixel size and
+    // lets the compositor show it 1:1. Without both globals, integer scale.
+    let (viewport, fractional_object) = match (
+        globals.bind::<WpViewporter, _, _>(&qh, 1..=1, ScaleData),
+        globals.bind::<WpFractionalScaleManagerV1, _, _>(&qh, 1..=1, ScaleData),
+    ) {
+        (Ok(viewporter), Ok(manager)) => (
+            Some(viewporter.get_viewport(window.wl_surface(), &qh, ScaleData)),
+            Some(manager.get_fractional_scale(window.wl_surface(), &qh, ScaleData)),
+        ),
+        _ => (None, None),
+    };
     window.commit();
 
     // Wallpaper thumbnails, decoded off the main thread.
@@ -274,6 +300,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config_path,
         size: DEFAULT_SIZE,
         scale: 1,
+        fractional: None,
+        viewport,
+        _fractional_object: fractional_object,
         configured: false,
         maximized: false,
         frame_pending: false,
@@ -582,8 +611,21 @@ impl App {
             return;
         }
         self.dirty = false;
-        let scale = self.scale.max(1);
-        let (w, h) = (self.size.0 as i32 * scale, self.size.1 as i32 * scale);
+        let started = Instant::now();
+        // Fractional: paint at round(logical * scale) and let the viewport map
+        // it back onto the logical size. Otherwise a whole-number scale.
+        let fractional = self.fractional.filter(|_| self.viewport.is_some());
+        let scale = fractional.unwrap_or(self.scale.max(1) as f64);
+        let (w, h) = match fractional {
+            Some(scale) => (
+                (self.size.0 as f64 * scale).round() as i32,
+                (self.size.1 as f64 * scale).round() as i32,
+            ),
+            None => (
+                self.size.0 as i32 * scale as i32,
+                self.size.1 as i32 * scale as i32,
+            ),
+        };
         let (buffer, pixels) = match self.pool.create_buffer(w, h, w * 4, self.shm_format) {
             Ok(created) => created,
             Err(err) => {
@@ -597,6 +639,7 @@ impl App {
             };
             self.painted = view::paint(&self.ui, &mut self.res, &mut canvas);
         }
+        let painted_in = started.elapsed();
         // Something's moving: paint again on the next frame callback.
         if self.res.anim.running() {
             self.dirty = true;
@@ -606,13 +649,29 @@ impl App {
             self.ui.scroll = self.painted.max_scroll;
             self.dirty = true;
         }
-        if self.shm_format == wl_shm::Format::Argb8888 {
+        let swapped = self.shm_format == wl_shm::Format::Argb8888;
+        if swapped {
             for pixel in pixels.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }
         }
+        debug!(
+            paint_ms = painted_in.as_secs_f64() * 1000.0,
+            total_ms = started.elapsed().as_secs_f64() * 1000.0,
+            w,
+            h,
+            scale,
+            swapped,
+            "frame painted"
+        );
         let surface = self.window.wl_surface();
-        surface.set_buffer_scale(scale);
+        match (&self.viewport, fractional) {
+            (Some(viewport), Some(_)) => {
+                surface.set_buffer_scale(1);
+                viewport.set_destination(self.size.0 as i32, self.size.1 as i32);
+            }
+            _ => surface.set_buffer_scale(scale as i32),
+        }
         surface.damage_buffer(0, 0, w, h);
         if buffer.attach_to(surface).is_ok() {
             surface.frame(&self.qh, FrameCallbackData(surface.clone()));
@@ -1384,6 +1443,66 @@ impl WindowHandler for App {
                     TimeoutAction::Drop
                 },
             );
+        }
+    }
+}
+
+/// User data for the viewporter and fractional-scale objects.
+struct ScaleData;
+
+impl Dispatch2<WpViewporter, App> for ScaleData {
+    fn event(
+        &self,
+        _: &mut App,
+        _: &WpViewporter,
+        _: <WpViewporter as Proxy>::Event,
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+    }
+}
+
+impl Dispatch2<WpViewport, App> for ScaleData {
+    fn event(
+        &self,
+        _: &mut App,
+        _: &WpViewport,
+        _: <WpViewport as Proxy>::Event,
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+    }
+}
+
+impl Dispatch2<WpFractionalScaleManagerV1, App> for ScaleData {
+    fn event(
+        &self,
+        _: &mut App,
+        _: &WpFractionalScaleManagerV1,
+        _: <WpFractionalScaleManagerV1 as Proxy>::Event,
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+    }
+}
+
+impl Dispatch2<WpFractionalScaleV1, App> for ScaleData {
+    fn event(
+        &self,
+        app: &mut App,
+        _: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+        let wp_fractional_scale_v1::Event::PreferredScale { scale } = event else {
+            return;
+        };
+        // In 120ths.
+        let scale = scale as f64 / 120.0;
+        if app.fractional != Some(scale) {
+            app.fractional = Some(scale);
+            app.redraw();
         }
     }
 }
