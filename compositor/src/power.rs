@@ -250,7 +250,7 @@ impl State {
         info!(?stage, "idle");
         self.idle.stage = stage;
         match stage {
-            IdleStage::Active | IdleStage::Suspend => {
+            IdleStage::Active => {
                 // Back at once: waking shouldn't take a second.
                 self.night_light.set_dim(1.0, Duration::ZERO);
             }
@@ -263,9 +263,10 @@ impl State {
                 self.night_light.set_dim(DIMMED, fade);
             }
             // Dimmed already or not, nobody sees it.
-            IdleStage::ScreenOff => {}
+            IdleStage::ScreenOff | IdleStage::Suspend => {}
         }
-        let off = stage == IdleStage::ScreenOff;
+        // Stay dark while locking and suspending; waking goes to Active.
+        let off = matches!(stage, IdleStage::ScreenOff | IdleStage::Suspend);
         if off != self.idle.screens_off {
             self.idle.screens_off = off;
             if off {
