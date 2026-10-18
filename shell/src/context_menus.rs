@@ -175,6 +175,7 @@ impl App {
         // Close any open menu first: a grabbing popup that isn't the
         // child of the topmost one gets the shell disconnected.
         self.quick_settings = None;
+        self.calendar = None;
         self.menu = None;
         self.menu = Menu::open(
             &self.compositor,

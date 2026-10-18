@@ -37,6 +37,7 @@ pub struct Draw<'a> {
     /// What the buttons open is open (they're drawn highlighted).
     pub overview_open: bool,
     pub quick_settings_open: bool,
+    pub calendar_open: bool,
     pub clock_position: ClockPosition,
     /// Number beside the battery icon.
     pub battery_percent: bool,
@@ -75,6 +76,7 @@ const EDGE_GRAB: f32 = 7.0;
 pub enum Button {
     Activities,
     Status,
+    Clock,
 }
 
 pub struct Panel {
@@ -196,6 +198,8 @@ impl Panel {
             Some(Button::Activities)
         } else if self.status_region.is_some_and(|(start, _)| x >= start) {
             Some(Button::Status)
+        } else if self.clock_region.is_some_and(|(start, end)| x >= start && x < end) {
+            Some(Button::Clock)
         } else {
             None
         }
@@ -245,6 +249,12 @@ impl Panel {
         Some((start as i32, 0, (end - start) as i32, self.height as i32))
     }
 
+    /// Where the calendar hangs from: the clock, panel coordinates.
+    pub fn clock_anchor(&self) -> Option<(i32, i32, i32, i32)> {
+        let (start, end) = self.clock_region?;
+        Some((start as i32, 0, (end - start) as i32, self.height as i32))
+    }
+
     /// The pill behind a button: brighter while what it opens is open.
     fn button_background(
         &mut self,
@@ -291,6 +301,7 @@ impl Panel {
             status,
             overview_open,
             quick_settings_open,
+            calendar_open,
             clock_position,
             battery_percent,
             battery_low,
@@ -501,8 +512,19 @@ impl Panel {
         }
         .round();
         let clock_y = ((height - clock.height) / 2.0).round();
+        let clock_region = (clock_x - pad, clock_x + clock.width + pad);
+        if self.edit.is_none() {
+            self.button_background(
+                &mut canvas,
+                theme,
+                clock_region,
+                height,
+                Button::Clock,
+                calendar_open,
+            );
+        }
         canvas.text(fonts, &mut clock, clock_x, clock_y, theme.panel_foreground);
-        self.clock_region = Some((clock_x - 6.0, clock_x + clock.width + 6.0));
+        self.clock_region = Some(clock_region);
 
         if self.edit.is_some() {
             // The bar outlined, the clock marked movable, a grip to resize.

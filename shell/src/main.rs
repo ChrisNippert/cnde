@@ -16,6 +16,7 @@ mod osd;
 mod panel;
 mod polkit;
 mod quick_settings;
+mod calendar;
 mod screenshot;
 mod status;
 mod workspaces;
@@ -126,6 +127,10 @@ pub struct App {
     actions: Actions,
     /// Open quick settings, and the panel-surface rect it hangs from.
     quick_settings: Option<(QuickSettings, (i32, i32, i32, i32))>,
+    /// The calendar under the clock, while open.
+    calendar: Option<calendar::Calendar>,
+    /// As `quick_settings_dismissed`, for the calendar.
+    calendar_dismissed: Option<std::time::Instant>,
     seat_handle: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -272,6 +277,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         workspaces: Workspaces::default(),
         actions: Actions::start(),
         quick_settings: None,
+        calendar: None,
+        calendar_dismissed: None,
         seat_handle: None,
         pointer: None,
         keyboard: None,
@@ -468,6 +475,7 @@ impl App {
 
     fn open_screenshot_ui(&mut self, windows: Vec<cnde_ipc::ScreenshotWindow>) {
         self.quick_settings = None;
+        self.calendar = None;
         let main = self.main_output();
         let monitors = self
             .outputs
@@ -690,6 +698,7 @@ impl App {
         if self.panels.iter().any(|p| !wanted.contains(&p.output)) {
             // Quick settings hangs from a panel; it can't outlive it.
             self.quick_settings = None;
+            self.calendar = None;
         }
         self.panels.retain(|p| wanted.contains(&p.output));
         for output in wanted {
@@ -815,6 +824,8 @@ impl App {
     pub fn redraw_all(&mut self) {
         self.redraw_panels();
         self.draw_quick_settings();
+        // Today moves at midnight.
+        self.draw_calendar();
     }
 
     /// What the compositor last said touches `output`'s edges.
@@ -843,6 +854,83 @@ impl App {
         }
     }
 
+    fn draw_calendar(&mut self) {
+        if let Some(calendar) = &mut self.calendar {
+            calendar.draw(
+                &self.qh,
+                &mut self.pool,
+                self.shm_format,
+                &mut self.fonts,
+                &mut self.icons,
+                &self.theme,
+            );
+        }
+    }
+
+    /// Clicking the clock opens the calendar, or closes it.
+    fn toggle_calendar(&mut self, panel_index: usize, serial: u32) {
+        let just_dismissed = self
+            .calendar_dismissed
+            .take()
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(300));
+        if self.calendar.take().is_some() || just_dismissed {
+            self.redraw_panels();
+            return;
+        }
+        let (Some(panel), Some(seat)) = (self.panels.get(panel_index), &self.seat_handle) else {
+            return;
+        };
+        let Some(anchor) = panel.clock_anchor() else {
+            return;
+        };
+        // Before the new grab, or the compositor disconnects us.
+        self.menu = None;
+        self.quick_settings = None;
+        self.calendar = calendar::Calendar::open(
+            &self.compositor,
+            &self.xdg_shell,
+            &self.qh,
+            &panel.layer,
+            seat,
+            serial,
+            anchor,
+            panel.scale(),
+        );
+        self.redraw_panels();
+    }
+
+    fn calendar_pointer(&mut self, event: &PointerEvent) {
+        let Some(calendar) = &mut self.calendar else {
+            return;
+        };
+        let redraw = match event.kind {
+            PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                calendar.motion(event.position)
+            }
+            PointerEventKind::Leave { .. } => calendar.motion((-1.0, -1.0)),
+            PointerEventKind::Press {
+                button: BTN_LEFT, ..
+            } => calendar.press(event.position),
+            PointerEventKind::Axis {
+                vertical, ..
+            } => {
+                let steps = if vertical.discrete != 0 {
+                    vertical.discrete
+                } else if vertical.value120 != 0 {
+                    vertical.value120 / 120
+                } else {
+                    // Touchpads: a page per decent swipe.
+                    (vertical.absolute / 40.0) as i32
+                };
+                calendar.scroll(steps)
+            }
+            _ => false,
+        };
+        if redraw {
+            self.draw_calendar();
+        }
+    }
+
     /// Clicking the status area opens quick settings, or closes it.
     fn toggle_quick_settings(&mut self, panel_index: usize, serial: u32) {
         let just_dismissed = self
@@ -863,6 +951,7 @@ impl App {
         self.status.backlight = status::read_backlight();
         // Before the new grab, or the compositor disconnects us.
         self.menu = None;
+        self.calendar = None;
         self.quick_settings = QuickSettings::open(
             &self.compositor,
             &self.xdg_shell,
@@ -953,6 +1042,7 @@ impl App {
                 status: &self.status,
                 overview_open: self.overview_open,
                 quick_settings_open: self.quick_settings.is_some(),
+                calendar_open: self.calendar.is_some(),
                 clock_position: self.config.panel.clock_position,
                 battery_percent: self.config.power.battery_percent,
                 battery_low: self
@@ -986,6 +1076,12 @@ impl CompositorHandler for App {
         {
             qs.set_scale(factor);
             self.draw_quick_settings();
+        }
+        if let Some(calendar) = &mut self.calendar
+            && calendar.popup.wl_surface() == surface
+        {
+            calendar.set_scale(factor);
+            self.draw_calendar();
         }
         if let Some(launcher) = &mut self.launcher
             && launcher.layer.wl_surface() == surface
@@ -1052,6 +1148,12 @@ impl CompositorHandler for App {
             && qs.frame_done()
         {
             self.draw_quick_settings();
+        }
+        if let Some(calendar) = &mut self.calendar
+            && calendar.popup.wl_surface() == surface
+            && calendar.frame_done()
+        {
+            self.draw_calendar();
         }
         if let Some(launcher) = &mut self.launcher
             && launcher.layer.wl_surface() == surface
@@ -1415,6 +1517,14 @@ impl PointerHandler for App {
                 self.quick_settings_pointer(event);
                 continue;
             }
+            if self
+                .calendar
+                .as_ref()
+                .is_some_and(|c| c.popup.wl_surface() == &event.surface)
+            {
+                self.calendar_pointer(event);
+                continue;
+            }
             let Some(index) = self
                 .panels
                 .iter()
@@ -1456,6 +1566,7 @@ impl PointerHandler for App {
                     ..
                 } => match self.panels[index].button_at(event.position) {
                     Some(Button::Status) => self.toggle_quick_settings(index, serial),
+                    Some(Button::Clock) => self.toggle_calendar(index, serial),
                     Some(Button::Activities) => {
                         self.ipc.send(&cnde_ipc::Request::ToggleOverview);
                     }
@@ -1481,6 +1592,12 @@ impl PopupHandler for App {
             qs.configured();
             self.draw_quick_settings();
         }
+        if let Some(calendar) = &mut self.calendar
+            && &calendar.popup == popup
+        {
+            calendar.configured();
+            self.draw_calendar();
+        }
         if let Some(menu) = &mut self.menu
             && &menu.popup == popup
         {
@@ -1501,6 +1618,11 @@ impl PopupHandler for App {
         {
             self.quick_settings = None;
             self.quick_settings_dismissed = Some(std::time::Instant::now());
+            self.redraw_panels();
+        }
+        if self.calendar.as_ref().is_some_and(|c| &c.popup == popup) {
+            self.calendar = None;
+            self.calendar_dismissed = Some(std::time::Instant::now());
             self.redraw_panels();
         }
     }
@@ -1575,7 +1697,9 @@ impl KeyboardHandler for App {
             self.screenshot_outcome(outcome);
         } else if self.launcher.is_some() {
             self.launcher_key(event);
-        } else if event.keysym == Keysym::Escape && self.quick_settings.take().is_some() {
+        } else if event.keysym == Keysym::Escape
+            && (self.quick_settings.take().is_some() || self.calendar.take().is_some())
+        {
             self.redraw_panels();
         }
     }
