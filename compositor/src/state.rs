@@ -27,6 +27,7 @@ use smithay::{
     utils::{Logical, Point, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
+        fractional_scale::FractionalScaleManagerState,
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
         shell::{
@@ -141,6 +142,8 @@ pub struct State {
     pub seat_state: SeatState<Self>,
     #[allow(dead_code)] // owns the global; dropping it removes the protocol
     pub viewporter_state: ViewporterState,
+    #[allow(dead_code)] // owns the global; dropping it removes the protocol
+    pub fractional_scale_state: FractionalScaleManagerState,
     pub data_device_state: DataDeviceState,
 }
 
@@ -158,10 +161,14 @@ impl State {
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
-        let shm_state = ShmState::new::<Self>(&dh, vec![]);
+        let shm_state = ShmState::new::<Self>(
+            &dh,
+            vec![smithay::reexports::wayland_server::protocol::wl_shm::Format::Abgr8888],
+        );
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
         smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(&dh);
         let lock = crate::lock::Lock::new(
             smithay::wayland::session_lock::SessionLockManagerState::new::<Self, _>(&dh, |_| true),
@@ -239,6 +246,7 @@ impl State {
             output_manager_state,
             seat_state,
             viewporter_state,
+            fractional_scale_state,
             data_device_state,
         })
     }

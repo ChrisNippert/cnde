@@ -5,8 +5,8 @@ mod xdg_shell;
 
 use smithay::{
     backend::allocator::dmabuf::Dmabuf,
-    delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_output, delegate_seat,
-    delegate_viewporter, delegate_xdg_decoration,
+    delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
+    delegate_output, delegate_seat, delegate_viewporter, delegate_xdg_decoration,
     input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
     reexports::{
         wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
@@ -118,9 +118,79 @@ impl DmabufHandler for State {
 }
 delegate_dmabuf!(State);
 
-// Surface cropping/scaling. Required by xwayland-satellite, and the basis
-// for fractional scaling later.
+// Surface cropping/scaling. Required by xwayland-satellite, and with
+// fractional scale it lets clients draw at the exact pixel size.
 delegate_viewporter!(State);
+
+// Tells each client the scale of the monitor it's on (1.25, not just 1 or 2),
+// so it can draw sharp instead of being resampled by us.
+impl smithay::wayland::fractional_scale::FractionalScaleHandler for State {
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        let mut root = surface.clone();
+        while let Some(parent) = smithay::wayland::compositor::get_parent(&root) {
+            root = parent;
+        }
+        if let Some(output) = self.output_for_root_surface(&root) {
+            set_preferred_scale(&surface, &output);
+        }
+    }
+}
+delegate_fractional_scale!(State);
+
+pub(crate) fn set_preferred_scale(surface: &WlSurface, output: &smithay::output::Output) {
+    let scale = output.current_scale().fractional_scale();
+    smithay::wayland::compositor::with_states(surface, |states| {
+        smithay::wayland::fractional_scale::with_fractional_scale(states, |f| {
+            f.set_preferred_scale(scale)
+        });
+    });
+}
+
+impl State {
+    /// The monitor a toplevel, panel or lock surface is on.
+    pub(crate) fn output_for_root_surface(
+        &self,
+        root: &WlSurface,
+    ) -> Option<smithay::output::Output> {
+        if let Some(window) = self.window_for_surface(root) {
+            return self.output_for(&window);
+        }
+        self.space
+            .outputs()
+            .find(|o| {
+                smithay::desktop::layer_map_for_output(o)
+                    .layer_for_surface(root, smithay::desktop::WindowSurfaceType::TOPLEVEL)
+                    .is_some()
+            })
+            .cloned()
+            .or_else(|| self.output_under_pointer())
+    }
+
+    /// After monitors change scale or move: re-tell every window and panel.
+    pub(crate) fn refresh_fractional_scales(&self) {
+        use smithay::wayland::compositor::with_surface_tree_downward;
+        let mut roots = Vec::new();
+        for window in self.space.elements() {
+            if let (Some(t), Some(output)) = (window.toplevel(), self.output_for(window)) {
+                roots.push((t.wl_surface().clone(), output));
+            }
+        }
+        for output in self.space.outputs() {
+            for layer in smithay::desktop::layer_map_for_output(output).layers() {
+                roots.push((layer.wl_surface().clone(), output.clone()));
+            }
+        }
+        for (root, output) in roots {
+            with_surface_tree_downward(
+                &root,
+                (),
+                |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
+                |surface, _, _| set_preferred_scale(surface, &output),
+                |_, _, _| true,
+            );
+        }
+    }
+}
 
 // Clients name their cursor (resize arrows, text beam, ...) instead of
 // drawing it, so it matches the theme; GTK 4, Qt and cnde-settings use it.

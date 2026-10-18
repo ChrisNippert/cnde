@@ -122,6 +122,15 @@ impl CompositorHandler for State {
             }
         }
 
+        // Cheap when unchanged; picks up a window dragged to another monitor.
+        let mut root = surface.clone();
+        while let Some(parent) = get_parent(&root) {
+            root = parent;
+        }
+        if let Some(output) = self.output_for_root_surface(&root) {
+            super::set_preferred_scale(surface, &output);
+        }
+
         if !self.handle_layer_commit(surface) {
             self.handle_toplevel_mapping(surface);
         }
