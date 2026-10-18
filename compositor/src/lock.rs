@@ -186,6 +186,7 @@ impl SessionLockHandler for State {
         }
         // Nothing else may keep the keyboard or the screen from here on.
         self.lock.locked = true;
+        self.night_light.skip_intro();
         // Watch for the locker dying (nothing else would notice: with the
         // screen locked and no locker, nothing redraws).
         let _ = self.loop_handle.insert_source(
