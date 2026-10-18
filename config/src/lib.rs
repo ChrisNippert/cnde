@@ -430,6 +430,8 @@ pub struct Dock {
     pub reserve: bool,
     /// Icons and the dock itself can't be dragged, and edit mode is off.
     pub locked: bool,
+    /// Run by "System Monitor" in the dock's menu; empty hides the item.
+    pub system_monitor: String,
 }
 
 impl Default for Dock {
@@ -451,6 +453,7 @@ impl Default for Dock {
             align: DockAlign::Center,
             reserve: true,
             locked: false,
+            system_monitor: "gnome-system-monitor".into(),
         }
     }
 }

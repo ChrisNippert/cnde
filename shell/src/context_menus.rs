@@ -274,6 +274,10 @@ impl App {
         if !self.config.dock.locked {
             entries.push(Entry::item(edit, Action::EditDock));
         }
+        let monitor = self.config.dock.system_monitor.trim();
+        if !monitor.is_empty() {
+            entries.push(Entry::item("System Monitor", Action::Run(monitor.into())));
+        }
         entries.push(Entry::item("Dock Settings", Action::Settings(Some("dock"))));
         entries
     }
@@ -342,6 +346,7 @@ impl App {
             Action::Settings(page) => crate::apps::open_settings(page),
             Action::Config(changes) => write_config(&changes),
             Action::Launch(id) => self.launch(&id),
+            Action::Run(command) => crate::apps::run_command(&command),
             Action::Activate(id) => self.ipc.send(&cnde_ipc::Request::ActivateWindow { id }),
             Action::Close(ids) => {
                 for id in ids {

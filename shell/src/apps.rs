@@ -357,6 +357,22 @@ pub fn launch(app: &App, terminal: &str) {
     }
 }
 
+/// Run a command line through `sh`, detached like `launch`.
+pub fn run_command(line: &str) {
+    debug!(command = %line, "running");
+    let result = Command::new("sh")
+        .arg("-c")
+        .arg(format!("{line} </dev/null >/dev/null 2>&1 &"))
+        .current_dir(std::env::var_os("HOME").unwrap_or_else(|| "/".into()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if let Err(err) = result {
+        warn!(command = %line, %err, "can't run");
+    }
+}
+
 /// cnde-settings: the one next to our binary, else from PATH. `None` if
 /// it isn't installed (it's a separate package), and then nothing offers
 /// to open it.
