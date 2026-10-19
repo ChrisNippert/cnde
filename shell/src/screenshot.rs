@@ -79,6 +79,70 @@ pub enum Mode {
     Window,
 }
 
+/// The mode and selection of the last shot, so the next one starts there
+/// (the same region again is one click). Kept in
+/// `$XDG_STATE_HOME/cnde/screenshot` as "mode x y w h".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Last {
+    pub mode: Mode,
+    pub selection: Rect,
+}
+
+impl Last {
+    fn path() -> Option<std::path::PathBuf> {
+        std::env::var_os("XDG_STATE_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
+            })
+            .map(|dir| dir.join("cnde").join("screenshot"))
+    }
+
+    pub fn load() -> Option<Self> {
+        Self::parse(&std::fs::read_to_string(Self::path()?).ok()?)
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        let mut words = text.split_whitespace();
+        let mode = match words.next()? {
+            "selection" => Mode::Selection,
+            "screen" => Mode::Screen,
+            "window" => Mode::Window,
+            _ => return None,
+        };
+        let mut number = || words.next()?.parse::<f32>().ok().filter(|v| v.is_finite());
+        let selection = Rect {
+            x: number()?,
+            y: number()?,
+            w: number()?,
+            h: number()?,
+        };
+        Some(Self { mode, selection })
+    }
+
+    fn text(&self) -> String {
+        let mode = match self.mode {
+            Mode::Selection => "selection",
+            Mode::Screen => "screen",
+            Mode::Window => "window",
+        };
+        let s = self.selection;
+        format!("{mode} {} {} {} {}\n", s.x, s.y, s.w, s.h)
+    }
+
+    pub fn save(&self) {
+        let Some(path) = Self::path() else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(err) = std::fs::write(&path, self.text()) {
+            warn!(%err, "can't save the last screenshot region");
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Drag {
     /// Drawing a new selection from this corner.
@@ -190,6 +254,7 @@ impl ScreenshotUi {
         qh: &QueueHandle<App>,
         monitors: Vec<Monitor>,
         windows: Vec<ScreenshotWindow>,
+        last: Option<Last>,
     ) -> Self {
         let overlays: Vec<Overlay> = monitors
             .into_iter()
@@ -240,17 +305,43 @@ impl ScreenshotUi {
                 h: o.size.1 / 2.0,
             },
         );
+        // The last shot's region, if it's still on a monitor (they may
+        // have changed since).
+        let on_screen = |r: &Rect| {
+            overlays.iter().any(|o| {
+                let m = Rect {
+                    x: o.origin.0,
+                    y: o.origin.1,
+                    w: o.size.0,
+                    h: o.size.1,
+                };
+                r.intersect(&m).is_some_and(|i| i.w >= 8.0 && i.h >= 8.0)
+            })
+        };
+        let selection = last
+            .map(|l| l.selection)
+            .filter(|r| r.w >= 2.0 && r.h >= 2.0 && on_screen(r))
+            .unwrap_or(selection);
+        let mode = last.map_or(Mode::Selection, |l| l.mode);
         let pool = SlotPool::new(4 * 1024 * 1024, shm)
             .map_err(|err| warn!(?err, "can't create the screenshot buffer pool"))
             .ok();
         Self {
             overlays,
             pool,
-            mode: Mode::Selection,
+            mode,
             selection,
             drag: None,
             windows,
             pointer: (0.0, 0.0),
+        }
+    }
+
+    /// What to start with next time.
+    pub fn last(&self) -> Last {
+        Last {
+            mode: self.mode,
+            selection: self.selection,
         }
     }
 
@@ -712,6 +803,23 @@ fn paint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn last_round_trips() {
+        let last = Last {
+            mode: Mode::Selection,
+            selection: Rect {
+                x: 12.5,
+                y: -40.0,
+                w: 300.0,
+                h: 200.25,
+            },
+        };
+        assert_eq!(Last::parse(&last.text()), Some(last));
+        assert_eq!(Last::parse("screen 0 0 10"), None);
+        assert_eq!(Last::parse("bogus 0 0 10 10"), None);
+        assert_eq!(Last::parse("window NaN 0 10 10"), None);
+    }
 
     #[test]
     fn spanning_any_direction() {

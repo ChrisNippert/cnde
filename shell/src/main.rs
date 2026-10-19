@@ -202,6 +202,8 @@ pub struct App {
     last_serial: u32,
     /// The screenshot tool, while the screen is frozen for one.
     screenshot: Option<screenshot::ScreenshotUi>,
+    /// Where the last screenshot was taken: the next one starts there.
+    screenshot_last: Option<screenshot::Last>,
     /// Every open window, from the compositor.
     windows: Vec<cnde_ipc::WindowInfo>,
     /// Which monitor edges windows touch (bars there go solid).
@@ -335,6 +337,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         launcher: None,
         docks: Vec::new(),
         screenshot: None,
+        screenshot_last: screenshot::Last::load(),
         menu: None,
         desktop_holder: None,
         last_serial: 0,
@@ -584,6 +587,7 @@ impl App {
             &self.qh,
             monitors,
             windows,
+            self.screenshot_last,
         ));
     }
 
@@ -606,6 +610,13 @@ impl App {
                 self.ipc.send(&cnde_ipc::Request::CancelScreenshot);
             }
             screenshot::Outcome::Take(target) => {
+                if let Some(ui) = &self.screenshot {
+                    let last = ui.last();
+                    if self.screenshot_last != Some(last) {
+                        last.save();
+                        self.screenshot_last = Some(last);
+                    }
+                }
                 // Gone at once: the shot is cut from the frozen screen,
                 // which never had this tool on it.
                 self.screenshot = None;
