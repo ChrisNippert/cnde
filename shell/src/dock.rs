@@ -311,6 +311,19 @@ pub struct Dock {
     /// A window's against the dock's edge: a frosted dock fades to solid.
     pub solid: bool,
     solid_fade: cnde_ui::Animator<()>,
+    /// Autohide (`dock.visibility`): slides off the edge while a window
+    /// touches it.
+    pub autohide: bool,
+    /// A window touches the dock's edge (held while the overview is open).
+    pub touched: bool,
+    /// Something keeps it shown: the overview, editing, or a menu.
+    pub pinned: bool,
+    /// The pointer is on the dock.
+    pointer_in: bool,
+    /// When the pointer left it, for the linger before it hides again.
+    left_at: Option<std::time::Instant>,
+    /// Exclusive zone last asked for.
+    zone: i32,
     /// Room either side of each icon (`dock.padding`).
     pub pad: f32,
     pub launcher: LauncherPlace,
@@ -337,6 +350,44 @@ enum Shape {
     Float,
     /// Across the whole edge (1) or sized to its icons (0).
     Stretch,
+    /// Slid off the edge (1) or shown (0).
+    Hide,
+}
+
+/// How long the slide off the edge takes.
+const SLIDE: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long it waits after the pointer leaves before sliding away.
+pub const HIDE_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+/// Logical pixels left on screen when hidden, to point at.
+const HOT_STRIP: i32 = 2;
+
+/// Whether an autohide dock is slid away: only while a window touches its
+/// edge, and nothing holds it out.
+fn should_hide(autohide: bool, touched: bool, hovered: bool, pinned: bool) -> bool {
+    autohide && touched && !hovered && !pinned
+}
+
+/// Whether the pointer still counts as on the dock: on it, or left it
+/// less than [`HIDE_DELAY`] ago.
+fn hovered(pointer_in: bool, left_at: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    pointer_in || left_at.is_some_and(|t| now.saturating_duration_since(t) < HIDE_DELAY)
+}
+
+/// The margin from the edge `hide` (0 shown to 1 hidden) of the way off
+/// it: from `gap` down to `HOT_STRIP` px showing of a `thickness` dock.
+fn slid_margin(gap: i32, thickness: i32, hide: f32) -> i32 {
+    let hidden = -(thickness - HOT_STRIP).max(0);
+    (gap as f32 + (hidden - gap) as f32 * hide.clamp(0.0, 1.0)).round() as i32
+}
+
+/// The space kept free along the edge. An autohide dock a window touches
+/// keeps none, shown or not, so windows never move as it slides.
+fn zone_for(reserve: bool, mode: BarMode, autohide_touched: bool, across: i32, gap: i32) -> i32 {
+    match (reserve, autohide_touched, mode) {
+        (false, _, _) | (_, true, _) => 0,
+        (true, _, BarMode::Floating) => across + 2 * EDGE_MARGIN - gap,
+        (true, _, _) => across - gap,
+    }
 }
 
 /// How long an icon bounces at most when its app is slow to open.
@@ -427,6 +478,12 @@ impl Dock {
             frosted: false,
             solid: false,
             solid_fade: cnde_ui::Animator::new(),
+            autohide: false,
+            touched: false,
+            pinned: false,
+            pointer_in: false,
+            left_at: None,
+            zone: 0,
             pad: 8.0,
             launcher: LauncherPlace::default(),
             surface_size: (0, 0),
@@ -490,11 +547,13 @@ impl Dock {
     /// Where an edge dock is right now, easing towards where its mode and
     /// the windows touching it want it: its margins (from the edge, start
     /// side, end side) and its length along the edge.
-    fn edge_shape(&mut self, natural: f32) -> ((i32, i32, i32), f32) {
+    fn edge_shape(&mut self, natural: f32, across: i32) -> ((i32, i32, i32), f32) {
+        // A hiding dock neither attaches nor stretches: it slides away as
+        // it is (and shows the same when revealed over a window).
         let floats = match self.mode {
             BarMode::Attached => false,
             BarMode::Floating => true,
-            BarMode::Auto => !self.solid,
+            BarMode::Auto => !self.solid || self.autohiding(),
         };
         let stretches = !floats && self.extend;
         let medium = cnde_ui::anim::MEDIUM;
@@ -504,6 +563,15 @@ impl Dock {
         let stretch = self
             .shape
             .get(Shape::Stretch, if stretches { 1.0 } else { 0.0 }, medium);
+        let hide = self.shape.get(
+            Shape::Hide,
+            if self.hidden(std::time::Instant::now()) {
+                1.0
+            } else {
+                0.0
+            },
+            SLIDE,
+        );
         let full = self.edge_length as f32;
         if full <= 0.0 {
             return ((EDGE_MARGIN, 0, 0), natural);
@@ -519,40 +587,76 @@ impl Dock {
         let length = (natural + (full - natural) * stretch).round();
         let start = (pill_start * (1.0 - stretch)).round();
         let end = (full - length - start).max(0.0);
-        let gap = (edge * float).round() as i32;
+        let gap = slid_margin((edge * float).round() as i32, across, hide);
         ((gap, start as i32, end as i32), full - start - end)
+    }
+
+    /// Autohide is on and a window touches the dock's edge: it hides
+    /// unless held out, and gives up its zone either way.
+    fn autohiding(&self) -> bool {
+        self.autohide && self.touched
+    }
+
+    /// Whether it's slid off the edge now.
+    fn hidden(&self, now: std::time::Instant) -> bool {
+        self.on_edge()
+            && should_hide(
+                self.autohide,
+                self.touched,
+                hovered(self.pointer_in, self.left_at, now),
+                self.pinned,
+            )
+    }
+
+    /// The pointer entered or left the dock.
+    pub fn pointer(&mut self, inside: bool) {
+        self.pointer_in = inside;
+        self.left_at = (!inside).then(std::time::Instant::now);
+    }
+
+    /// Something that held it out just let go: wait a moment before hiding.
+    pub fn linger(&mut self) {
+        if !self.pointer_in {
+            self.left_at = Some(std::time::Instant::now());
+        }
     }
 
     /// Set the margins (and the space kept free) for the shape now.
     fn apply_edge_shape(&mut self, icon: f32) {
+        // Tweens that start here (a timer, not a frame) start now.
+        self.shape.begin();
         let natural = self.natural_layout(icon);
         let (along, across) = if self.vertical() {
             (natural.height, natural.width.ceil() as i32)
         } else {
             (natural.width, natural.height.ceil() as i32)
         };
-        let (margins, length) = self.edge_shape(along);
+        let (margins, length) = self.edge_shape(along, across);
         self.length = length;
-        if margins == self.margins {
-            return;
+        // From what it wants, not where the slide has got to, so nothing
+        // resizes frame by frame.
+        let zone = zone_for(
+            self.reserve,
+            self.mode,
+            self.autohiding(),
+            across,
+            // Margin plus zone stays the thickness, so the gap it floats
+            // off by is what the zone gives up.
+            if self.autohiding() { 0 } else { margins.0.max(0) },
+        );
+        if margins != self.margins {
+            self.margins = margins;
+            let (gap, start, end) = margins;
+            match self.position {
+                DockPosition::Left => self.layer.set_margin(start, 0, end, gap),
+                DockPosition::Right => self.layer.set_margin(start, gap, end, 0),
+                _ => self.layer.set_margin(0, end, gap, start),
+            }
         }
-        self.margins = margins;
-        let (gap, start, end) = margins;
-        match self.position {
-            DockPosition::Left => self.layer.set_margin(start, 0, end, gap),
-            DockPosition::Right => self.layer.set_margin(start, gap, end, 0),
-            _ => self.layer.set_margin(0, end, gap, start),
+        if zone != self.zone {
+            self.zone = zone;
+            self.layer.set_exclusive_zone(zone);
         }
-        // Maximized windows stop at the dock, unless it floats over them.
-        // Attached or auto, margin plus zone stays the dock's thickness, so
-        // nothing moves as it floats off or snaps back; floating for good,
-        // there's a gap either side of it.
-        let zone = match (self.reserve, self.mode) {
-            (false, _) => 0,
-            (true, BarMode::Floating) => across + 2 * EDGE_MARGIN - gap,
-            (true, _) => across - gap,
-        };
-        self.layer.set_exclusive_zone(zone);
     }
 
     /// Recompute the size after starting or finishing editing.
@@ -1171,6 +1275,40 @@ fn badge_rect(cell: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hides_only_when_touched_and_not_held_out() {
+        assert!(should_hide(true, true, false, false));
+        assert!(!should_hide(false, true, false, false));
+        assert!(!should_hide(true, false, false, false));
+        assert!(!should_hide(true, true, true, false));
+        assert!(!should_hide(true, true, false, true));
+    }
+
+    #[test]
+    fn pointer_lingers_before_hiding() {
+        let now = std::time::Instant::now();
+        assert!(hovered(true, None, now));
+        assert!(!hovered(false, None, now));
+        assert!(hovered(false, Some(now), now + HIDE_DELAY / 2));
+        assert!(!hovered(false, Some(now), now + HIDE_DELAY));
+    }
+
+    #[test]
+    fn slide_leaves_a_hot_strip() {
+        assert_eq!(slid_margin(12, 64, 0.0), 12);
+        assert_eq!(slid_margin(12, 64, 1.0), -(64 - HOT_STRIP));
+        assert_eq!(slid_margin(0, 64, 0.5), -31);
+        assert_eq!(slid_margin(0, 1, 1.0), 0);
+    }
+
+    #[test]
+    fn autohide_touched_keeps_no_zone() {
+        assert_eq!(zone_for(true, BarMode::Attached, true, 64, 0), 0);
+        assert_eq!(zone_for(true, BarMode::Attached, false, 64, 0), 64);
+        assert_eq!(zone_for(true, BarMode::Auto, false, 64, 12), 52);
+        assert_eq!(zone_for(false, BarMode::Attached, false, 64, 0), 0);
+    }
+
     use super::*;
 
     fn window(id: u64, app_id: &str, focused: bool) -> WindowInfo {

@@ -815,6 +815,13 @@ impl App {
             }
             dock.frosted = dock::frosted(self.config.dock.background);
             dock.solid = touched;
+            dock.autohide = self.config.dock.visibility != cnde_config::DockVisibility::Always;
+            // Windows aren't judged while the overview's open (it holds the
+            // dock out anyway); keep what they were.
+            if !self.overview_open {
+                dock.touched = touched;
+            }
+            dock.pinned = self.overview_open || self.dock_editing || self.menu.is_some();
             dock.mode = self.config.dock.mode;
             dock.edge_length = self
                 .outputs
@@ -841,6 +848,21 @@ impl App {
         {
             self.draw_launcher();
         }
+    }
+
+    /// Refresh the dock once an autohide dock's linger is over, so it can
+    /// slide away without anything else happening.
+    pub(crate) fn sync_dock_later(&self) {
+        if self.config.dock.visibility == cnde_config::DockVisibility::Always {
+            return;
+        }
+        let _ = self.loop_handle.insert_source(
+            Timer::from_duration(dock::HIDE_DELAY + Duration::from_millis(30)),
+            |_, _, app| {
+                app.sync_dock();
+                TimeoutAction::Drop
+            },
+        );
     }
 
     /// Act on a left or middle click on the dock.
@@ -1476,6 +1498,17 @@ impl PointerHandler for App {
             if let Some(dock) = &mut self.dock
                 && dock.layer.wl_surface() == &event.surface
             {
+                match event.kind {
+                    PointerEventKind::Enter { .. } => dock.pointer(true),
+                    PointerEventKind::Leave { .. } => {
+                        dock.pointer(false);
+                        self.sync_dock_later();
+                    }
+                    _ => {}
+                }
+                let Some(dock) = &mut self.dock else {
+                    continue;
+                };
                 let right_click = matches!(
                     event.kind,
                     PointerEventKind::Press {
