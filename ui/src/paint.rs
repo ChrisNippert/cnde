@@ -221,10 +221,27 @@ impl<'a> Canvas<'a> {
         track: Color,
         fill: Color,
     ) {
-        self.rounded_rect(x, y, w, h, h / 2.0, track);
+        self.slider_rounded(x, y, w, h, h / 2.0, value, track, fill);
+    }
+
+    /// Like `slider`, with corners of `radius` instead of a full pill.
+    #[allow(clippy::too_many_arguments)]
+    pub fn slider_rounded(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        value: f32,
+        track: Color,
+        fill: Color,
+    ) {
+        let radius = radius.min(h / 2.0);
+        self.rounded_rect(x, y, w, h, radius, track);
         let s = self.scale;
         let (px, py, pw, ph) = (x * s, y * s, w * s, h * s);
-        let Some(path) = rounded_rect_path(px, py, pw, ph, ph / 2.0) else {
+        let Some(path) = rounded_rect_path(px, py, pw, ph, radius * s) else {
             return;
         };
         let Some(mut mask) = Mask::new(self.pixmap.width(), self.pixmap.height()) else {
