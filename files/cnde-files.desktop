@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+Comment=Browse files and folders
+Exec=cnde-files %U
+Icon=system-file-manager
+Terminal=false
+MimeType=inode/directory;
+Categories=System;FileTools;FileManager;

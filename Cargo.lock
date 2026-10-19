@@ -452,6 +452,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cnde-files"
+version = "0.1.0"
+dependencies = [
+ "cnde-config",
+ "cnde-ipc",
+ "cnde-ui",
+ "image",
+ "rustix 1.1.5",
+ "smithay-client-toolkit 0.21.1",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cnde-ipc"
 version = "0.1.0"
 dependencies = [
