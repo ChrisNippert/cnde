@@ -63,7 +63,8 @@ impl WlrLayerShellHandler for State {
     }
 
     fn new_popup(&mut self, _parent: WlrLayerSurface, popup: PopupSurface) {
-        // Waybar tray menus etc. Positioned as requested, unconstrained.
+        // cnde's own menus, Waybar tray menus etc.: kept on the monitor.
+        self.unconstrain_popup(&popup);
         if let Err(err) = self.popups.track_popup(PopupKind::Xdg(popup)) {
             warn!(?err, "failed to track layer popup");
         }

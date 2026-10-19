@@ -206,11 +206,12 @@ impl State {
         }
     }
 
-    fn unconstrain_popup(&self, popup: &PopupSurface) {
+    pub fn unconstrain_popup(&self, popup: &PopupSurface) {
         let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) else {
             return;
         };
         let Some(window) = self.window_for_surface(&root) else {
+            self.unconstrain_layer_popup(popup, &root);
             return;
         };
         // Keep menus on the monitor their window is on.
@@ -232,6 +233,32 @@ impl State {
         popup.with_pending_state(|state| {
             state.geometry = state.positioner.get_unconstrained_geometry(target);
         });
+    }
+
+    /// The same for a menu of the bar, the dock or the desktop: kept on
+    /// the layer's monitor (flipped up near the bottom, and so on).
+    fn unconstrain_layer_popup(&self, popup: &PopupSurface, root: &WlSurface) {
+        for output in self.space.outputs() {
+            let map = smithay::desktop::layer_map_for_output(output);
+            let Some(layer) =
+                map.layer_for_surface(root, smithay::desktop::WindowSurfaceType::TOPLEVEL)
+            else {
+                continue;
+            };
+            let (Some(layer_geo), Some(output_geo)) =
+                (map.layer_geometry(layer), self.space.output_geometry(output))
+            else {
+                return;
+            };
+            // Relative to the parent, like the positioner.
+            let mut target = smithay::utils::Rectangle::from_size(output_geo.size);
+            target.loc -= layer_geo.loc;
+            target.loc -= get_popup_toplevel_coords(&PopupKind::Xdg(popup.clone()));
+            popup.with_pending_state(|state| {
+                state.geometry = state.positioner.get_unconstrained_geometry(target);
+            });
+            return;
+        }
     }
 }
 

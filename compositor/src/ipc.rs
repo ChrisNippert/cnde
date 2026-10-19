@@ -198,8 +198,8 @@ impl State {
                 self.launching = Some(std::time::Instant::now());
                 self.queue_redraw();
             }
-            Request::FakePointer { x, y, press } if cfg!(debug_assertions) => {
-                self.fake_pointer((x, y).into(), press)
+            Request::FakePointer { x, y, press, right } if cfg!(debug_assertions) => {
+                self.fake_pointer((x, y).into(), press, right)
             }
             Request::FakePointer { .. } => {}
             Request::FakeMediaKey { key } if cfg!(debug_assertions) => {

@@ -168,12 +168,15 @@ pub enum Request {
     /// End the session: stop the compositor, as Ctrl+Alt+Backspace does.
     LogOut,
     /// Testing aid, honoured only by debug builds: move the pointer to
-    /// (x, y) in the global space, then press or release the left button.
+    /// (x, y) in the global space, then press or release the left button
+    /// (the right one with `right`).
     FakePointer {
         x: f64,
         y: f64,
         #[serde(default)]
         press: Option<bool>,
+        #[serde(default)]
+        right: bool,
     },
     /// Testing aid, debug builds only: as if this key were pressed.
     FakeMediaKey {
