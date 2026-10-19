@@ -18,7 +18,7 @@ use crate::{
     model::{self, Drive, SortKey},
     pages::{self, Pages},
     search::{self, Search},
-    ops,
+    ops, transfer,
 };
 
 pub const SIDE_W: f32 = 228.0;
@@ -546,7 +546,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
             .measure(error, size, Weight::Normal)
             .min(w - SIDE_W - 48.0);
         let bw = tw + 32.0;
-        let (bx, by) = (SIDE_W + (w - SIDE_W - bw) / 2.0, h - 24.0 - 40.0);
+        let (bx, by) = (SIDE_W + (w - SIDE_W - bw) / 2.0, h - 24.0 - 40.0 - transfer::strip_room(ui));
         p.canvas
             .rounded_rect(bx, by, bw, 40.0, 20.0, Color::rgba(0x10, 0x10, 0x12, 0.96));
         p.label_v(
@@ -559,6 +559,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
             t.error,
         );
     }
+    transfer::paint_strip(ui, &mut p, &c, &mut out, w, h);
     ops::paint_menu(ui, &mut p, &mut out, w, h);
     out
 }
@@ -609,6 +610,11 @@ fn rows(
         if ui.keyboard_focus && folder.cursor == Some(pos) {
             p.canvas
                 .stroke_rounded_rect(rx, y, rw, ROW_H, 8.0, 2.0, t.focus_ring);
+        }
+        if ui.x.dnd.over == Some(crate::dnd::Over::Row(pos)) {
+            p.canvas.rounded_rect(rx, y, rw, ROW_H, 8.0, c.sel);
+            p.canvas
+                .stroke_rounded_rect(rx, y, rw, ROW_H, 8.0, 2.0, t.accent);
         }
         let cy = y + ROW_H / 2.0;
         let ink = c.ink;
@@ -1573,8 +1579,25 @@ mod tests {
                 fresh: false,
             });
         }
+        // CNDE_PREVIEW_PROGRESS=1 shows a copy under way.
+        if std::env::var_os("CNDE_PREVIEW_PROGRESS").is_some() {
+            ui.x.xfer.strip = Some(crate::transfer::Strip {
+                name: "Holiday photos 2025".into(),
+                done: 1_200_000_000,
+                total: 4_000_000_000,
+                since: std::time::Instant::now() - std::time::Duration::from_secs(2),
+                cancel: Default::default(),
+            });
+            if std::env::var("CNDE_PREVIEW_PROGRESS").as_deref() == Ok("toast") {
+                ui.error = Some("Can't copy “x”: Permission denied".into());
+            }
+        }
         if std::env::var_os("CNDE_PREVIEW_MENU").is_some() {
-            ui.x.menu = Some(ops::Menu { x: 420.0, y: 250.0 });
+            ui.x.menu = Some(ops::Menu {
+                x: 420.0,
+                y: 250.0,
+                empty: false,
+            });
         }
         let theme = Theme::for_appearance(&ui.config.appearance);
         let mut res = Res::new(theme, Icons::new());

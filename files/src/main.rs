@@ -5,12 +5,16 @@
 //! runs on a thread and reports back through one calloop channel, so the
 //! window never waits on a slow disk.
 
+mod clipboard;
+mod dnd;
 mod folder;
 mod grid;
 mod info;
 mod model;
 mod pages;
 mod search;
+mod transfer;
+mod undo;
 mod ops;
 mod view;
 
@@ -34,6 +38,7 @@ use rustix::{
 use smithay_client_toolkit::reexports::client::backend::WaylandError;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData},
+    data_device_manager::DataDeviceManagerState,
     delegate_dispatch2, delegate_registry,
     dispatch2::Dispatch2,
     output::{OutputHandler, OutputState},
@@ -128,6 +133,8 @@ enum Event {
     Made(String),
     /// A rename went through; select the new name.
     Renamed(String),
+    /// Copy, move, clipboard, drop and undo work.
+    Xfer(transfer::Msg),
 }
 
 struct App {
@@ -183,6 +190,11 @@ struct App {
     last_header_click: Option<Instant>,
     error_timer: Option<RegistrationToken>,
     screen: Option<cnde_ui::Color>,
+    /// The clipboard and drag-and-drop, if the compositor has them.
+    data: Option<clipboard::Data>,
+    /// The serial of the last click or key, which selections and drags need.
+    serial: u32,
+    undo: undo::Stack,
 }
 
 /// Why the Wayland connection is dead, if it is.
@@ -328,6 +340,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         search: Search::default(),
         x: ops::Extra::default(),
     };
+    let data = DataDeviceManagerState::bind(&globals, &qh)
+        .ok()
+        .map(|manager| clipboard::Data {
+            manager,
+            device: None,
+            selection: None,
+            drag: None,
+        });
     let mut app = App {
         registry: RegistryState::new(&globals),
         outputs: OutputState::new(&globals, &qh),
@@ -375,6 +395,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_header_click: None,
         error_timer: None,
         screen: None,
+        data,
+        serial: 0,
+        undo: undo::Stack::default(),
     };
     WaylandSource::new(conn.clone(), queue).insert(event_loop.handle())?;
     watch_config(&mut app);
@@ -547,6 +570,7 @@ impl App {
                 self.reveal = Some(name);
                 self.refresh_dir();
             }
+            Event::Xfer(msg) => self.xfer_msg(msg),
             Event::Screen(screen) => {
                 if screen != self.screen {
                     self.screen = screen;
@@ -850,6 +874,11 @@ impl App {
 
     fn show_error(&mut self, message: String) {
         warn!(message);
+        self.show_notice(message);
+    }
+
+    /// Show a message in the toast for a few seconds.
+    fn show_notice(&mut self, message: String) {
         self.ui.error = Some(message);
         if let Some(token) = self.error_timer.take() {
             self.loop_handle.remove(token);
@@ -913,6 +942,7 @@ impl App {
     }
 
     fn press(&mut self, position: (f64, f64), serial: u32) {
+        self.serial = serial;
         if self.menu_press(position) {
             return;
         }
@@ -926,7 +956,7 @@ impl App {
             return;
         }
         let Some(target) = self.painted.hit(position) else {
-            self.press_list(position);
+            self.press_list(position, serial);
             return;
         };
         match target {
@@ -1005,7 +1035,7 @@ impl App {
     }
 
     /// A press in the list: select, or open on a double click.
-    fn press_list(&mut self, position: (f64, f64)) {
+    fn press_list(&mut self, position: (f64, f64), serial: u32) {
         let Some(pos) = self.row_at(position) else {
             if self.painted.list.contains(position) {
                 self.ui.folder.clear_selection();
@@ -1018,12 +1048,20 @@ impl App {
         let double = self
             .last_click
             .is_some_and(|(t, p)| p == pos && now - t < DOUBLE_CLICK);
+        let part_of_many = self.ui.folder.is_selected(pos) && self.ui.folder.selected.len() > 1;
         if ctrl {
             self.ui.folder.toggle(pos);
         } else if shift {
             self.ui.folder.select_range(pos);
+        } else if part_of_many {
+            // It narrows on release, so the whole selection can be dragged.
+            self.ui.folder.cursor = Some(pos);
+            self.ui.x.dnd.defer = Some(pos);
         } else {
             self.ui.folder.select_only(pos);
+        }
+        if self.ui.folder.is_selected(pos) {
+            self.drag_arm(position, serial);
         }
         if double && !ctrl && !shift {
             self.last_click = None;
@@ -1082,6 +1120,10 @@ impl App {
                 self.exit.stop();
                 return;
             }
+            Keysym::c | Keysym::C if ctrl => self.copy_files(false),
+            Keysym::x | Keysym::X if ctrl => self.copy_files(true),
+            Keysym::v | Keysym::V if ctrl => self.paste(),
+            Keysym::z | Keysym::Z if ctrl && !shift => self.undo_last(),
             Keysym::a | Keysym::A if ctrl => self.ui.folder.select_all(),
             Keysym::h | Keysym::H if ctrl => {
                 let show = !self.ui.folder.show_hidden;
@@ -1437,6 +1479,11 @@ impl SeatHandler for App {
                 )
                 .ok();
         }
+        if let Some(data) = &mut self.data
+            && data.device.is_none()
+        {
+            data.device = Some(data.manager.get_data_device(qh, &seat));
+        }
         self.seat_handle = Some(seat);
     }
     fn remove_capability(
@@ -1475,6 +1522,7 @@ impl PointerHandler for App {
                     self.pointer_inside = true;
                     let entered = matches!(event.kind, PointerEventKind::Enter { .. });
                     self.update_cursor(entered);
+                    self.drag_motion(event.position);
                     let hover = self.painted.hit(event.position);
                     let row = self.row_at(event.position);
                     if hover != self.ui.hover || row != self.ui.hover_row {
@@ -1494,6 +1542,9 @@ impl PointerHandler for App {
                     serial,
                     ..
                 } => self.press(event.position, serial),
+                PointerEventKind::Release {
+                    button: BTN_LEFT, ..
+                } => self.drag_release(),
                 PointerEventKind::Press {
                     button: BTN_RIGHT, ..
                 } => self.context_click(event.position),
@@ -1559,9 +1610,10 @@ impl KeyboardHandler for App {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: u32,
+        serial: u32,
         event: KeyEvent,
     ) {
+        self.serial = serial;
         self.key(event);
     }
     fn repeat_key(

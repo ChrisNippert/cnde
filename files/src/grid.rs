@@ -141,6 +141,10 @@ pub fn paint(
             p.canvas
                 .stroke_rounded_rect(tx, y, tw, th, 12.0, 2.0, t.focus_ring);
         }
+        if ui.x.dnd.over == Some(crate::dnd::Over::Row(pos)) {
+            p.canvas.rounded_rect(tx, y, tw, th, 12.0, c.sel);
+            p.canvas.stroke_rounded_rect(tx, y, tw, th, 12.0, 2.0, t.accent);
+        }
         let cx = x + g.tile_w / 2.0;
         let color = if entry.is_dir { c.fold } else { c.dim };
         p.icon(view::icon_for(entry), cx, y + TOP + ICON / 2.0, ICON, color);

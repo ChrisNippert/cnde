@@ -17,3 +17,6 @@ pub use fuzzy::fuzzy_score;
 pub use listing::{Entry, SortKey, dir_size, kind_of, list_dir, sort};
 pub use recent::{Recent, recent};
 pub use trash::{trash, trash_dir, trash_size};
+pub(crate) use trash::trash_in;
+#[cfg(test)]
+pub(crate) use listing::test_dir;

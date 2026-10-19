@@ -4,7 +4,6 @@
 
 use std::{
     fs,
-    io::Write,
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -29,6 +28,8 @@ use tracing::debug;
 
 use crate::{
     App, Event,
+    transfer::Msg,
+    undo::Action,
     folder::Location,
     info,
     model::{self, Entry},
@@ -57,15 +58,25 @@ pub enum Act {
     Trash,
     CopyPath,
     Terminal,
+    Copy,
+    Cut,
+    Paste,
+    /// The × on the progress strip.
+    CancelTransfer,
 }
 
-const MENU: [(Act, &str); 5] = [
+const MENU: [(Act, &str); 8] = [
     (Act::Open, "Open"),
     (Act::Rename, "Rename"),
+    (Act::Copy, "Copy"),
+    (Act::Cut, "Cut"),
+    (Act::Paste, "Paste"),
     (Act::Trash, "Move to Trash"),
     (Act::CopyPath, "Copy path"),
     (Act::Terminal, "Terminal here"),
 ];
+/// The menu over empty space in the list.
+const MENU_EMPTY: [(Act, &str); 2] = [(Act::Paste, "Paste"), (Act::Terminal, "Terminal here")];
 
 /// A name being edited in place.
 pub struct Rename {
@@ -82,6 +93,8 @@ pub struct Rename {
 pub struct Menu {
     pub x: f32,
     pub y: f32,
+    /// Over empty space, not a row.
+    pub empty: bool,
 }
 
 /// The window state these operations keep.
@@ -92,6 +105,8 @@ pub struct Extra {
     pub menu: Option<Menu>,
     /// A new folder to start renaming once the listing has it.
     pub pending_rename: Option<String>,
+    pub xfer: crate::transfer::State,
+    pub dnd: crate::dnd::State,
     pub refresh_seq: u64,
     refresh_timer: Option<RegistrationToken>,
     watch: Option<RegistrationToken>,
@@ -122,15 +137,16 @@ pub fn paint_menu(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, w: f32, h
     let Some(menu) = &ui.x.menu else {
         return;
     };
-    let labels: Vec<&str> = MENU.iter().map(|(_, l)| *l).collect();
+    let items: &[(Act, &str)] = if menu.empty { &MENU_EMPTY } else { &MENU };
+    let labels: Vec<&str> = items.iter().map(|(_, l)| *l).collect();
     let mh = Painter::popover_height(labels.len());
     let x = menu.x.min(w - MENU_W - 8.0).max(8.0);
     let y = menu.y.min(h - mh - 8.0).max(8.0);
-    let hover = |i: usize| (ui.hover == Some(Target::Act(MENU[i].0))) as u8 as f32;
+    let hover = |i: usize| (ui.hover == Some(Target::Act(items[i].0))) as u8 as f32;
     let rects = p.popover(x, y, MENU_W, &labels, None, hover, 1.0);
     out.menu_rows = rects.len();
-    for (rect, (act, _)) in rects.into_iter().zip(MENU) {
-        out.hits.push((rect, Target::Act(act)));
+    for (rect, (act, _)) in rects.into_iter().zip(items) {
+        out.hits.push((rect, Target::Act(*act)));
     }
 }
 
@@ -180,6 +196,11 @@ impl App {
             .collect()
     }
 
+    /// The selected entries' paths, in listing order.
+    pub(crate) fn selected_paths(&self) -> Vec<PathBuf> {
+        self.selected_entries().into_iter().map(|e| e.path).collect()
+    }
+
     /// What an action applies to: the selection, else the open folder.
     fn target_paths(&self) -> Vec<PathBuf> {
         let sel = self.selected_entries();
@@ -194,6 +215,7 @@ impl App {
 
     pub(crate) fn act(&mut self, act: Act) {
         self.ui.x.menu = None;
+        debug!(?act, "menu action");
         match act {
             Act::Open => {
                 let f = &self.ui.folder;
@@ -209,6 +231,10 @@ impl App {
             Act::Trash => self.trash_selection(),
             Act::CopyPath => self.copy_path(),
             Act::Terminal => self.terminal_here(),
+            Act::Copy => self.copy_files(false),
+            Act::Cut => self.copy_files(true),
+            Act::Paste => self.paste(),
+            Act::CancelTransfer => self.cancel_transfer(),
         }
         self.redraw();
     }
@@ -231,7 +257,15 @@ impl App {
     pub(crate) fn context_click(&mut self, position: (f64, f64)) {
         self.ui.x.rename = None;
         let Some(pos) = self.row_at(position) else {
-            self.ui.x.menu = None;
+            // Empty space in a folder: a menu to paste into it.
+            let in_list = self.painted.list.contains(position)
+                && self.painted.hit(position).is_none()
+                && matches!(self.ui.location, Location::Dir(_));
+            self.ui.x.menu = in_list.then_some(Menu {
+                x: position.0 as f32,
+                y: position.1 as f32,
+                empty: true,
+            });
             self.redraw();
             return;
         };
@@ -242,6 +276,7 @@ impl App {
         self.ui.x.menu = Some(Menu {
             x: position.0 as f32,
             y: position.1 as f32,
+            empty: false,
         });
         self.redraw();
     }
@@ -265,6 +300,8 @@ impl App {
                     let _ = tx.send(Event::Error(format!(
                         "Can't move “{name}” to the Trash: {err}"
                     )));
+                } else {
+                    let _ = tx.send(Event::Xfer(Msg::Record(Action::Trashed(path))));
                 }
             }
             let _ = tx.send(Event::Refresh);
@@ -316,6 +353,11 @@ impl App {
             } else if let Err(err) = fs::rename(&from, &to) {
                 let _ = tx.send(Event::Error(format!("Can't rename “{}”: {err}", r.name)));
             } else {
+                let _ = tx.send(Event::Xfer(Msg::Record(Action::Rename {
+                    dir,
+                    from: r.name.clone(),
+                    to: new.clone(),
+                })));
                 let _ = tx.send(Event::Renamed(new));
             }
         });
@@ -335,6 +377,9 @@ impl App {
                 };
                 match fs::create_dir(dir.join(&name)) {
                     Ok(()) => {
+                        let _ = tx.send(Event::Xfer(Msg::Record(Action::NewFolder(
+                            dir.join(&name),
+                        ))));
                         let _ = tx.send(Event::Made(name));
                         return;
                     }
@@ -444,29 +489,7 @@ impl App {
         if text.is_empty() {
             return;
         }
-        let spawned = Command::new("wl-copy")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-        match spawned {
-            Ok(mut child) => {
-                std::thread::spawn(move || {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        let _ = stdin.write_all(text.as_bytes());
-                    }
-                    let _ = child.wait();
-                });
-            }
-            Err(err) => {
-                let why = if err.kind() == std::io::ErrorKind::NotFound {
-                    "Copying needs wl-clipboard (wl-copy) installed".to_string()
-                } else {
-                    format!("Can't copy: {err}")
-                };
-                self.show_error(why);
-            }
-        }
+        self.set_clipboard(crate::clipboard::Payload::Text(text));
     }
 
     pub(crate) fn terminal_here(&mut self) {
@@ -649,6 +672,7 @@ impl App {
         }
         self.ui.x.info.key = 0;
         self.reveal_pending();
+        self.apply_pending_select();
         if let Some(name) = self.ui.x.pending_rename.clone() {
             let f = &self.ui.folder;
             if let Some(pos) = f.visible.iter().position(|&i| f.entries[i].name == name) {
