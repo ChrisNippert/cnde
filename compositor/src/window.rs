@@ -198,11 +198,29 @@ impl State {
     /// monitors the window itself is on, and a fullscreen or maximized one
     /// only about its own. Runs after `Space::refresh`, which sends the
     /// buffer-based enters; the leaves go out in the same flush.
+    ///
+    /// `Space` keeps its own record of which outputs it entered the window
+    /// on and only re-sends an enter when that overlap changes. A bare
+    /// `output_leave` would leave the record saying "entered", so a later
+    /// move back onto that monitor (same overlap) was never announced. We
+    /// remember what we trimmed per window and re-send the enter ourselves
+    /// once the window belongs on that monitor again.
     pub fn trim_window_outputs(&mut self) {
-        let mut leaves = Vec::new();
+        enum Act {
+            Leave(Output),
+            Enter(Output, Rectangle<i32, Logical>),
+        }
+        let mut acts = Vec::new();
         for window in self.space.elements() {
             let entered = self.space.outputs_for_element(window);
-            if entered.len() < 2 && !entered.iter().any(|o| !self.window_on(window, o)) {
+            let trimmed_before = with_trimmed(window, |t| {
+                t.retain(|o| entered.contains(o));
+                !t.is_empty()
+            });
+            if entered.len() < 2
+                && !trimmed_before
+                && !entered.iter().any(|o| !self.window_on(window, o))
+            {
                 continue;
             }
             let own = matches!(
@@ -211,18 +229,47 @@ impl State {
             )
             .then(|| self.output_for(window))
             .flatten();
+            let bbox = self.space.element_bbox(window);
             for output in entered {
                 let keep = match &own {
                     Some(own) => *own == output,
                     None => self.window_on(window, &output),
                 };
                 if !keep {
-                    leaves.push((window.clone(), output));
+                    // Every time: a changed overlap makes `Space` re-enter.
+                    with_trimmed(window, |t| {
+                        if !t.contains(&output) {
+                            t.push(output.clone());
+                        }
+                    });
+                    acts.push((window.clone(), Act::Leave(output)));
+                } else if with_trimmed(window, |t| {
+                    let had = t.contains(&output);
+                    t.retain(|o| *o != output);
+                    had
+                }) {
+                    let overlap = bbox.zip(self.space.output_geometry(&output)).and_then(
+                        |(bbox, out)| {
+                            let mut overlap = out.intersection(bbox)?;
+                            overlap.loc -= bbox.loc;
+                            Some(overlap)
+                        },
+                    );
+                    if let Some(overlap) = overlap {
+                        acts.push((window.clone(), Act::Enter(output, overlap)));
+                    }
                 }
             }
         }
-        for (window, output) in leaves {
-            smithay::desktop::space::SpaceElement::output_leave(&window, &output);
+        for (window, act) in acts {
+            match act {
+                Act::Leave(output) => {
+                    smithay::desktop::space::SpaceElement::output_leave(&window, &output)
+                }
+                Act::Enter(output, overlap) => {
+                    smithay::desktop::space::SpaceElement::output_enter(&window, &output, overlap)
+                }
+            }
         }
     }
 
@@ -628,4 +675,15 @@ mod borderless_tests {
         assert!(!covers_output((2560, 1400).into(), (2560, 1440).into()));
         assert!(!covers_output((100, 100).into(), (0, 0).into()));
     }
+}
+
+/// Outputs we sent a window an `output_leave` for while `Space` still counts
+/// it as entered (see `trim_window_outputs`).
+#[derive(Default)]
+struct Trimmed(std::cell::RefCell<Vec<Output>>);
+
+fn with_trimmed<R>(window: &Window, f: impl FnOnce(&mut Vec<Output>) -> R) -> R {
+    let data = window.user_data();
+    data.insert_if_missing(Trimmed::default);
+    f(&mut data.get::<Trimmed>().unwrap().0.borrow_mut())
 }

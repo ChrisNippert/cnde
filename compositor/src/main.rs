@@ -95,10 +95,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.space.map_output(&output, (0, 0));
         // Debug aid: CNDE_NESTED_GHOST=1280x720 adds a second monitor to the
         // right that is never drawn, to exercise multi-monitor logic.
-        if let Some((w, h)) = std::env::var("CNDE_NESTED_GHOST").ok().and_then(|v| {
+        // CNDE_NESTED_GHOST=1920x1080@543 also offsets it vertically.
+        if let Some((w, h, gy)) = std::env::var("CNDE_NESTED_GHOST").ok().and_then(|v| {
+            let (size, y) = v.split_once('@').unwrap_or((&v, "0"));
             Some((
-                v.split_once('x')?.0.parse().ok()?,
-                v.split_once('x')?.1.parse().ok()?,
+                size.split_once('x')?.0.parse().ok()?,
+                size.split_once('x')?.1.parse().ok()?,
+                y.parse().ok()?,
             ))
         }) {
             let ghost = smithay::output::Output::new(
@@ -124,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ghost.set_preferred(mode);
             let x = state.space.output_geometry(&output).map_or(0, |g| g.size.w);
             tracing::info!(x, "ghost output");
-            state.space.map_output(&ghost, (x, 0));
+            state.space.map_output(&ghost, (x, gy));
         }
         // Offer every shm format the renderer can import, not just the two
         // mandatory ones (the udev backend does the same per GPU).

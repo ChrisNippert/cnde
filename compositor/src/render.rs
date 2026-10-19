@@ -410,13 +410,21 @@ fn window_elements(
         // hidden frame around the game); don't let it bleed onto a neighbour.
         let clip = (state.placement == Placement::Fullscreen)
             .then(|| rect.to_physical_precise_round::<_, i32>(scale));
-        elements.extend(surfaces.into_iter().filter_map(|surface| {
-            let surface = RescaleRenderElement::from_element(surface, origin, stretch);
-            match clip {
-                Some(clip) => CropRenderElement::from_element(surface, scale, clip)
-                    .map(OutputElement::WindowClipped),
-                None => Some(OutputElement::Window(surface)),
-            }
+        let surfaces: Vec<_> = surfaces
+            .into_iter()
+            .map(|surface| RescaleRenderElement::from_element(surface, origin, stretch))
+            .collect();
+        // Only crop when something actually sticks out: the common case
+        // draws exactly as an unclipped window does.
+        let clip = clip.filter(|clip| {
+            surfaces
+                .iter()
+                .any(|surface| !clip.contains_rect(smithay::backend::renderer::element::Element::geometry(surface, scale)))
+        });
+        elements.extend(surfaces.into_iter().filter_map(|surface| match clip {
+            Some(clip) => CropRenderElement::from_element(surface, scale, clip)
+                .map(OutputElement::WindowClipped),
+            None => Some(OutputElement::Window(surface)),
         }));
 
         // cnde's title bar, just above the geometry. It grows with the
