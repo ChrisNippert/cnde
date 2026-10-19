@@ -466,6 +466,8 @@ pub struct Dock {
     pub mode: BarMode,
     /// Where along its edge it sits; stretched, where its icons sit.
     pub align: DockAlign,
+    /// Where the floating pill sits along its edge; unset, `align`.
+    pub float_align: Option<DockAlign>,
     /// On a screen edge: maximized windows stop at it. Off, it floats over
     /// them.
     pub reserve: bool,
@@ -493,6 +495,7 @@ impl Default for Dock {
             extend: false,
             mode: BarMode::Auto,
             align: DockAlign::Center,
+            float_align: None,
             reserve: true,
             locked: false,
             system_monitor: "gnome-system-monitor".into(),

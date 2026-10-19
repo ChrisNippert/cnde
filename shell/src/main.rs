@@ -785,6 +785,7 @@ impl App {
                     != (
                         self.config.dock.extend && position != DockPosition::Overview,
                         self.config.dock.align,
+                        self.config.dock.float_align.unwrap_or(self.config.dock.align),
                         self.config.dock.reserve,
                     )
         }) {
@@ -809,6 +810,7 @@ impl App {
                 position,
                 self.config.dock.extend,
                 self.config.dock.align,
+                self.config.dock.float_align.unwrap_or(self.config.dock.align),
                 self.config.dock.reserve,
                 scale,
             ));

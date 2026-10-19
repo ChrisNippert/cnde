@@ -137,6 +137,7 @@
 # extend = false           # on an edge, while attached: stretch across the whole edge
 # mode = "auto"            # on an edge: "attached", "floating", or "auto" (floats until a window touches it)
 # align = "center"         # "start" (left/top), "center", "end" (right/bottom); stretched, moves the icons
+# float_align = "center"   # while floating as a pill: same choices as align; unset, same as align
 # reserve = true           # on an edge: maximized windows stop at it; false floats it over them
 # locked = false           # true: no dragging icons or the dock, and no edit mode
 # system_monitor = "gnome-system-monitor"  # "System Monitor" in the dock's menu runs this; "" hides it

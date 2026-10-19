@@ -304,6 +304,8 @@ pub struct Dock {
     /// Its current length along the edge, which the margins leave it.
     length: f32,
     align: DockAlign,
+    /// Where the floating pill sits; the icons' `align` is for when it's stretched.
+    float_align: DockAlign,
     /// On an edge, maximized windows stop at it (else it floats over them).
     reserve: bool,
     /// Translucent: the compositor frosts the wallpaper behind it.
@@ -407,6 +409,7 @@ impl Dock {
         position: DockPosition,
         extend: bool,
         align: DockAlign,
+        float_align: DockAlign,
         reserve: bool,
         scale: i32,
     ) -> Self {
@@ -474,6 +477,7 @@ impl Dock {
             margins: (0, 0, 0),
             length: 0.0,
             align,
+            float_align,
             reserve,
             frosted: false,
             solid: false,
@@ -505,8 +509,8 @@ impl Dock {
     }
 
     /// The layout settings it was made with (a change remakes it).
-    pub fn placement(&self) -> (bool, DockAlign, bool) {
-        (self.extend, self.align, self.reserve)
+    pub fn placement(&self) -> (bool, DockAlign, DockAlign, bool) {
+        (self.extend, self.align, self.float_align, self.reserve)
     }
 
     /// The icons at their natural size, before any stretching.
@@ -578,12 +582,11 @@ impl Dock {
         }
         let natural = natural.min(full);
         let edge = EDGE_MARGIN as f32;
-        let pill_start = match self.align {
-            DockAlign::Center => (full - natural) / 2.0,
-            DockAlign::Start => edge,
-            DockAlign::End => full - natural - edge,
-        }
-        .max(0.0);
+        // Where the pill sits: by `float_align` as it floats, `align` as it
+        // attaches, easing between them with the shape.
+        let pill_start = (pill_at(self.align, full, natural, edge) * (1.0 - float)
+            + pill_at(self.float_align, full, natural, edge) * float)
+            .max(0.0);
         let length = (natural + (full - natural) * stretch).round();
         let start = (pill_start * (1.0 - stretch)).round();
         let end = (full - length - start).max(0.0);
@@ -1218,6 +1221,15 @@ impl Look {
     }
 }
 
+/// Where a floating pill starts along an edge of length `full`.
+fn pill_at(align: DockAlign, full: f32, natural: f32, edge: f32) -> f32 {
+    match align {
+        DockAlign::Center => (full - natural) / 2.0,
+        DockAlign::Start => edge,
+        DockAlign::End => full - natural - edge,
+    }
+}
+
 /// A stretched dock: the same cells, placed along `length` by `align`.
 fn spread(mut layout: Layout, length: f32, vertical: bool, align: DockAlign) -> Layout {
     let natural = if vertical {
@@ -1376,6 +1388,14 @@ mod tests {
         assert_eq!(first(DockAlign::End), l.cells[0].x + 1000.0 - l.width);
         assert!(first(DockAlign::Start) < first(DockAlign::Center));
         assert!(first(DockAlign::Center) < first(DockAlign::End));
+    }
+
+    #[test]
+    fn floating_pill_is_placed_by_its_own_align() {
+        let at = |align| pill_at(align, 1000.0, 200.0, 10.0);
+        assert_eq!(at(DockAlign::Start), 10.0);
+        assert_eq!(at(DockAlign::Center), 400.0);
+        assert_eq!(at(DockAlign::End), 790.0);
     }
 
     /// `CNDE_DOCK_PREVIEW=/path cargo test -p cnde-shell dock_preview -- --ignored`
