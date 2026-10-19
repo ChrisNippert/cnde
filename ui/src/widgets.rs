@@ -20,6 +20,9 @@ pub struct Rect {
     pub h: f32,
 }
 
+/// Space between a segmented control's track edge and its segments.
+const SEGMENT_PAD: f32 = 4.0;
+
 impl Rect {
     pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x, y, w, h }
@@ -133,16 +136,17 @@ impl Painter<'_, '_> {
     /// The width [`Painter::segmented`] will take.
     pub fn segmented_width(&mut self, labels: &[&str]) -> f32 {
         let size = self.theme.font_size;
-        labels
+        let inner: f32 = labels
             .iter()
             .map(|l| self.measure(l, size, Weight::Normal) + 24.0)
-            .sum()
+            .sum();
+        inner + 2.0 * SEGMENT_PAD
     }
 
-    /// Linked toggle buttons, one per label; (`x`, `y`) is the top-left.
-    /// `selected` is the lit button's index, fractional while the
+    /// Linked toggle buttons in a track, one per label; (`x`, `y`) is the
+    /// top-left. `selected` is the lit button's index, fractional while the
     /// highlight slides between two; `hover(i)` is each button's hover
-    /// (0-1). Returns each button's rect.
+    /// (0-1). Returns each button's rect (the track's full height).
     pub fn segmented(
         &mut self,
         x: f32,
@@ -155,27 +159,22 @@ impl Painter<'_, '_> {
         let h = t.button_height;
         let size = t.font_size;
         let width = self.segmented_width(labels);
+        let inner_r = (t.button_radius - SEGMENT_PAD / 2.0).max(2.0);
         self.canvas
             .rounded_rect(x, y, width, h, t.button_radius, t.button_background);
         let mut rects = Vec::with_capacity(labels.len());
-        let mut bx = x;
+        let mut bx = x + SEGMENT_PAD;
         for label in labels {
             let w = self.measure(label, size, Weight::Normal) + 24.0;
             rects.push(Rect::new(bx, y, w, h));
             bx += w;
         }
+        let (sy, sh) = (y + SEGMENT_PAD, h - 2.0 * SEGMENT_PAD);
         for (i, r) in rects.iter().enumerate() {
             let amount = hover(i);
             if amount > 0.0 {
                 let color = t.hover.with_alpha(t.hover.a * amount);
-                self.canvas.rounded_rect(
-                    r.x + 2.0,
-                    r.y + 2.0,
-                    r.w - 4.0,
-                    h - 4.0,
-                    t.button_radius - 2.0,
-                    color,
-                );
+                self.canvas.rounded_rect(r.x, sy, r.w, sh, inner_r, color);
             }
         }
         // The highlight, between the two buttons it's sliding between.
@@ -186,14 +185,7 @@ impl Painter<'_, '_> {
             let b = rects[(i + 1).min(rects.len() - 1)];
             let hx = a.x + (b.x - a.x) * f;
             let hw = a.w + (b.w - a.w) * f;
-            self.canvas.rounded_rect(
-                hx + 2.0,
-                y + 2.0,
-                hw - 4.0,
-                h - 4.0,
-                t.button_radius - 2.0,
-                t.accent,
-            );
+            self.canvas.rounded_rect(hx, sy, hw, sh, inner_r, t.accent);
         }
         for (i, (label, r)) in labels.iter().zip(&rects).enumerate() {
             // Text turns to the on-accent colour as the highlight arrives.
