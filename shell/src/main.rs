@@ -826,19 +826,22 @@ impl App {
                     _ => e.bottom,
                 })
         });
-        // A maximized window's colour along a bottom dock's edge.
-        let tint = self
-            .dock
-            .as_ref()
-            .filter(|dock| {
-                !matches!(
-                    dock.position(),
-                    cnde_config::DockPosition::Left | cnde_config::DockPosition::Right
-                )
-            })
-            .and_then(|dock| self.edges_of(&dock.output))
-            .and_then(|e| e.bottom_tint)
-            .map(|[r, g, b]| cnde_ui::Color::rgb(r, g, b));
+        // The colour to take (`dock.adaptive_color`). Only a bottom dock
+        // has a window's bottom edge colour to follow.
+        let tint = self.dock.as_ref().and_then(|dock| {
+            let e = self.edges_of(&dock.output)?;
+            let side = matches!(
+                dock.position(),
+                cnde_config::DockPosition::Left | cnde_config::DockPosition::Right
+            );
+            let colour = |c: Option<[u8; 3]>| c.map(|[r, g, b]| cnde_ui::Color::rgb(r, g, b));
+            cnde_ui::tint::dock_choice(
+                self.config.dock.adaptive_color,
+                colour(e.top_tint),
+                colour(e.bottom_tint.filter(|_| !side)),
+                colour(e.wallpaper_tint),
+            )
+        });
         if let Some(dock) = &mut self.dock {
             if dock.edit.is_some() != self.dock_editing {
                 dock.edit = self.dock_editing.then(dock::DockEdit::default);
@@ -941,6 +944,7 @@ impl App {
     }
 
     fn draw_quick_settings(&mut self) {
+        let theme = self.popup_theme();
         if let Some((qs, _)) = &mut self.quick_settings {
             qs.draw(
                 &self.qh,
@@ -948,13 +952,14 @@ impl App {
                 self.shm_format,
                 &mut self.fonts,
                 &mut self.icons,
-                &self.theme,
+                &theme,
                 &self.status,
             );
         }
     }
 
     fn draw_calendar(&mut self) {
+        let theme = self.popup_theme();
         if let Some(calendar) = &mut self.calendar {
             calendar.draw(
                 &self.qh,
@@ -962,8 +967,17 @@ impl App {
                 self.shm_format,
                 &mut self.fonts,
                 &mut self.icons,
-                &self.theme,
+                &theme,
             );
+        }
+    }
+
+    /// The theme popups (quick settings, the calendar, menus) draw in: the
+    /// bar's current colour, with their own translucency.
+    pub fn popup_theme(&self) -> Theme {
+        match self.panels.iter().find_map(|p| p.shown) {
+            Some(shown) => shown.apply_translucent(&self.theme),
+            None => self.theme.clone(),
         }
     }
 
@@ -1135,11 +1149,14 @@ impl App {
             .panels
             .get(index)
             .and_then(|p| self.edges_of(&p.output))
-            .and_then(|e| e.top_tint)
-            .map(|[r, g, b]| cnde_ui::Color::rgb(r, g, b));
+            .and_then(|e| {
+                let colour = |c: Option<[u8; 3]>| c.map(|[r, g, b]| cnde_ui::Color::rgb(r, g, b));
+                cnde_ui::tint::bar_choice(colour(e.top_tint), colour(e.wallpaper_tint))
+            });
         let Some(panel) = self.panels.get_mut(index) else {
             return;
         };
+        let was = panel.shown;
         panel.draw(
             &mut self.pool,
             self.shm_format,
@@ -1167,6 +1184,12 @@ impl App {
                 tint,
             },
         );
+        // Popups wear the bar's colour, so they follow it.
+        if self.panels[index].shown != was {
+            self.draw_quick_settings();
+            self.draw_calendar();
+            self.draw_menu();
+        }
     }
 }
 

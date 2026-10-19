@@ -313,11 +313,10 @@ pub struct Dock {
     /// A window's against the dock's edge: a frosted dock fades to solid.
     pub solid: bool,
     solid_fade: cnde_ui::Animator<()>,
-    /// A maximized window's colour along the dock's edge, to take.
-    pub tint: Option<Color>,
-    /// Taking it (1), and the colour last taken.
-    tint_fade: cnde_ui::Animator<()>,
-    last_tint: Option<Color>,
+    /// The colour for the dock to take (`dock.adaptive_color`).
+    pub tint: Option<cnde_ui::Tint>,
+    /// Easing towards it.
+    tint_fade: cnde_ui::TintFade,
     /// Autohide (`dock.visibility`): slides off the edge while a window
     /// touches it.
     pub autohide: bool,
@@ -488,8 +487,7 @@ impl Dock {
             solid: false,
             solid_fade: cnde_ui::Animator::new(),
             tint: None,
-            tint_fade: cnde_ui::Animator::new(),
-            last_tint: None,
+            tint_fade: cnde_ui::TintFade::new(),
             autohide: false,
             touched: false,
             pinned: false,
@@ -874,22 +872,13 @@ impl Dock {
             if self.solid { 1.0 } else { 0.0 },
             cnde_ui::anim::MEDIUM,
         );
-        self.tint_fade.begin();
-        let matching = self.tint_fade.get(
-            (),
-            if self.tint.is_some() { 1.0 } else { 0.0 },
-            cnde_ui::anim::MEDIUM,
-        );
-        if self.tint.is_some() {
-            self.last_tint = self.tint;
-        }
         let matched;
-        let theme = match self.last_tint {
-            Some(tint) if matching > 0.0 => {
-                matched = theme.matched(tint, matching);
+        let theme = match self.tint_fade.update(self.tint) {
+            Some(shown) => {
+                matched = shown.apply(theme);
                 &matched
             }
-            _ => theme,
+            None => theme,
         };
         // Bouncing icons: done once the app has a window, or after a while.
         let items = &self.items;

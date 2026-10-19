@@ -193,6 +193,7 @@ impl App {
     }
 
     pub fn draw_menu(&mut self) {
+        let theme = self.popup_theme();
         if let Some(menu) = &mut self.menu {
             menu.draw(
                 &self.qh,
@@ -200,7 +201,7 @@ impl App {
                 self.shm_format,
                 &mut self.fonts,
                 &mut self.icons,
-                &self.theme,
+                &theme,
             );
         }
     }

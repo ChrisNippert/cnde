@@ -14,6 +14,7 @@ pub mod icons;
 pub mod paint;
 pub mod text;
 pub mod theme;
+pub mod tint;
 pub mod widgets;
 
 pub use anim::Animator;
@@ -21,6 +22,7 @@ pub use icons::Icons;
 pub use paint::Canvas;
 pub use text::{Fonts, TextLayout, Weight};
 pub use theme::{Color, Theme};
+pub use tint::{Shown, Tint, TintFade};
 pub use widgets::{Painter, Rect};
 // For callers that keep their own images (the settings app's thumbnails).
 pub use tiny_skia;
