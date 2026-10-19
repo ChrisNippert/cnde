@@ -1345,6 +1345,44 @@ mod tests {
         painted
     }
 
+    /// Paint time while scrolling, at 2560x1440 and 1.25x (a laptop):
+    /// `cargo test --release -p cnde-settings scroll_bench -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn scroll_bench() {
+        let (w, h, scale) = (2560u32, 1440u32, 1.25);
+        let ui0 = ui(Page::Appearance);
+        let theme = Theme::for_appearance(&ui0.config.appearance);
+        let mut res = Res {
+            fonts: Fonts::new(theme.font_families),
+            icons: Icons::new(),
+            theme,
+            anim: Anim::new(),
+        };
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        for page in [Page::Appearance, Page::Accessibility] {
+            let mut ui = ui(page);
+            let frames = 60;
+            let mut total = std::time::Duration::ZERO;
+            let mut worst = std::time::Duration::ZERO;
+            for i in 0..frames {
+                ui.scroll = (i * 12) as f32;
+                let started = std::time::Instant::now();
+                let mut canvas = Canvas::new(&mut pixels, w, h, scale).unwrap();
+                let painted = paint(&ui, &mut res, &mut canvas);
+                let took = started.elapsed();
+                ui.scroll = ui.scroll.min(painted.max_scroll);
+                total += took;
+                worst = worst.max(took);
+            }
+            println!(
+                "{page:?}: {:.1} ms a frame, worst {:.1} ms",
+                total.as_secs_f64() * 1000.0 / frames as f64,
+                worst.as_secs_f64() * 1000.0
+            );
+        }
+    }
+
     /// `CNDE_PREVIEW=out.png CNDE_PREVIEW_PAGE=wifi|appearance|power|displays
     /// CNDE_PREVIEW_THEME=quiet|quiet-light|light` renders a page to a PNG.
     #[test]
