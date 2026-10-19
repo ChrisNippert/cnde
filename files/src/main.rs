@@ -540,6 +540,7 @@ impl App {
 
     /// Start listing `path` on a thread; whatever was loading stops.
     fn open_dir(&mut self, path: PathBuf) {
+        debug!(path = %path.display(), "opening folder");
         self.cancel.store(true, Ordering::Relaxed);
         self.cancel = Arc::new(AtomicBool::new(false));
         self.generation += 1;
