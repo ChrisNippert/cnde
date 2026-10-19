@@ -2787,7 +2787,8 @@ fn power(c: &Config, d: &Config, power_mode: Option<&crate::power_mode::State>) 
 }
 
 fn accessibility(c: &Config, d: &Config) -> Vec<Group> {
-    vec![group(
+    vec![
+        group(
         "Motion",
         vec![
             Row::new(
@@ -2822,6 +2823,19 @@ fn accessibility(c: &Config, d: &Config) -> Vec<Group> {
             )
             .sub("Below 1× is faster, above is slower")
             .advanced(),
+        ],
+    ),
+    group(
+        "Sound",
+        vec![
+            Row::new(
+                "sound.event_sounds",
+                "Event sounds",
+                Control::switch(),
+                Value::Bool(c.sound.event_sounds),
+                Value::Bool(d.sound.event_sounds),
+            )
+            .sub("Volume keys, screenshots, low battery, plugging in"),
         ],
     )]
 }

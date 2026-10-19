@@ -18,6 +18,7 @@ mod polkit;
 mod quick_settings;
 mod calendar;
 mod screenshot;
+mod sounds;
 mod status;
 mod workspaces;
 
@@ -372,7 +373,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .handle()
         .insert_source(status_rx, |event, _, app| {
             if let Event::Msg(update) = event {
+                let was_charging = app.status.battery.map(|b| b.charging);
                 app.status.apply(update);
+                let charging = app.status.battery.map(|b| b.charging);
+                if let (Some(was), Some(now)) = (was_charging, charging)
+                    && was != now
+                {
+                    app.event_sound(if now { "power-plug" } else { "power-unplug" });
+                }
                 app.check_low_battery();
                 if let Some((qs, _)) = &mut app.quick_settings {
                     qs.status_changed(&app.xdg_shell, &app.theme, &app.status);
@@ -531,6 +539,7 @@ impl App {
             cnde_ipc::Event::ScreenshotDone { path } => {
                 self.screenshot = None;
                 if let Some(path) = path {
+                    self.event_sound("screen-capture");
                     info!(%path, "screenshot saved");
                 }
             }

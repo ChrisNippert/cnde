@@ -45,6 +45,7 @@ pub struct Config {
     pub location: Location,
     /// Dimming, screen off and suspend when idle.
     pub power: Power,
+    pub sound: Sound,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -618,6 +619,21 @@ pub struct Autostart {
     pub shell: String,
     /// Start PipeWire if the system doesn't (no systemd, e.g. Alpine).
     pub audio: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Sound {
+    /// Short sounds from the freedesktop sound theme: a click when the
+    /// volume keys change it, a shutter for screenshots, low battery and
+    /// plugging in or out.
+    pub event_sounds: bool,
+}
+
+impl Default for Sound {
+    fn default() -> Self {
+        Self { event_sounds: true }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

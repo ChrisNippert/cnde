@@ -158,6 +158,12 @@
 # systemd. Skipped if PipeWire is already running.
 # audio = true
 
+[sound]
+# Short sounds from the freedesktop sound theme (sound-theme-freedesktop):
+# a click when the volume keys change it, a shutter for screenshots, low
+# battery, and plugging the charger in or out. Played with pw-play or paplay.
+# event_sounds = true
+
 [lock]
 # The program that locks the screen (Super+L). Any locker using the
 # ext-session-lock protocol works, e.g. "swaylock" or "gtklock". If it

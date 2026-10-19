@@ -67,6 +67,9 @@ impl App {
                         self.actions.run(Action::SetVolume(volume.percent));
                     }
                 }
+                if !volume.muted {
+                    self.event_sound("audio-volume-change");
+                }
                 // Ours until PipeWire reports back, so quick presses add up.
                 self.status.volume = Some(volume);
                 let level = (!volume.muted).then_some(volume.percent);
@@ -151,6 +154,13 @@ impl App {
         self.draw_osd();
     }
 
+    /// A theme sound, if `sound.event_sounds` is on.
+    pub fn event_sound(&self, name: &str) {
+        if self.config.sound.event_sounds {
+            crate::sounds::play(name);
+        }
+    }
+
     /// Said once each time the battery drops below `power.low_battery`.
     pub fn check_low_battery(&mut self) {
         let low = self
@@ -160,6 +170,7 @@ impl App {
         if crate::status::low_battery_edge(&mut self.low_battery_warned, low.is_some())
             && let Some(battery) = low
         {
+            self.event_sound("dialog-warning");
             let text = format!("Battery low \u{2014} {:.0}%", battery.percent);
             self.show_osd(&crate::panel::battery_icon(battery), None, &text);
         }
