@@ -631,6 +631,30 @@ impl State {
             {
                 let window = self.space.element_under(location).map(|(w, _)| w.clone());
                 self.focus_window(window.as_ref());
+                // The grab swallowed the press; hand it to what is under the
+                // pointer, as a click with no menu open would have gone.
+                if window.is_some() && !self.mod_held() && !self.bar_press(button, location) {
+                    let under = self.surface_under(location);
+                    pointer.motion(
+                        self,
+                        under,
+                        &MotionEvent {
+                            location,
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time,
+                        },
+                    );
+                    pointer.button(
+                        self,
+                        &ButtonEvent {
+                            button,
+                            state: button_state,
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time,
+                        },
+                    );
+                    pointer.frame(self);
+                }
             }
         }
     }
