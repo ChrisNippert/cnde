@@ -27,14 +27,14 @@ pub fn load() -> Config {
         .unwrap_or_default()
 }
 
-pub fn theme_from(config: &Config) -> Theme {
+pub fn theme_from(config: &Config, screen: Option<Color>) -> Theme {
     let panel = &config.panel;
     let color = |text: &str, fallback: Color| {
         parse_color(text).map_or(fallback, |(r, g, b, a)| {
             Color::rgba(r, g, b, a as f32 / 255.0)
         })
     };
-    let mut theme = Theme::for_appearance(&config.appearance);
+    let mut theme = Theme::for_screen(&config.appearance, screen);
     theme.panel_height = panel.height;
     if !panel.rounded {
         theme.panel_radius = 0.0;
@@ -144,11 +144,11 @@ impl App {
             return;
         }
         info!("config reloaded");
-        self.theme = theme_from(&config);
         cnde_ui::anim::set_speed(config.animations.speed as f32);
         self.icons.set_theme(&config.appearance.icon_theme);
         let dock_moved = config.dock.position != self.config.dock.position;
         self.config = config;
+        self.theme = theme_from(&self.config, self.screen);
         self.status
             .set_profile_command(&self.config.power.profile_command);
         if self.config.dock.locked && self.dock_editing {
@@ -161,6 +161,18 @@ impl App {
             self.dock = None;
         }
         self.sync_panels();
+        self.redraw_all();
+    }
+
+    /// The adaptive palette's colour changed: everything in the new theme.
+    pub fn apply_theme(&mut self) {
+        if !self.config.appearance.adaptive() {
+            return;
+        }
+        self.theme = theme_from(&self.config, self.screen);
+        for panel in &mut self.panels {
+            panel.apply_theme(&self.theme);
+        }
         self.redraw_all();
     }
 }

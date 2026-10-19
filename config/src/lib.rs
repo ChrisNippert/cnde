@@ -210,8 +210,7 @@ pub struct Appearance {
     /// blurred wallpaper, or solid. Snapped or maximized windows are
     /// always solid.
     pub material: Material,
-    /// The bar, dock, quick settings and cnde's windows take their colour
-    /// from the windows against the screen's edges, or the wallpaper.
+    /// The old switch for `palette = "adaptive"`; true means the same.
     #[serde(alias = "match_windows")]
     pub adaptive_color: bool,
 }
@@ -225,6 +224,11 @@ pub enum Material {
 }
 
 impl Appearance {
+    /// Whether the colours follow the screen (`palette = "adaptive"`).
+    pub fn adaptive(&self) -> bool {
+        self.palette == Palette::Adaptive || self.adaptive_color
+    }
+
     /// The default corner radius.
     pub const CORNER_RADIUS: u32 = 10;
     /// The radius the built-in shapes are drawn for.
@@ -266,6 +270,10 @@ pub enum Palette {
     Adwaita,
     /// Worked out from `base_color` and `accent_color`.
     Custom,
+    /// Worked out like `Custom` from the colour on screen: the window
+    /// against the top edge, else the wallpaper. The bar and dock match a
+    /// window against them exactly.
+    Adaptive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

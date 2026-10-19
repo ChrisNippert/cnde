@@ -1,7 +1,6 @@
-//! The colours of windows, for cnde's UI to match
-//! (`appearance.adaptive_color`): a maximized window in front tints the bar
-//! and dock, and a window under one of cnde's own windows or popups tints
-//! its solid backing.
+//! The colours of windows, for the adaptive palette: the frontmost
+//! window against the top edge colours the bar (and cnde's theme), the
+//! one against the bottom the dock.
 //!
 //! A window is drawn small into a texture and read back, only when it
 //! committed something new, and at most every `EVERY` per window.
@@ -43,8 +42,6 @@ pub struct Sample {
     /// Along its top edge (its header) and its bottom edge.
     pub top: [u8; 3],
     pub bottom: [u8; 3],
-    /// Over the whole window.
-    pub main: [u8; 3],
 }
 
 #[derive(Default)]
@@ -131,14 +128,13 @@ impl Tints {
                     Some(dominant(&drawn))
                 }
             };
-            let (Some(top), Some(bottom), Some(main)) = (
+            let (Some(top), Some(bottom)) = (
                 strip(0, edge, last.map(|s| s.top)),
                 strip(h - edge, h, last.map(|s| s.bottom)),
-                strip(0, h, last.map(|s| s.main)),
             ) else {
                 continue;
             };
-            let sample = Sample { top, bottom, main };
+            let sample = Sample { top, bottom };
             let entry = Entry {
                 sample,
                 commits,
@@ -156,7 +152,7 @@ impl Tints {
 impl crate::state::State {
     /// Sample the windows cnde's UI matches, when it does.
     pub fn update_tints(&mut self) {
-        if !self.config.appearance.adaptive_color {
+        if !self.config.appearance.adaptive() {
             self.tints.clear();
             return;
         }
@@ -183,7 +179,7 @@ impl crate::state::State {
     /// The colour the bar on `output` takes: the top edge of the frontmost
     /// window against the top.
     pub fn bar_tint(&self, output: &smithay::output::Output) -> Option<[u8; 3]> {
-        if !self.config.appearance.adaptive_color {
+        if !self.config.appearance.adaptive() {
             return None;
         }
         let geo = self.space.output_geometry(output)?;
@@ -193,8 +189,7 @@ impl crate::state::State {
 
     /// Per monitor: the frontmost windows against its top and bottom edges
     /// (the bar and dock take their colours; a floating window elsewhere
-    /// changes nothing), and the windows under cnde's own windows and
-    /// popups.
+    /// changes nothing).
     fn tint_targets(&self) -> Vec<Window> {
         let mut targets: Vec<Window> = Vec::new();
         let mut add = |window: &Window| {
@@ -203,25 +198,10 @@ impl crate::state::State {
             }
         };
         for output in self.space.outputs() {
-            let behind = crate::frost::Behind::new(&self.space, output, None);
             if let Some(geo) = self.space.output_geometry(output) {
                 let touching = self.touching_edges(output, geo);
                 for window in touching.top.iter().chain(&touching.bottom) {
                     add(window);
-                }
-            }
-            for (index, (window, rect)) in behind.windows.iter().enumerate() {
-                if crate::frost::WindowFrost::wants(window)
-                    && let Some((under, _)) =
-                        behind.windows[..index].iter().rev().find(|(_, r)| r.overlaps(*rect))
-                {
-                    add(under);
-                }
-            }
-            for (_, rect) in crate::frost::shell_popups(output) {
-                if let Some((under, _)) = behind.windows.iter().rev().find(|(_, r)| r.overlaps(rect))
-                {
-                    add(under);
                 }
             }
         }

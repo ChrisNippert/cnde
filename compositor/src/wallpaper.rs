@@ -558,11 +558,11 @@ fn gradient(w: u32, h: u32, source: &Source) -> RgbaImage {
     let (from, to, glow) = match (source.palette, source.scheme) {
         (Palette::Custom, scheme) => custom_gradient(&source.custom.0, &source.custom.1, scheme),
         // Quiet: dark sage into near-black, an amber glow.
-        (Palette::Quiet, ColorScheme::Dark) => {
+        (Palette::Quiet | Palette::Adaptive, ColorScheme::Dark) => {
             ([0.18, 0.24, 0.20], [0.055, 0.07, 0.06], [0.42, 0.31, 0.17])
         }
         // Light sage, a little deeper at the far end, a warm glow.
-        (Palette::Quiet, ColorScheme::Light) => {
+        (Palette::Quiet | Palette::Adaptive, ColorScheme::Light) => {
             ([0.84, 0.88, 0.82], [0.66, 0.73, 0.65], [0.95, 0.84, 0.64])
         }
         // Dusk: deep plum fading to near-black, a pink glow.

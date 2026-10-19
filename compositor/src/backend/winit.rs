@@ -271,7 +271,7 @@ impl State {
                         &self.wallpapers,
                         &backend.output,
                         &self.config,
-                        self.config.appearance.adaptive_color.then_some(&self.tints),
+                        bar_tint,
                         now,
                     ),
                     &backend.output,

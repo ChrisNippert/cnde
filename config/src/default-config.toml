@@ -42,11 +42,10 @@
 # icon_theme = "cnde"      # "cnde", "Adwaita", or any installed icon theme (e.g. "Papirus")
 # base_color = "#2b1a40"   # palette = "custom": surfaces take this colour's hue
 # accent_color = "#f4a7c6" # palette = "custom": switches, selection, sliders
-# palette = "quiet"        # "quiet" (warm greys, amber), "cnde" (Dusk/Blossom), "adwaita" (GNOME's) or "custom"
+# palette = "quiet"        # "quiet" (warm greys, amber), "cnde" (Dusk/Blossom), "adwaita" (GNOME's), "custom", or "adaptive" (like custom, from the window at the top edge or the wallpaper; dark or light still follows color_scheme)
 # window_buttons = "all"   # "all" (minimize, maximize, close) or "close"
 # titlebars = "cnde"       # "cnde" draws title bars for apps that allow it; "app" leaves them to the app
 # material = "frosted"     # "frosted" or "solid": the shell's popups and cnde's own windows (solid when snapped or maximized)
-# adaptive_color = false   # bar, dock, quick settings and sidebars take the colour of the window at the screen's edge, or the wallpaper
 # corner_radius = 10       # window corners in px (0-48); the dock, bar and menus scale with it
 
 [dark_mode]
@@ -140,7 +139,7 @@
 # align = "center"         # "start" (left/top), "center", "end" (right/bottom); stretched, moves the icons
 # float_align = "center"   # while floating as a pill: same choices as align; unset, same as align
 # reserve = true           # on an edge: maximized windows stop at it; false floats it over them
-# adaptive_color = "bar"   # with appearance.adaptive_color: "bar" (the bar's colour) or "darker" (a darker shade of the window at the bottom edge, or the wallpaper)
+# adaptive_color = "bar"   # with palette = "adaptive": "bar" (the bar's colour) or "darker" (a darker shade of the window at the bottom edge, or the wallpaper)
 # locked = false           # true: no dragging icons or the dock, and no edit mode
 # system_monitor = "gnome-system-monitor"  # "System Monitor" in the dock's menu runs this; "" hides it
 

@@ -6,8 +6,8 @@
 //! It's the wallpaper that frosts, not the windows: cheap, and a dock on an
 //! edge has no windows behind it anyway (they stop at its reserved space).
 //! A popup or one of cnde's windows over another window would show the
-//! wallpaper through it, so there the frost fades to a solid backing (a
-//! tint of that window's colour with `appearance.adaptive_color`).
+//! wallpaper through it, so there the frost fades to a solid backing (in
+//! the bar's colour, or the theme's).
 
 use std::{
     collections::HashMap,
@@ -31,13 +31,10 @@ use smithay::{
 };
 use tracing::warn;
 
-use crate::{render::OutputElement, tint::Tints, wallpaper::Wallpapers};
+use crate::{render::OutputElement, wallpaper::Wallpapers};
 
 /// How long a frost takes to turn solid, or back.
 const FADE: Duration = Duration::from_millis(150);
-/// With adaptive colour, how strongly the wallpaper's colour tints the
-/// frost under a cnde window over nothing.
-const WALLPAPER_TINT: f32 = 0.35;
 
 #[derive(Default)]
 pub struct DockFrost {
@@ -89,14 +86,6 @@ impl Behind {
             .rev()
             .find(|(_, r)| r.overlaps(rect))
             .map(|(w, _)| w)
-    }
-}
-
-/// `window`'s colour for a backing, or `fallback`.
-fn backing_colour(tints: Option<&Tints>, window: &Window, fallback: cnde_ui::Color) -> [f32; 3] {
-    match tints.and_then(|t| t.get(window)) {
-        Some(sample) => sample.main.map(|c| c as f32 / 255.0),
-        None => [fallback.r, fallback.g, fallback.b],
     }
 }
 
@@ -222,7 +211,11 @@ impl DockFrost {
         use crate::popup_anim::{open_progress, scale_at};
         // Never larger than any popup's own corners, so no frost shows
         // past them (a little missing in a corner doesn't show).
-        let theme = cnde_ui::Theme::for_appearance(&config.appearance);
+        let theme = cnde_ui::Theme::for_screen(
+            &config.appearance,
+            screen_colour(config, wallpapers, output, behind.bar),
+        );
+        let popup = theme.qs_background;
         let radius = theme.qs_radius.max(theme.menu_radius) as f64;
         let scale = output.current_scale().fractional_scale();
         let open = shell_popups(output).into_iter().map(|(surface, rect)| {
@@ -254,7 +247,7 @@ impl DockFrost {
             let target = behind.under(rect).map(|_| {
                 let colour = match behind.bar {
                     Some(bar) => bar.map(|c| c as f32 / 255.0),
-                    None => [theme.qs_background.r, theme.qs_background.g, theme.qs_background.b],
+                    None => [popup.r, popup.g, popup.b],
                 };
                 (colour, 1.0)
             });
@@ -456,11 +449,8 @@ pub struct WindowFrost<'a> {
     pub output: &'a Output,
     /// Their corners (the theme's window radius).
     pub radius: f64,
-    /// Over another window: their sidebars' colour, or that window's.
+    /// Over another window: their sidebars' colour.
     pub solid: cnde_ui::Color,
-    pub tints: Option<&'a Tints>,
-    /// With adaptive colour, the wallpaper's: a light tint over nothing.
-    pub wallpaper: Option<[f32; 3]>,
     pub now: Instant,
 }
 
@@ -477,10 +467,7 @@ impl WindowFrost<'_> {
     ) -> Vec<OutputElement> {
         let namespace = format!("window/{key}");
         let rect = rect.to_i32_round();
-        let target = match under {
-            Some(w) => Some((backing_colour(self.tints, w, self.solid), 1.0)),
-            None => self.wallpaper.map(|c| (c, WALLPAPER_TINT)),
-        };
+        let target = under.map(|_| ([self.solid.r, self.solid.g, self.solid.b], 1.0));
         let (solid, solidity) = self.frost.backing(
             renderer,
             self.output,
@@ -539,22 +526,36 @@ pub fn window_frost<'a>(
     wallpapers: &'a Wallpapers,
     output: &'a Output,
     config: &cnde_config::Config,
-    tints: Option<&'a Tints>,
+    bar: Option<[u8; 3]>,
     now: Instant,
 ) -> Option<WindowFrost<'a>> {
-    let theme = cnde_ui::Theme::for_appearance(&config.appearance);
+    let theme = cnde_ui::Theme::for_screen(
+        &config.appearance,
+        screen_colour(config, wallpapers, output, bar),
+    );
     (config.appearance.material == cnde_config::Material::Frosted).then_some(WindowFrost {
         frost,
         wallpapers,
         output,
         radius: theme.window_radius as f64,
         solid: theme.window_sidebar,
-        tints,
-        wallpaper: tints
-            .and(wallpapers.tint(&output.name()))
-            .map(|c| c.map(|v| v as f32 / 255.0)),
         now,
     })
+}
+
+/// The colour the adaptive palette takes on `output`, as cnde's apps and
+/// shell see it (the edges event): the bar's, else the wallpaper's.
+fn screen_colour(
+    config: &cnde_config::Config,
+    wallpapers: &Wallpapers,
+    output: &Output,
+    bar: Option<[u8; 3]>,
+) -> Option<cnde_ui::Color> {
+    if !config.appearance.adaptive() {
+        return None;
+    }
+    let [r, g, b] = bar.or_else(|| wallpapers.tint(&output.name()))?;
+    Some(cnde_ui::Color::rgb(r, g, b))
 }
 
 /// The shell's open popups on `output` (quick settings, the calendar,

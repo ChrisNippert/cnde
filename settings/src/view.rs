@@ -1100,8 +1100,8 @@ fn wallpapers(
             Color::rgb(0xf0, 0xe0, 0xdc),
             Color::rgb(0x24, 0x24, 0x28),
         ),
-        // Custom: the window's own colours stand in.
-        (cnde_config::Palette::Custom, _) => (
+        // Custom and adaptive: the window's own colours stand in.
+        (cnde_config::Palette::Custom | cnde_config::Palette::Adaptive, _) => (
             t.window_sidebar,
             t.window_background.mix(t.accent, 0.25),
             t.window_text,

@@ -399,7 +399,13 @@ impl Theme {
 
     /// The theme the config's appearance asks for.
     pub fn for_appearance(appearance: &cnde_config::Appearance) -> Self {
-        Self::colours_for(appearance).rounded(appearance.roundness())
+        Self::for_screen(appearance, None)
+    }
+
+    /// The same, with `screen` the colour on screen for the adaptive
+    /// palette (the window against the top edge, else the wallpaper).
+    pub fn for_screen(appearance: &cnde_config::Appearance, screen: Option<Color>) -> Self {
+        Self::colours_for(appearance, screen).rounded(appearance.roundness())
     }
 
     /// The bar, dock and popups in `tint` (a window's or the wallpaper's
@@ -452,14 +458,18 @@ impl Theme {
         self
     }
 
-    fn colours_for(appearance: &cnde_config::Appearance) -> Self {
+    fn colours_for(appearance: &cnde_config::Appearance, screen: Option<Color>) -> Self {
         let dark = appearance.color_scheme == cnde_config::ColorScheme::Dark;
+        if appearance.adaptive() {
+            return Self::adaptive(dark, screen);
+        }
         match (appearance.palette, dark) {
             (cnde_config::Palette::Adwaita, dark) => Self::for_dark(dark),
             (cnde_config::Palette::Quiet, true) => Self::quiet_dark(),
             (cnde_config::Palette::Quiet, false) => Self::quiet_light(),
             (cnde_config::Palette::Cnde, true) => Self::dusk(),
             (cnde_config::Palette::Cnde, false) => Self::blossom(),
+            (cnde_config::Palette::Adaptive, dark) => Self::adaptive(dark, screen),
             (cnde_config::Palette::Custom, dark) => {
                 let parse = |text: &str, fallback: Color| {
                     cnde_config::parse_color(text)
@@ -470,6 +480,23 @@ impl Theme {
                 Self::custom(dark, base, accent)
             }
         }
+    }
+
+    /// The adaptive palette: [`Theme::custom`] from `screen`'s hue, the
+    /// lightness still dark or light whatever the screen's is; the accent
+    /// a clear shade of the same hue (amber when it's grey). Quiet until
+    /// there's a colour.
+    pub fn adaptive(dark: bool, screen: Option<Color>) -> Self {
+        let Some(screen) = screen else {
+            return if dark { Self::quiet_dark() } else { Self::quiet_light() };
+        };
+        let (h, s, _) = screen.hsl();
+        let accent = if s > 0.15 {
+            Color::from_hsl(h, 0.6, if dark { 0.72 } else { 0.45 })
+        } else {
+            Color::rgb(0xe3, 0xa9, 0x5e)
+        };
+        Self::custom(dark, screen, accent)
     }
 
     /// A palette worked out from two colours: every surface takes `base`'s
@@ -757,5 +784,26 @@ impl Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self::dark()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adaptive_keeps_the_style_and_takes_the_hue() {
+        let light_blue = Color::rgb(0xb0, 0xd0, 0xf0);
+        let dark = Theme::adaptive(true, Some(light_blue));
+        assert!(dark.window_background.luminance() < 0.1, "dark stays dark");
+        let (h, _, _) = dark.window_background.hsl();
+        assert!((h - light_blue.hsl().0).abs() < 2.0);
+        let light = Theme::adaptive(false, Some(Color::rgb(0x10, 0x20, 0x40)));
+        assert!(light.window_background.luminance() > 0.8, "light stays light");
+        let appearance = cnde_config::Appearance {
+            adaptive_color: true,
+            ..Default::default()
+        };
+        assert!(appearance.adaptive());
     }
 }

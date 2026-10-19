@@ -23,21 +23,22 @@ pub fn darker(color: Color) -> Color {
     Color::from_hsl(h, s, l * 0.6).with_alpha(color.a)
 }
 
-/// The bar's colour: the window against the top edge, solid, else the
-/// wallpaper's colour keeping the bar's translucency.
-pub fn bar_choice(window: Option<Color>, wallpaper: Option<Color>) -> Option<Tint> {
-    match (window, wallpaper) {
-        (Some(color), _) => Some(Tint { color, solid: true }),
-        (None, Some(color)) => Some(Tint {
-            color,
-            solid: false,
-        }),
-        _ => None,
-    }
+/// The colour the adaptive palette is worked out from: the window
+/// against the top edge, else the wallpaper.
+pub fn screen(top: Option<[u8; 3]>, wallpaper: Option<[u8; 3]>) -> Option<Color> {
+    top.or(wallpaper).map(|[r, g, b]| Color::rgb(r, g, b))
+}
+
+/// The bar's colour: exactly the window against the top edge, opaque.
+/// Over the wallpaper it keeps the theme's own colours, which the
+/// adaptive palette already takes from the screen.
+pub fn bar_choice(window: Option<Color>) -> Option<Tint> {
+    window.map(|color| Tint { color, solid: true })
 }
 
 /// The dock's colour under `mode`: the bar's, or a darker shade of the
-/// window against the bottom edge (else of the wallpaper).
+/// window against the bottom edge (else of the wallpaper, keeping the
+/// dock's translucency).
 pub fn dock_choice(
     mode: cnde_config::DockAdaptive,
     top: Option<Color>,
@@ -45,11 +46,18 @@ pub fn dock_choice(
     wallpaper: Option<Color>,
 ) -> Option<Tint> {
     match mode {
-        cnde_config::DockAdaptive::Bar => bar_choice(top, wallpaper),
-        cnde_config::DockAdaptive::Darker => bar_choice(bottom, wallpaper).map(|t| Tint {
-            color: darker(t.color),
-            ..t
-        }),
+        cnde_config::DockAdaptive::Bar => bar_choice(top),
+        cnde_config::DockAdaptive::Darker => match (bottom, wallpaper) {
+            (Some(color), _) => Some(Tint {
+                color: darker(color),
+                solid: true,
+            }),
+            (None, Some(color)) => Some(Tint {
+                color: darker(color),
+                solid: false,
+            }),
+            _ => None,
+        },
     }
 }
 
@@ -186,28 +194,23 @@ mod tests {
     }
 
     #[test]
-    fn bar_prefers_the_window_then_the_wallpaper() {
+    fn bar_matches_only_a_window() {
         assert_eq!(
-            bar_choice(Some(RED), Some(BLUE)),
+            bar_choice(Some(RED)),
             Some(Tint {
                 color: RED,
                 solid: true
             })
         );
-        assert_eq!(
-            bar_choice(None, Some(BLUE)),
-            Some(Tint {
-                color: BLUE,
-                solid: false
-            })
-        );
-        assert_eq!(bar_choice(None, None), None);
+        assert_eq!(bar_choice(None), None);
+        assert_eq!(screen(None, Some([1, 2, 3])), Some(Color::rgb(1, 2, 3)));
+        assert_eq!(screen(Some([9, 9, 9]), Some([1, 2, 3])), Some(Color::rgb(9, 9, 9)));
     }
 
     #[test]
     fn dock_follows_the_bar_or_goes_darker() {
         let bar = dock_choice(DockAdaptive::Bar, Some(RED), Some(GREEN), Some(BLUE));
-        assert_eq!(bar, bar_choice(Some(RED), Some(BLUE)));
+        assert_eq!(bar, bar_choice(Some(RED)));
         let dark = dock_choice(DockAdaptive::Darker, Some(RED), Some(GREEN), Some(BLUE)).unwrap();
         assert_eq!(dark.color, darker(GREEN));
         assert!(dark.solid);

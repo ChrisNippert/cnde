@@ -148,6 +148,8 @@ struct App {
     power_mode: Option<std::sync::mpsc::Sender<power_mode::Command>>,
     /// Where a picture chosen through "Add" arrives.
     picked: Option<channel::Sender<Result<Option<wallpapers::Thumb>, String>>>,
+    /// The colour on screen, for the adaptive palette (from the compositor).
+    screen: Option<cnde_ui::Color>,
 }
 
 /// Why the Wayland connection is dead, if it is. After a protocol error, or
@@ -194,7 +196,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ok()
         })
         .unwrap_or_default();
-    let theme = theme_for(&config);
+    let theme = theme_for(&config, None);
     let frosted = config.appearance.material == cnde_config::Material::Frosted;
     cnde_ui::anim::set_speed(config.animations.speed as f32);
     let mut icons = Icons::new();
@@ -260,6 +262,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             app.redraw();
         })?;
+
+    let (screen_tx, screen_rx) = channel::channel();
+    event_loop
+        .handle()
+        .insert_source(screen_rx, |event, _, app: &mut App| {
+            if let channel::Event::Msg(screen) = event
+                && screen != app.screen
+            {
+                app.screen = screen;
+                if app.ui.config.appearance.adaptive() {
+                    app.res.theme = theme_for(&app.ui.config, screen);
+                    app.redraw();
+                }
+            }
+        })?;
+    watch_screen(screen_tx);
 
     let mut app = App {
         registry: RegistryState::new(&globals),
@@ -329,6 +347,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bluetooth: None,
         power_mode: None,
         picked: Some(picked_tx),
+        screen: None,
     };
     WaylandSource::new(conn.clone(), queue).insert(event_loop.handle())?;
     watch_config(&mut app);
@@ -752,6 +771,11 @@ impl App {
             let before = file.config().unwrap_or_else(|_| self.ui.config.clone());
             for (key, value) in changes {
                 key.write(&mut file, &before, value);
+                // The old switch for the adaptive palette would override
+                // whatever's chosen now.
+                if *key == pages::Key::Path("appearance.palette") {
+                    file.remove("appearance.adaptive_color");
+                }
             }
             file.save()
         });
@@ -768,7 +792,7 @@ impl App {
     fn set_config(&mut self, config: Config) {
         cnde_ui::anim::set_speed(config.animations.speed as f32);
         if config.appearance != self.ui.config.appearance {
-            self.res.theme = theme_for(&config);
+            self.res.theme = theme_for(&config, self.screen);
             self.res.icons.set_theme(&config.appearance.icon_theme);
             self.ui.frosted = config.appearance.material == cnde_config::Material::Frosted;
         }
@@ -1388,8 +1412,35 @@ impl App {
     }
 }
 
-fn theme_for(config: &Config) -> Theme {
-    Theme::for_appearance(&config.appearance)
+fn theme_for(config: &Config, screen: Option<cnde_ui::Color>) -> Theme {
+    Theme::for_screen(&config.appearance, screen)
+}
+
+/// Follow the compositor's edges event for the adaptive palette's colour:
+/// the window against a monitor's top, else the wallpaper. Read on a
+/// thread; nothing without cnde's socket.
+fn watch_screen(events: channel::Sender<Option<cnde_ui::Color>>) {
+    use std::io::BufRead;
+    let Some(path) = std::env::var_os(cnde_ipc::SOCKET_ENV) else {
+        return;
+    };
+    let Ok(stream) = std::os::unix::net::UnixStream::connect(&path) else {
+        return;
+    };
+    let _ = std::thread::Builder::new().name("ipc".into()).spawn(move || {
+        let reader = std::io::BufReader::new(stream);
+        for line in reader.split(b'\n').map_while(Result::ok) {
+            if let Some(cnde_ipc::Event::Edges { outputs }) = cnde_ipc::decode(&line) {
+                let screen = cnde_ui::tint::screen(
+                    outputs.iter().find_map(|e| e.top_tint),
+                    outputs.iter().find_map(|e| e.wallpaper_tint),
+                );
+                if events.send(screen).is_err() {
+                    return;
+                }
+            }
+        }
+    });
 }
 
 /// "~/…" for paths in the home directory, as hand-written configs do.

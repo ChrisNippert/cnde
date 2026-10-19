@@ -200,6 +200,8 @@ pub struct App {
     windows: Vec<cnde_ipc::WindowInfo>,
     /// Which monitor edges windows touch (bars there go solid).
     edges: Vec<cnde_ipc::OutputEdges>,
+    /// The colour the adaptive palette is worked out from.
+    screen: Option<cnde_ui::Color>,
     /// Where an overview dock goes (the overview's monitor).
     dock_output: Option<wl_output::WlOutput>,
     overview_open: bool,
@@ -236,7 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Config first (it names the fonts), then the font scan, the slowest
     // startup step, runs alongside the Wayland setup.
     let config = config::load();
-    let theme = config::theme_from(&config);
+    let theme = config::theme_from(&config, None);
     let families = theme.font_families;
     let fonts_thread = std::thread::Builder::new()
         .name("fonts".into())
@@ -335,6 +337,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dock_preview: None,
         windows: Vec::new(),
         edges: Vec::new(),
+        screen: None,
         dock_output: None,
         overview_open: false,
         reported_grid: false,
@@ -513,6 +516,13 @@ impl App {
             cnde_ipc::Event::ScreenshotUi { windows } => self.open_screenshot_ui(windows),
             cnde_ipc::Event::Edges { outputs } => {
                 self.edges = outputs;
+                // The overview hides which window is in front; keep its
+                // colour meanwhile.
+                let screen = self.screen_colour();
+                if !self.overview_open && screen != self.screen {
+                    self.screen = screen;
+                    self.apply_theme();
+                }
                 self.redraw_panels();
                 self.sync_dock();
             }
@@ -931,6 +941,17 @@ impl App {
         self.draw_calendar();
     }
 
+    /// The colour for the adaptive palette, from the main monitor first:
+    /// the window against its top, else its wallpaper.
+    fn screen_colour(&self) -> Option<cnde_ui::Color> {
+        let main = self.main_output().and_then(|o| self.edges_of(&o).cloned());
+        let all = || main.iter().chain(&self.edges);
+        cnde_ui::tint::screen(
+            all().find_map(|e| e.top_tint),
+            all().find_map(|e| e.wallpaper_tint),
+        )
+    }
+
     /// What the compositor last said touches `output`'s edges.
     fn edges_of(&self, output: &wl_output::WlOutput) -> Option<&cnde_ipc::OutputEdges> {
         let name = self.outputs.info(output)?.name?;
@@ -1151,7 +1172,7 @@ impl App {
             .and_then(|p| self.edges_of(&p.output))
             .and_then(|e| {
                 let colour = |c: Option<[u8; 3]>| c.map(|[r, g, b]| cnde_ui::Color::rgb(r, g, b));
-                cnde_ui::tint::bar_choice(colour(e.top_tint), colour(e.wallpaper_tint))
+                cnde_ui::tint::bar_choice(colour(e.top_tint))
             });
         let Some(panel) = self.panels.get_mut(index) else {
             return;

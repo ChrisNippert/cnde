@@ -477,6 +477,7 @@ name = "cnde-settings"
 version = "0.1.0"
 dependencies = [
  "cnde-config",
+ "cnde-ipc",
  "cnde-ui",
  "image",
  "rustix 1.1.5",

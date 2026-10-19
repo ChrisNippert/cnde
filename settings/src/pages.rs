@@ -1181,7 +1181,16 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
             cnde_config::Palette::Cnde => "cnde",
             cnde_config::Palette::Adwaita => "adwaita",
             cnde_config::Palette::Custom => "custom",
+            cnde_config::Palette::Adaptive => "adaptive",
         })
+    };
+    // The old `adaptive_color = true` means the adaptive palette.
+    let shown_palette = |a: &cnde_config::Appearance| {
+        if a.adaptive() {
+            cnde_config::Palette::Adaptive
+        } else {
+            a.palette
+        }
     };
     let fit = |v: WallpaperFit| {
         s(match v {
@@ -1215,15 +1224,19 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                         ("Dusk", s("cnde")),
                         ("GNOME", s("adwaita")),
                         ("Custom", s("custom")),
+                        ("Adaptive", s("adaptive")),
                     ])),
-                    palette(c.appearance.palette),
+                    palette(shown_palette(&c.appearance)),
                     palette(d.appearance.palette),
                 )
-                .sub(match c.appearance.palette {
+                .sub(match shown_palette(&c.appearance) {
                     cnde_config::Palette::Custom => "Worked out from the two colours below",
                     cnde_config::Palette::Quiet => "Warm greys with an amber accent",
                     cnde_config::Palette::Cnde => "Plum and pink when dark, blush and rose when light",
                     cnde_config::Palette::Adwaita => "GNOME's greys and blue",
+                    cnde_config::Palette::Adaptive => {
+                        "From the top window, or the wallpaper"
+                    }
                 }),
                 Row::new(
                     "appearance.corner_radius",
@@ -1250,14 +1263,6 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     material(d.appearance.material),
                 )
                 .sub("Menus, quick settings and window sidebars; solid when maximized or over a window"),
-                Row::new(
-                    "appearance.adaptive_color",
-                    "Adaptive colour",
-                    Control::switch(),
-                    Value::Bool(c.appearance.adaptive_color),
-                    Value::Bool(d.appearance.adaptive_color),
-                )
-                .sub("The bar, dock, quick settings and sidebars take the colour of the window at the edge, or the wallpaper"),
             ],
         ),
         group(
@@ -2164,6 +2169,9 @@ fn dock_look(c: &Config, d: &Config) -> Vec<Row> {
             cnde_config::DockAdaptive::Darker => "darker",
         })
     };
+    if !c.appearance.adaptive() {
+        return rows;
+    }
     rows.push(
         Row::new(
             "dock.adaptive_color",
@@ -2175,7 +2183,7 @@ fn dock_look(c: &Config, d: &Config) -> Vec<Row> {
             adaptive(c.dock.adaptive_color),
             adaptive(d.dock.adaptive_color),
         )
-        .sub("With adaptive colour on (Appearance)"),
+        .sub("The top bar's, or a darker shade of the window against the bottom"),
     );
     rows
 }
@@ -3027,13 +3035,20 @@ mod tests {
             keys.iter()
                 .all(|r| r.title != "Top bar frosted" && r.title != "Dock background")
         );
-        let on = appearance(&Config::default(), &d);
-        let titles: Vec<_> = on
-            .iter()
-            .flat_map(|g| &g.rows)
-            .map(|r| r.title.as_str())
-            .collect();
-        assert!(titles.contains(&"Top bar frosted") && titles.contains(&"Dock colour"));
+        let titles = |c: &Config| -> Vec<String> {
+            appearance(c, &d)
+                .into_iter()
+                .flat_map(|g| g.rows)
+                .map(|r| r.title)
+                .collect()
+        };
+        let on = titles(&Config::default());
+        assert!(on.iter().any(|t| t == "Top bar frosted"));
+        // The dock's adaptive colour shows only with that palette.
+        assert!(!on.iter().any(|t| t == "Dock colour"));
+        let mut adaptive = Config::default();
+        adaptive.appearance.palette = cnde_config::Palette::Adaptive;
+        assert!(titles(&adaptive).iter().any(|t| t == "Dock colour"));
     }
 
     #[test]

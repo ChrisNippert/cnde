@@ -265,7 +265,7 @@ impl State {
                     wallpaper_tint: self
                         .wallpapers
                         .tint(&output.name())
-                        .filter(|_| self.config.appearance.adaptive_color),
+                        .filter(|_| self.config.appearance.adaptive()),
                     ..Default::default()
                 };
                 let (Some(geo), false) = (self.space.output_geometry(output), open) else {
