@@ -697,8 +697,12 @@ impl QuickSettings {
                 return true;
             }
             Some(Hit::DarkMode) => crate::config::set_dark(!theme.dark),
-            // Not wired up yet (notifications).
-            Some(Hit::DoNotDisturb) | None => {}
+            Some(Hit::DoNotDisturb) => {
+                if let Some(on) = status.do_not_disturb {
+                    crate::config::set_do_not_disturb(!on);
+                }
+            }
+            None => {}
         }
         false
     }
@@ -965,11 +969,15 @@ fn paint(
                 if theme.dark { "On" } else { "Off" },
             ),
             _ => (
-                false,
-                false,
+                status.do_not_disturb == Some(true),
+                status.do_not_disturb.is_some(),
                 "notifications-disabled-symbolic",
                 "Do Not Disturb".into(),
-                "Off",
+                if status.do_not_disturb == Some(true) {
+                    "On"
+                } else {
+                    "Off"
+                },
             ),
         };
         let fade = if available { 1.0 } else { 0.4 };

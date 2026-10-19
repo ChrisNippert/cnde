@@ -303,27 +303,30 @@ fn unescape(text: &str) -> String {
     out.trim().to_string()
 }
 
-/// `text` in lines no wider than `width`.
-fn wrap(p: &mut Painter, text: &str, width: f32, size: f32) -> Vec<String> {
+/// `text` in lines no wider than `width`, at most `max_lines` (the last
+/// one ends in an ellipsis if there was more). Line breaks are kept.
+pub fn wrap(p: &mut Painter, text: &str, width: f32, size: f32, max_lines: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        let tried = if line.is_empty() {
-            word.to_string()
-        } else {
-            format!("{line} {word}")
-        };
-        if !line.is_empty() && p.measure(&tried, size, Weight::Normal) > width {
-            lines.push(std::mem::replace(&mut line, word.to_string()));
-        } else {
-            line = tried;
+    for paragraph in text.lines() {
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            let tried = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            if !line.is_empty() && p.measure(&tried, size, Weight::Normal) > width {
+                lines.push(std::mem::replace(&mut line, word.to_string()));
+            } else {
+                line = tried;
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line);
         }
     }
-    if !line.is_empty() {
-        lines.push(line);
-    }
-    if lines.len() > MAX_LINES {
-        lines.truncate(MAX_LINES);
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
         if let Some(last) = lines.last_mut() {
             last.push('…');
         }
@@ -403,6 +406,7 @@ impl App {
                 &request.message,
                 WIDTH - PADDING * 2.0,
                 self.theme.font_size,
+                MAX_LINES,
             )
         };
         let t = &self.theme;

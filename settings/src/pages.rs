@@ -2837,6 +2837,27 @@ fn accessibility(c: &Config, d: &Config) -> Vec<Group> {
             )
             .sub("Volume keys, screenshots, low battery, plugging in"),
         ],
+    ),
+    group(
+        "Notifications",
+        vec![
+            Row::new(
+                "notifications.enabled",
+                "Show notifications",
+                Control::switch(),
+                Value::Bool(c.notifications.enabled),
+                Value::Bool(d.notifications.enabled),
+            )
+            .sub("Off to use another notification daemon"),
+            Row::new(
+                "notifications.do_not_disturb",
+                "Do Not Disturb",
+                Control::switch(),
+                Value::Bool(c.notifications.do_not_disturb),
+                Value::Bool(d.notifications.do_not_disturb),
+            )
+            .sub("Only urgent ones show"),
+        ],
     )]
 }
 

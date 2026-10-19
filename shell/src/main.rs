@@ -12,6 +12,7 @@ mod edit_mode;
 mod ipc;
 mod launcher;
 mod menu;
+mod notifications;
 mod osd;
 mod panel;
 mod polkit;
@@ -96,6 +97,8 @@ pub struct Status {
     pub bluetooth: Option<status::Bluetooth>,
     /// Read when quick settings opens; `None` on desktops.
     pub backlight: Option<status::Backlight>,
+    /// `None`: another program shows notifications.
+    pub do_not_disturb: Option<bool>,
 }
 
 impl Status {
@@ -225,6 +228,7 @@ pub struct App {
     osd: Option<osd::Osd>,
     /// The polkit agent's password dialog.
     polkit: polkit::Polkit,
+    notifications: notifications::Notifications,
     /// The low-battery warning has been shown for this discharge.
     low_battery_warned: bool,
 }
@@ -353,6 +357,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         launches: apps::LaunchCounts::load(),
         osd: None,
         polkit: polkit::Polkit::default(),
+        notifications: notifications::Notifications::default(),
         low_battery_warned: false,
     };
     app.rescan_apps_if_changed();
@@ -390,6 +395,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
     status::start(status_tx);
     app.polkit = polkit::start(&event_loop.handle());
+    app.notifications = notifications::setup(&event_loop.handle());
+    app.sync_notification_server();
 
     // The clock: wake exactly when the minute changes, not every second.
     event_loop
@@ -992,6 +999,8 @@ impl App {
         for i in 0..self.panels.len() {
             self.draw_panel(i);
         }
+        // Popups open and close with the panel redrawing.
+        self.notifications_follow_popups();
     }
 
     fn draw_quick_settings(&mut self) {
@@ -1420,6 +1429,7 @@ impl LayerShellHandler for App {
             self.osd = None;
         }
         self.polkit_closed(layer.wl_surface());
+        self.notifications_closed(layer.wl_surface());
         if self
             .screenshot
             .as_ref()
@@ -1451,6 +1461,7 @@ impl LayerShellHandler for App {
             self.desktop_holder_configured();
         }
         self.polkit_configured(layer.wl_surface());
+        self.notifications_configured(layer.wl_surface());
         if self.osd.as_ref().is_some_and(|o| &o.layer == layer) {
             self.osd_configured();
         }
@@ -1560,6 +1571,25 @@ impl PointerHandler for App {
                     PointerEventKind::Press {
                         button: BTN_LEFT, ..
                     } => self.polkit_pointer(event.position, true),
+                    _ => {}
+                }
+                continue;
+            }
+            if self
+                .notifications
+                .stack
+                .as_ref()
+                .is_some_and(|s| s.owns(&event.surface))
+            {
+                match event.kind {
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        self.notifications_motion(Some(event.position))
+                    }
+                    PointerEventKind::Leave { .. } => self.notifications_motion(None),
+                    PointerEventKind::Press {
+                        button: button @ (BTN_LEFT | BTN_RIGHT),
+                        ..
+                    } => self.notifications_press(event.position, button == BTN_RIGHT),
                     _ => {}
                 }
                 continue;

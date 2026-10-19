@@ -164,6 +164,12 @@
 # battery, and plugging the charger in or out. Played with pw-play or paplay.
 # event_sounds = true
 
+[notifications]
+# The shell shows apps' notifications at the top right. Turn it off to use
+# another notification daemon (mako, dunst); one already running wins anyway.
+# enabled = true
+# do_not_disturb = false     # only urgent ones show; quick settings toggles it
+
 [lock]
 # The program that locks the screen (Super+L). Any locker using the
 # ext-session-lock protocol works, e.g. "swaylock" or "gtklock". If it

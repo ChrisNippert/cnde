@@ -46,6 +46,7 @@ pub struct Config {
     /// Dimming, screen off and suspend when idle.
     pub power: Power,
     pub sound: Sound,
+    pub notifications: Notifications,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -633,6 +634,25 @@ pub struct Sound {
 impl Default for Sound {
     fn default() -> Self {
         Self { event_sounds: true }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Notifications {
+    /// The shell shows apps' notifications. Off, or with another daemon
+    /// (mako, dunst) already running, it leaves them to that.
+    pub enabled: bool,
+    /// Only urgent notifications show (quick settings toggles it).
+    pub do_not_disturb: bool,
+}
+
+impl Default for Notifications {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            do_not_disturb: false,
+        }
     }
 }
 

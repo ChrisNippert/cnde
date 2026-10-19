@@ -83,6 +83,19 @@ pub fn set_dark(dark: bool) {
     }
 }
 
+pub fn set_do_not_disturb(on: bool) {
+    let Some(path) = cnde_config::default_path() else {
+        return;
+    };
+    let result = cnde_config::ConfigFile::open(&path).and_then(|mut file| {
+        file.set("notifications.do_not_disturb", on);
+        file.save()
+    });
+    if let Err(err) = result {
+        warn!(%err, "can't switch Do Not Disturb");
+    }
+}
+
 /// Watch the config's directory (editors often save by renaming over the
 /// file) and reload on change.
 pub fn watch(handle: &LoopHandle<'static, App>) {
@@ -151,6 +164,7 @@ impl App {
         self.theme = theme_from(&self.config, self.screen);
         self.status
             .set_profile_command(&self.config.power.profile_command);
+        self.sync_notification_server();
         if self.config.dock.locked && self.dock_editing {
             self.finish_dock_edit();
         }
