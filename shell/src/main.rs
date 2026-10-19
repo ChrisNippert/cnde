@@ -1527,6 +1527,15 @@ impl PointerHandler for App {
                     }
                     _ => {}
                 }
+                // A press elsewhere on the dock closes the open menu and goes
+                // no further; a right-click then opens its own menu below.
+                if let PointerEventKind::Press { button, .. } = event.kind
+                    && self.menu.is_some()
+                    && press_closes_menu(button)
+                {
+                    self.close_menu();
+                    continue;
+                }
                 let Some(dock) = &mut self.dock else {
                     continue;
                 };
@@ -1864,6 +1873,24 @@ impl ProvidesRegistryState for App {
 
 delegate_registry!(App);
 delegate_dispatch2!(App);
+
+/// Whether a press on the dock, with a menu open, only closes the menu.
+/// A right-click goes on to open its own menu in place of the old one.
+fn press_closes_menu(button: u32) -> bool {
+    button != BTN_RIGHT
+}
+
+#[cfg(test)]
+mod dock_menu_tests {
+    use super::*;
+
+    #[test]
+    fn a_press_beside_the_menu_closes_it_without_clicking() {
+        assert!(press_closes_menu(BTN_LEFT));
+        assert!(press_closes_menu(BTN_MIDDLE));
+        assert!(!press_closes_menu(BTN_RIGHT));
+    }
+}
 
 #[cfg(test)]
 mod status_tests {
