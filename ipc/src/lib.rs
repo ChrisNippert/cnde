@@ -70,13 +70,19 @@ pub struct OutputEdges {
     /// The wallpaper along the top is light: a clear bar needs dark text.
     #[serde(default)]
     pub top_light: bool,
-    /// A maximized window is in front (and `appearance.adaptive_color` is
-    /// on): its colour along its top and bottom edges, for the bar and
-    /// dock to take.
+    /// With `appearance.adaptive_color`: the colour along the top edge of
+    /// the frontmost window against the monitor's top edge, for the bar
+    /// (and quick settings, menus) to take, solid.
     #[serde(default)]
     pub top_tint: Option<[u8; 3]>,
+    /// The same along the bottom edge of the frontmost window against the
+    /// bottom edge, for the dock.
     #[serde(default)]
     pub bottom_tint: Option<[u8; 3]>,
+    /// With `appearance.adaptive_color`: the wallpaper's colour, for when no
+    /// window is against an edge (bars keep their own translucency).
+    #[serde(default)]
+    pub wallpaper_tint: Option<[u8; 3]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
