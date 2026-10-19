@@ -2679,7 +2679,7 @@ fn default_apps_page(
             s(current),
             s(&d.apps.terminal),
         )
-        .sub("Opens with Super+Enter and for terminal apps; automatic picks one it finds"),
+        .sub("Opens with Super+Q and for terminal apps; automatic picks one it finds"),
     );
     vec![Group {
         title: "Default Apps".into(),

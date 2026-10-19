@@ -185,6 +185,6 @@
 [apps]
 # Programs without a MIME type. Settings > Default Apps changes these (and
 # the file associations in ~/.config/mimeapps.list).
-# The terminal for Super+Enter, "Open in Terminal" and terminal apps, as a
+# The terminal for Super+Q, "Open in Terminal" and terminal apps, as a
 # desktop file ID. "" looks for $TERMINAL, then common terminals.
 # terminal = "foot.desktop"
