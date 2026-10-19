@@ -4,6 +4,7 @@
 #   cnde-shell       top bar, dock, overview search, quick settings
 #   cnde-settings    the Settings app
 #   cnde-lock        the lock screen (Super+L)
+#   cnde-files       the file manager
 #   cnde-icons       cnde's own symbolic icons (else Adwaita's are used)
 #   cnde             all of the above
 #
@@ -15,7 +16,7 @@
 #   cd packaging/arch && makepkg -si
 
 pkgbase=cnde-git
-pkgname=(cnde-compositor cnde-shell cnde-settings cnde-lock cnde-icons cnde)
+pkgname=(cnde-compositor cnde-shell cnde-settings cnde-lock cnde-files cnde-icons cnde)
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="A small, configurable Wayland desktop"
@@ -81,6 +82,17 @@ package_cnde-lock() {
     install -Dm644 data/pam.d/cnde-lock -t "$pkgdir/etc/pam.d"
 }
 
+package_cnde-files() {
+    pkgdesc="cnde's file manager"
+    depends=(libxkbcommon)
+    optdepends=('udisks2: mount and eject drives'
+                'ffmpegthumbnailer: video thumbnails'
+                'cnde-icons: cnde-style icons')
+    cd cnde
+    install -Dm755 target/release/cnde-files -t "$pkgdir/usr/bin"
+    install -Dm644 files/cnde-files.desktop -t "$pkgdir/usr/share/applications"
+}
+
 package_cnde-icons() {
     pkgdesc="cnde's symbolic icons"
     arch=(any)
@@ -90,7 +102,7 @@ package_cnde-icons() {
 }
 
 package_cnde() {
-    pkgdesc="cnde desktop: compositor, shell, settings, lock screen and icons"
+    pkgdesc="cnde desktop: compositor, shell, settings, lock screen, files and icons"
     arch=(any)
-    depends=(cnde-compositor cnde-shell cnde-settings cnde-lock cnde-icons)
+    depends=(cnde-compositor cnde-shell cnde-settings cnde-lock cnde-files cnde-icons)
 }
