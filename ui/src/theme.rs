@@ -460,8 +460,9 @@ impl Theme {
 
     fn colours_for(appearance: &cnde_config::Appearance, screen: Option<Color>) -> Self {
         let dark = appearance.color_scheme == cnde_config::ColorScheme::Dark;
+        let pink = Color::rgb(0xf4, 0xa7, 0xc6);
         let accent = cnde_config::parse_color(&appearance.accent_color)
-            .map_or(Color::rgb(0xf4, 0xa7, 0xc6), |(r, g, b, _)| Color::rgb(r, g, b));
+            .map_or(pink, |(r, g, b, _)| Color::rgb(r, g, b));
         if appearance.adaptive() {
             return Self::adaptive(dark, screen, accent);
         }
@@ -478,7 +479,11 @@ impl Theme {
                         .map_or(fallback, |(r, g, b, _)| Color::rgb(r, g, b))
                 };
                 let base = parse(&appearance.base_color, Color::rgb(0x1c, 0x17, 0x26));
-                let accent = parse(&appearance.accent_color, Color::rgb(0xf4, 0xa7, 0xc6));
+                let accent = if appearance.accent_auto() {
+                    Self::accent_of(dark, screen, pink)
+                } else {
+                    parse(&appearance.accent_color, pink)
+                };
                 Self::custom(dark, base, accent)
             }
         }
@@ -492,13 +497,16 @@ impl Theme {
         let Some(screen) = screen else {
             return if dark { Self::quiet_dark() } else { Self::quiet_light() };
         };
-        let (h, s, _) = screen.hsl();
-        let accent = if s > 0.15 {
-            Color::from_hsl(h, 0.6, if dark { 0.72 } else { 0.45 })
-        } else {
-            accent
-        };
-        Self::custom(dark, screen, accent)
+        Self::custom(dark, screen, Self::accent_of(dark, Some(screen), accent))
+    }
+
+    /// A clear shade of `screen`'s hue, or `fallback` when there's no
+    /// screen colour or it's grey.
+    pub fn accent_of(dark: bool, screen: Option<Color>, fallback: Color) -> Color {
+        match screen.map(|c| c.hsl()) {
+            Some((h, s, _)) if s > 0.15 => Color::from_hsl(h, 0.6, if dark { 0.72 } else { 0.45 }),
+            _ => fallback,
+        }
     }
 
     /// A palette worked out from two colours: every surface takes `base`'s
@@ -809,5 +817,21 @@ mod tests {
             ..Default::default()
         };
         assert!(appearance.adaptive());
+    }
+
+    #[test]
+    fn auto_accent_follows_the_screen_hue() {
+        let appearance = cnde_config::Appearance {
+            palette: cnde_config::Palette::Custom,
+            accent_color: "Auto".into(),
+            ..Default::default()
+        };
+        let blue = Color::rgb(0x20, 0x40, 0xa0);
+        let theme = Theme::colours_for(&appearance, Some(blue));
+        assert!((theme.accent.hsl().0 - blue.hsl().0).abs() < 2.0);
+        let pink = Color::rgb(0xf4, 0xa7, 0xc6);
+        assert_eq!(Theme::colours_for(&appearance, None).accent, pink);
+        let grey = Some(Color::rgb(0x30, 0x30, 0x30));
+        assert_eq!(Theme::colours_for(&appearance, grey).accent, pink);
     }
 }

@@ -1401,7 +1401,7 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                 s(&c.appearance.accent_color),
                 s(&d.appearance.accent_color),
             )
-            .sub("Switches, selections and sliders"),
+            .sub("Switches, selections and sliders; Auto follows the wallpaper"),
         );
     }
     groups

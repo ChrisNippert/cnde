@@ -202,7 +202,8 @@ pub struct Appearance {
     /// from cnde's set.
     pub icon_theme: String,
     /// For `palette = "custom"`: the surfaces' colour ("#rrggbb"; its hue
-    /// is what matters, lightness is chosen per style) and the accent.
+    /// is what matters, lightness is chosen per style) and the accent
+    /// (or "auto": a clear shade of the wallpaper's hue).
     pub base_color: String,
     pub accent_color: String,
     /// Window corners, logical px. Everything else rounded (dock, bar,
@@ -229,6 +230,11 @@ impl Appearance {
     /// Whether the colours follow the screen (`palette = "adaptive"`).
     pub fn adaptive(&self) -> bool {
         self.palette == Palette::Adaptive || self.adaptive_color
+    }
+
+    /// Whether the accent is "auto": a shade of the wallpaper's hue.
+    pub fn accent_auto(&self) -> bool {
+        self.accent_color.trim().eq_ignore_ascii_case("auto")
     }
 
     /// The default corner radius.
@@ -837,7 +843,10 @@ impl Config {
             ("appearance.base_color", &self.appearance.base_color),
             ("appearance.accent_color", &self.appearance.accent_color),
         ] {
-            if !color.is_empty() && parse_color(color).is_none() {
+            if !color.is_empty()
+                && parse_color(color).is_none()
+                && !(name == "appearance.accent_color" && self.appearance.accent_auto())
+            {
                 return Err(Error::Invalid(format!(
                     "{name} must be \"#rrggbb\" or \"#rrggbbaa\", got \"{color}\""
                 )));

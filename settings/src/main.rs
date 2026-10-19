@@ -1095,6 +1095,13 @@ impl App {
                     self.write(&[(key, Value::Str(hex.to_string()))]);
                 }
             }
+            Target::AutoAccent(i) => {
+                if let Some(row) = self.row(i) {
+                    let key = row.key.clone();
+                    self.ui.edit = None;
+                    self.write(&[(key, Value::Str("auto".into()))]);
+                }
+            }
             Target::Screen(i) => {
                 if let Some(d) = self.ui.displays.get(i) {
                     let at = self

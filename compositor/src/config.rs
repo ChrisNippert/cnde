@@ -231,6 +231,8 @@ fn publish_accent(appearance: &cnde_config::Appearance) {
         cnde_config::Palette::Adwaita => "blue",
         // Changes with the screen; GTK apps keep a neutral one.
         cnde_config::Palette::Adaptive => "slate",
+        // Auto changes with the wallpaper; GTK apps keep a neutral one.
+        cnde_config::Palette::Custom if appearance.accent_auto() => "slate",
         // GNOME's named accent nearest the chosen one.
         cnde_config::Palette::Custom => {
             let (h, s, _) = cnde_config::parse_color(&appearance.accent_color)
