@@ -387,48 +387,12 @@ fn in_path(program: &str) -> bool {
 /// The thumbnailers that can run here, and which extension is which type.
 struct Know {
     thumbnailers: Vec<Thumbnailer>,
-    mime_of_ext: HashMap<String, String>,
 }
 
 static KNOW: OnceLock<Know> = OnceLock::new();
 
-/// Fallback when the shared MIME database isn't there.
-const MIME_TABLE: &[(&str, &str)] = &[
-    ("pdf", "application/pdf"),
-    ("mp4", "video/mp4"),
-    ("mkv", "video/x-matroska"),
-    ("webm", "video/webm"),
-    ("avi", "video/x-msvideo"),
-    ("mov", "video/quicktime"),
-    ("svg", "image/svg+xml"),
-    ("bmp", "image/bmp"),
-    ("tif", "image/tiff"),
-    ("tiff", "image/tiff"),
-    ("heic", "image/heic"),
-    ("avif", "image/avif"),
-    ("odt", "application/vnd.oasis.opendocument.text"),
-    ("epub", "application/epub+zip"),
-    ("xcf", "image/x-xcf"),
-];
-
 fn load_know() -> Know {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    match std::env::var_os("XDG_DATA_HOME") {
-        Some(d) if !d.is_empty() => dirs.push(PathBuf::from(d)),
-        _ => {
-            if let Some(h) = std::env::var_os("HOME") {
-                dirs.push(PathBuf::from(h).join(".local/share"));
-            }
-        }
-    }
-    let data_dirs =
-        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
-    dirs.extend(
-        data_dirs
-            .split(':')
-            .filter(|d| !d.is_empty())
-            .map(PathBuf::from),
-    );
+    let dirs = crate::mime::data_dirs();
     let mut thumbnailers = Vec::new();
     let mut seen = HashSet::new();
     for dir in &dirs {
@@ -452,51 +416,17 @@ fn load_know() -> Know {
             }
         }
     }
-    let mut mime_of_ext: HashMap<String, String> = MIME_TABLE
-        .iter()
-        .map(|(e, m)| (e.to_string(), m.to_string()))
-        .collect();
-    for dir in &dirs {
-        // The first dir with a database wins.
-        if let Ok(text) = std::fs::read_to_string(dir.join("mime/globs2")) {
-            parse_globs(&text, &mut mime_of_ext);
-            break;
-        }
-    }
     Know {
         thumbnailers,
-        mime_of_ext,
-    }
-}
-
-/// Simple `*.ext` globs of a `globs2` file, heaviest weight first.
-fn parse_globs(text: &str, into: &mut HashMap<String, String>) {
-    let mut weights: HashMap<String, u32> = HashMap::new();
-    for line in text.lines().filter(|l| !l.starts_with('#')) {
-        let mut parts = line.split(':');
-        let (Some(weight), Some(mime), Some(glob)) = (parts.next(), parts.next(), parts.next())
-        else {
-            continue;
-        };
-        let Some(ext) = glob.strip_prefix("*.") else {
-            continue;
-        };
-        if ext.contains(['*', '?', '[', '.']) {
-            continue;
-        }
-        let weight: u32 = weight.parse().unwrap_or(50);
-        let ext = ext.to_lowercase();
-        if weights.get(&ext).is_none_or(|&w| weight > w) {
-            weights.insert(ext.clone(), weight);
-            into.insert(ext, mime.to_string());
-        }
     }
 }
 
 impl Know {
     fn thumbnailer_for(&self, ext: &str) -> Option<&Thumbnailer> {
-        let mime = self.mime_of_ext.get(ext)?;
-        self.thumbnailers.iter().find(|t| t.mimes.contains(mime))
+        let mime = crate::mime::of_ext(ext)?;
+        self.thumbnailers
+            .iter()
+            .find(|t| t.mimes.iter().any(|m| m == mime))
     }
 }
 
@@ -978,18 +908,6 @@ mod tests {
                 "100%"
             ]
         );
-    }
-
-    #[test]
-    fn globs() {
-        let mut map = HashMap::new();
-        parse_globs(
-            "# comment\n50:video/mp4:*.mp4\n50:application/pdf:*.pdf\n50:x/y:*.tar.gz\n10:image/a:*.zz\n80:image/b:*.zz\n",
-            &mut map,
-        );
-        assert_eq!(map["mp4"], "video/mp4");
-        assert_eq!(map["zz"], "image/b");
-        assert!(!map.contains_key("tar.gz"));
     }
 
     #[test]

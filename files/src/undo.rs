@@ -26,6 +26,8 @@ pub enum Action {
     /// The copies that were made.
     Copied(Vec<PathBuf>),
     NewFolder(PathBuf),
+    /// A new empty file, or a copy of a template.
+    NewFile(PathBuf),
     /// Where the file used to be.
     Trashed(PathBuf),
 }
@@ -37,6 +39,7 @@ impl Action {
             Action::Moved(_) => "move",
             Action::Copied(_) => "copy",
             Action::NewFolder(_) => "new folder",
+            Action::NewFile(_) => "new file",
             Action::Trashed(_) => "trash",
         }
     }
@@ -101,6 +104,7 @@ pub fn undo(action: &Action, trash_root: &Path) -> io::Result<String> {
                 }
             })?;
         }
+        Action::NewFile(path) => model::trash_in(trash_root, path)?,
         Action::Trashed(orig) => restore(trash_root, orig)?,
     }
     Ok(format!("Undid {}", action.label()))

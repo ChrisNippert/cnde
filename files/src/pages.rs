@@ -11,8 +11,12 @@ use cnde_ui::{Color, Painter, Rect, Weight};
 
 use crate::{
     folder::Location,
+    grid,
     model::{self, Drive},
-    view::{Colors, Painted, SIDE_W, Target, Ui, WARN, WARN_AT, icon_for_name},
+    thumbs,
+    view::{
+        Colors, Painted, SIDE_W, Target, TextCache, Ui, ViewMode, WARN, WARN_AT, icon_for_name,
+    },
 };
 
 /// How many recents the Recent page loads.
@@ -40,6 +44,8 @@ pub struct RecentRow {
     /// The folder it is in, with the home folder as `~`.
     pub folder: String,
     pub when: SystemTime,
+    /// The file's own modified time, for its thumbnail.
+    pub modified: Option<SystemTime>,
     pub is_dir: bool,
 }
 
@@ -50,6 +56,8 @@ pub struct Pages {
     pub recent: Option<Vec<RecentRow>>,
     /// Window width in logical px, for the page's layout.
     pub width: f32,
+    /// Changes whenever `recent` does, for the tiles' cached text.
+    pub version: u64,
 }
 
 /// Load the recents (call on a thread); paths are shown relative to `home`.
@@ -62,8 +70,10 @@ pub fn load_recent(home: &Path) -> Vec<RecentRow> {
                 .file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
             let parent = r.path.parent().unwrap_or(Path::new("/"));
+            let meta = std::fs::metadata(&r.path).ok();
             RecentRow {
-                is_dir: r.path.is_dir(),
+                is_dir: meta.as_ref().is_some_and(|m| m.is_dir()),
+                modified: meta.and_then(|m| m.modified().ok()),
                 folder: tilde(parent, home),
                 name,
                 when: r.when,
@@ -87,6 +97,16 @@ fn ring_columns(w: f32) -> usize {
     (((w - SIDE_W - PAD * 2.0) / CELL_MIN).floor() as usize).max(1)
 }
 
+/// The recents as tiles (the grid view) rather than rows.
+fn tiled(ui: &Ui) -> bool {
+    ui.mode == ViewMode::Grid
+}
+
+/// How the recent tiles lie on the page.
+fn tile_geo(ui: &Ui) -> grid::Geo {
+    grid::geo((ui.pages.width - SIDE_W).max(0.0), ui.grid_size)
+}
+
 fn recent_count(ui: &Ui) -> usize {
     let n = ui.pages.recent.as_ref().map_or(0, Vec::len);
     match ui.location {
@@ -97,7 +117,12 @@ fn recent_count(ui: &Ui) -> usize {
 
 /// Height of the page's content in logical px.
 pub fn content_height(ui: &Ui) -> f32 {
-    let rows = recent_count(ui) as f32 * ROW_H;
+    let rows = if tiled(ui) {
+        let g = tile_geo(ui);
+        recent_count(ui).div_ceil(g.cols) as f32 * g.tile_h
+    } else {
+        recent_count(ui) as f32 * ROW_H
+    };
     match ui.location {
         Location::Overview => {
             let cols = ring_columns(ui.pages.width);
@@ -132,7 +157,17 @@ pub fn recent_subtitle(ui: &Ui) -> String {
 }
 
 /// Paint the page for the current location into the list area.
-pub fn paint(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, w: f32, h: f32) {
+#[allow(clippy::too_many_arguments)]
+pub fn paint(
+    ui: &Ui,
+    p: &mut Painter<'_, '_>,
+    cache: &mut TextCache,
+    c: &Colors,
+    out: &mut Painted,
+    w: f32,
+    h: f32,
+    scale: f32,
+) {
     let list = out.list;
     let mut y = list.y + TOP - ui.scroll;
     if ui.location == Location::Overview {
@@ -149,7 +184,11 @@ pub fn paint(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, w:
         );
         y += SECTION_H;
     }
-    recent_rows(ui, p, c, out, w, h, y);
+    if tiled(ui) && ui.pages.recent.as_ref().is_some_and(|r| !r.is_empty()) {
+        recent_tiles(ui, p, cache, c, out, h, y, scale);
+    } else {
+        recent_rows(ui, p, c, out, w, h, y);
+    }
 
     let content = content_height(ui);
     if content > list.h {
@@ -385,6 +424,105 @@ fn recent_rows(
             Weight::Normal,
             c.dim,
         );
+    }
+}
+
+/// The recents as tiles like the folder grid's, from `y` on; only the
+/// rows of tiles in view are painted or hit.
+#[allow(clippy::too_many_arguments)]
+fn recent_tiles(
+    ui: &Ui,
+    p: &mut Painter<'_, '_>,
+    cache: &mut TextCache,
+    c: &Colors,
+    out: &mut Painted,
+    h: f32,
+    y: f32,
+    scale: f32,
+) {
+    let t = p.theme;
+    let list = out.list;
+    let Some(rows) = &ui.pages.recent else {
+        return;
+    };
+    let g = tile_geo(ui);
+    let name_size = t.font_size - 1.0;
+    let small = t.font_size - 2.0;
+    // Apart from the folder's text, and the list's.
+    cache.sync(
+        ui.pages.version | 1 << 62,
+        scale,
+        -g.tile_w - 0.5,
+        name_size,
+    );
+    let first_row = ((list.y - y) / g.tile_h).floor().max(0.0) as usize;
+    let last_row = ((h - y) / g.tile_h).ceil().max(0.0) as usize;
+    let first = first_row * g.cols;
+    let last = (last_row * g.cols).min(recent_count(ui));
+    for (i, r) in rows.iter().enumerate().take(last).skip(first) {
+        let (row, col) = (i / g.cols, i % g.cols);
+        let x = list.x + grid::PAD + col as f32 * g.tile_w;
+        let ty = y + row as f32 * g.tile_h;
+        let (bx, bw, bh) = (x + 2.0, g.tile_w - 4.0, g.tile_h - 4.0);
+        if ui.hover == Some(Target::RecentFile(i)) || ui.hover == Some(Target::RecentFolder(i)) {
+            p.canvas.rounded_rect(bx, ty, bw, bh, 12.0, t.hover);
+        }
+        out.hits
+            .push((Rect::new(bx, ty, bw, bh), Target::RecentFile(i)));
+        let cx = x + g.tile_w / 2.0;
+        let thumb = if r.is_dir {
+            None
+        } else {
+            thumbs::get(&r.path, r.modified, grid::thumb_size(g.icon, scale), false)
+        };
+        if let Some(pm) = thumb {
+            let (tw, th) = grid::thumb_box(g.icon);
+            let rect = (
+                cx - tw / 2.0,
+                ty + grid::TOP + g.icon / 2.0 - th / 2.0,
+                tw,
+                th,
+            );
+            thumbs::draw(p.canvas, &pm, rect, 6.0 + g.icon / 24.0);
+        } else {
+            let color = if r.is_dir { c.fold } else { c.dim };
+            p.icon(
+                icon_for_name(&r.name, r.is_dir),
+                cx,
+                ty + grid::TOP + g.icon / 2.0,
+                g.icon,
+                color,
+            );
+        }
+        let max_w = g.tile_w - 12.0;
+        let mut ly = ty + grid::TOP + g.icon + 6.0;
+        if !cache.map.contains_key(&(i, 0)) {
+            let (a, b) = grid::two_lines(p.fonts, &r.name, name_size, scale, max_w);
+            cache.map.insert((i, 0), a);
+            cache.map.insert((i, 1), b);
+        }
+        for key in 0..2u8 {
+            if let Some(layout) = cache.map.get_mut(&(i, key)) {
+                if key == 1 && layout.width < 0.5 {
+                    continue;
+                }
+                let (lx, lh) = (cx - layout.width / 2.0, layout.height);
+                p.canvas.text(p.fonts, layout, lx, ly, c.ink);
+                ly += lh.max(name_size * 1.25);
+            }
+        }
+        // The folder it is in; clicking it shows the file there.
+        let layout = cache.map.entry((i, 2)).or_insert_with(|| {
+            crate::view::fit(p.fonts, &r.folder, small, Weight::Normal, scale, max_w)
+        });
+        let (lw, lx, sy) = (layout.width, cx - layout.width / 2.0, ly + 2.0);
+        let over = ui.hover == Some(Target::RecentFolder(i));
+        p.canvas
+            .text(p.fonts, layout, lx, sy, if over { c.ink } else { c.dim });
+        out.hits.push((
+            Rect::new(lx - 2.0, sy - 2.0, lw + 4.0, small * 1.4 + 4.0),
+            Target::RecentFolder(i),
+        ));
     }
 }
 

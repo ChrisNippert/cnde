@@ -5,6 +5,7 @@
 //! runs on a thread and reports back through one calloop channel, so the
 //! window never waits on a slow disk.
 
+mod apps;
 mod clipboard;
 mod dbus;
 mod dnd;
@@ -12,7 +13,9 @@ mod folder;
 mod grid;
 mod info;
 mod mainmenu;
+mod mime;
 mod model;
+mod newfile;
 mod ops;
 mod pages;
 mod search;
@@ -23,9 +26,8 @@ mod view;
 mod zoom;
 
 use std::{
-    os::{fd::OwnedFd, unix::process::CommandExt},
+    os::fd::OwnedFd,
     path::PathBuf,
-    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -333,6 +335,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+    apps::start();
     start_places(tx.clone(), home.clone());
     start_drives(tx.clone());
 
@@ -577,6 +580,7 @@ impl App {
             }
             Event::Recent(rows) => {
                 self.ui.pages.recent = Some(rows);
+                self.ui.pages.version += 1;
                 self.redraw();
             }
             Event::Places(places) => {
@@ -761,30 +765,17 @@ impl App {
         self.open_path(path, is_dir);
     }
 
-    /// Folders navigate, files go to xdg-open.
+    /// Folders navigate, files open in their default app (or `xdg-open`).
     fn open_path(&mut self, path: PathBuf, is_dir: bool) {
         if is_dir {
             self.go(Location::Dir(path));
         } else {
             let tx = self.events.clone();
-            match Command::new("xdg-open")
-                .arg(&path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .process_group(0)
-                .spawn()
-            {
-                // Reaped on a thread, so it never lingers as a zombie.
-                Ok(mut child) => {
-                    std::thread::spawn(move || {
-                        let _ = child.wait();
-                    });
+            std::thread::spawn(move || {
+                if let Err(err) = apps::open_default(&[path]) {
+                    let _ = tx.send(Event::Error(err));
                 }
-                Err(err) => {
-                    let _ = tx.send(Event::Error(format!("Can't run xdg-open: {err}")));
-                }
-            }
+            });
         }
     }
 
@@ -1032,21 +1023,8 @@ impl App {
                 self.ui.search.focused = true;
                 self.ui.search.cursor = self.ui.search.query.chars().count();
             }
-            Target::RecentFile(i) => {
-                let row = self.ui.pages.recent.as_ref().and_then(|r| r.get(i));
-                if let Some((path, is_dir)) = row.map(|r| (r.path.clone(), r.is_dir)) {
-                    self.open_path(path, is_dir);
-                }
-            }
-            Target::RecentFolder(i) => {
-                let row = self.ui.pages.recent.as_ref().and_then(|r| r.get(i));
-                if let Some((dir, name)) =
-                    row.and_then(|r| Some((r.path.parent()?.to_path_buf(), r.name.clone())))
-                {
-                    self.reveal = Some(name);
-                    self.go(Location::Dir(dir));
-                }
-            }
+            Target::RecentFile(i) => self.open_recent(i),
+            Target::RecentFolder(i) => self.open_recent_folder(i),
             Target::Close => self.exit.stop(),
             Target::Minimize => self.window.set_minimized(),
             Target::Maximize => self.toggle_maximized(),
@@ -1625,7 +1603,9 @@ impl PointerHandler for App {
                     } else {
                         vertical.absolute as f32
                     };
-                    if self.modifiers.ctrl && event.position.0 >= view::SIDE_W as f64 {
+                    if self.ui.x.menu.is_some() {
+                        self.menu_wheel(delta);
+                    } else if self.modifiers.ctrl && event.position.0 >= view::SIDE_W as f64 {
                         // Ctrl+wheel zooms; down is smaller.
                         self.zoom_by(-delta / WHEEL_STEP, Some(event.position));
                     } else if event.position.0 < view::SIDE_W as f64 {

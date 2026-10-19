@@ -41,7 +41,7 @@ fn parse(xbel: &str, limit: usize, exists: impl Fn(&Path) -> bool) -> Vec<Recent
             .iter()
             .find_map(|a| attr(tag, a).and_then(parse_rfc3339))
             .unwrap_or(SystemTime::UNIX_EPOCH);
-        found.push((PathBuf::from(percent_decode(href)), when));
+        found.push((PathBuf::from(percent_decode(&unescape(href))), when));
     }
     found.sort_by_key(|f| std::cmp::Reverse(f.1));
     let mut seen = HashSet::new();
@@ -51,6 +51,84 @@ fn parse(xbel: &str, limit: usize, exists: impl Fn(&Path) -> bool) -> Vec<Recent
         .take(limit)
         .map(|(path, when)| Recent { path, when })
         .collect()
+}
+
+/// The five XML entities.
+fn unescape(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// `xbel` without the bookmarks of `path`, and how many that was. Every
+/// other byte is kept as it was.
+fn without_bookmarks(xbel: &str, path: &Path) -> (String, usize) {
+    let mut out = String::with_capacity(xbel.len());
+    let (mut rest, mut removed) = (xbel, 0);
+    while let Some(start) = rest.find("<bookmark ") {
+        let after = &rest[start..];
+        let Some(tag_end) = after.find('>') else {
+            break;
+        };
+        let end = if after[..tag_end].ends_with('/') {
+            tag_end + 1
+        } else {
+            match after.find("</bookmark>") {
+                Some(i) => i + "</bookmark>".len(),
+                None => break,
+            }
+        };
+        let mine = attr(&after[..tag_end], "href")
+            .map(unescape)
+            .and_then(|h| h.strip_prefix("file://").map(percent_decode))
+            .is_some_and(|p| Path::new(&p) == path);
+        if mine {
+            // Take the line's indentation and its newline along.
+            let head = &rest[..start];
+            let keep = head.trim_end_matches([' ', '\t']);
+            out.push_str(keep);
+            let mut tail = &after[end..];
+            if keep.ends_with('\n') || keep.is_empty() {
+                tail = tail.strip_prefix('\n').unwrap_or(tail);
+            }
+            rest = tail;
+            removed += 1;
+        } else {
+            out.push_str(&rest[..start + end]);
+            rest = &after[end..];
+        }
+    }
+    out.push_str(rest);
+    (out, removed)
+}
+
+/// Take `path` out of the recently-used file `file` (written to a temp
+/// file and renamed). True if there was anything to take out.
+fn remove_from(file: &Path, path: &Path) -> std::io::Result<bool> {
+    let file = fs::canonicalize(file)?;
+    let (text, removed) = without_bookmarks(&fs::read_to_string(&file)?, path);
+    if removed == 0 {
+        return Ok(false);
+    }
+    let tmp = file.with_extension(format!("xbel.tmp{}", std::process::id()));
+    fs::write(&tmp, text)?;
+    fs::rename(&tmp, &file).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })?;
+    Ok(true)
+}
+
+/// Forget `path` in the desktop's recent files.
+pub fn forget(path: &Path) -> std::io::Result<bool> {
+    match xbel_path() {
+        Some(f) if f.exists() => remove_from(&f, path),
+        _ => Ok(false),
+    }
 }
 
 /// The value of ` name="..."` within a tag's text.
@@ -154,5 +232,54 @@ mod tests {
         let paths: Vec<_> = got.iter().map(|r| r.path.to_str().unwrap()).collect();
         assert_eq!(paths, ["/home/u/new.txt", "/home/u/old file.txt"]);
         assert_eq!(parse(xbel, 1, |_| true).len(), 1);
+    }
+
+    const XBEL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xbel version="1.0">
+  <bookmark href="file:///home/u/a%20b.txt" modified="2026-01-01T00:00:00Z">
+    <info><metadata><bookmark:applications><bookmark:application name="a"/></bookmark:applications></metadata></info>
+  </bookmark>
+  <bookmark href="file:///home/u/c&amp;d.txt" modified="2026-01-02T00:00:00Z"/>
+  <bookmark href="file:///home/u/keep.txt" modified="2026-01-03T00:00:00Z">
+    <info/>
+  </bookmark>
+  <bookmark href="file:///home/u/a%20b.txt" modified="2026-01-04T00:00:00Z"/>
+</xbel>
+"#;
+
+    #[test]
+    fn removes_only_that_path() {
+        let (out, n) = without_bookmarks(XBEL, Path::new("/home/u/a b.txt"));
+        assert_eq!(n, 2);
+        assert!(!out.contains("a%20b"));
+        assert!(out.contains("c&amp;d.txt") && out.contains("keep.txt"));
+        // The rest is byte for byte what it was.
+        let lines: Vec<_> = XBEL.lines().collect();
+        let want = [&lines[..2], &lines[5..9], &lines[10..]]
+            .concat()
+            .join("\n")
+            + "\n";
+        assert_eq!(out, want);
+        let (out, n) = without_bookmarks(XBEL, Path::new("/home/u/c&d.txt"));
+        assert_eq!(n, 1);
+        assert!(!out.contains("c&amp;d") && out.contains("keep.txt"));
+        assert_eq!(
+            without_bookmarks(XBEL, Path::new("/nope")),
+            (XBEL.to_string(), 0)
+        );
+    }
+
+    #[test]
+    fn forgetting_rewrites_a_temp_file() {
+        let dir = std::env::temp_dir().join(format!("cnde-xbel-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("recently-used.xbel");
+        fs::write(&f, XBEL).unwrap();
+        assert!(remove_from(&f, Path::new("/home/u/keep.txt")).unwrap());
+        assert!(!remove_from(&f, Path::new("/home/u/keep.txt")).unwrap());
+        let got = parse(&fs::read_to_string(&f).unwrap(), 10, |_| true);
+        assert_eq!(got.len(), 2);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

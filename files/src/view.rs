@@ -208,7 +208,8 @@ pub fn panel_w(ui: &Ui) -> f32 {
 /// The list's area for a window `w` x `h` (logical). The grid has no
 /// column header, so it starts higher.
 pub fn list_rect(ui: &Ui, w: f32, h: f32) -> Rect {
-    let head = if ui.mode == ViewMode::List {
+    // The pages have no grid: they lie where the list does, in both modes.
+    let head = if ui.mode == ViewMode::List || !matches!(ui.location, Location::Dir(_)) {
         HEAD_H + 2.0
     } else {
         0.0
@@ -529,7 +530,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
             rows(ui, &mut p, &mut res.text, &c, &mut out, wm, h, scale);
         }
     } else {
-        pages::paint(ui, &mut p, &c, &mut out, w, h);
+        pages::paint(ui, &mut p, &mut res.text, &c, &mut out, w, h, scale);
     }
 
     // Everything above the rows is solid, so rows scroll under it.
@@ -1649,6 +1650,7 @@ mod tests {
                     name: name.to_string(),
                     folder: folder.to_string(),
                     when: SystemTime::now() - Duration::from_secs(900 * (i as u64 + 1).pow(2)),
+                    modified: None,
                     is_dir: *name == "compositor",
                 })
                 .collect(),
@@ -1711,12 +1713,50 @@ mod tests {
         if std::env::var_os("CNDE_PREVIEW_MAINMENU").is_some() {
             ui.x.main_menu = Some(crate::mainmenu::MainMenu::default());
         }
-        if std::env::var_os("CNDE_PREVIEW_MENU").is_some() {
-            ui.x.menu = Some(ops::Menu {
-                x: 420.0,
-                y: 250.0,
-                empty: false,
+        // CNDE_PREVIEW_MENU=file|open-with|empty|new|recent|recent-open-with
+        if let Ok(kind) = std::env::var("CNDE_PREVIEW_MENU") {
+            let mut menu = ops::Menu::at(420.0, 250.0);
+            let fake = |id: &str, name: &str| crate::apps::App {
+                id: id.into(),
+                name: name.into(),
+                exec: name.into(),
+                icon: None,
+                mimes: vec![],
+                terminal: false,
+                no_display: false,
+                path: PathBuf::new(),
+            };
+            crate::apps::install(crate::apps::Index {
+                apps: vec![
+                    fake("a", "Text Editor"),
+                    fake("b", "Code"),
+                    fake("c", "Terminal"),
+                    fake("d", "Web Browser"),
+                ],
+                env: crate::apps::Env::from_env(),
             });
+            if kind.starts_with("recent") {
+                menu.recent = Some(1);
+                menu.x = 520.0;
+                menu.y = 400.0;
+            }
+            if kind == "empty" || kind == "new" {
+                menu.empty = true;
+            }
+            if kind.ends_with("open-with") {
+                menu.sub = Some(ops::Sub::OpenWith);
+                menu.apps = vec![0, 1, 2];
+                menu.desc = ".md files".into();
+                menu.always = true;
+            }
+            if kind == "new" {
+                menu.sub = Some(ops::Sub::New);
+                menu.templates = vec![
+                    ("Document.odt".into(), PathBuf::new()),
+                    ("Notes.md".into(), PathBuf::new()),
+                ];
+            }
+            ui.x.menu = Some(menu);
         }
         let theme = Theme::for_appearance(&ui.config.appearance);
         let mut res = Res::new(theme, Icons::new());

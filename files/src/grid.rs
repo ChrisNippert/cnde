@@ -9,8 +9,8 @@ use crate::{
     view::{self, Colors, Painted, TextCache, Ui},
 };
 
-const PAD: f32 = 16.0;
-const TOP: f32 = 10.0;
+pub(crate) const PAD: f32 = 16.0;
+pub(crate) const TOP: f32 = 10.0;
 /// A tile is the icon plus room for the name and the size line.
 pub fn tile_w(icon: f32) -> f32 {
     icon + 64.0
@@ -21,7 +21,7 @@ pub fn tile_h(icon: f32) -> f32 {
 }
 
 /// The box a thumbnail fits in: a bit bigger than the icon.
-fn thumb_box(icon: f32) -> (f32, f32) {
+pub(crate) fn thumb_box(icon: f32) -> (f32, f32) {
     (icon + 20.0, icon + 8.0)
 }
 
@@ -75,7 +75,7 @@ pub fn pos_at(
 
 /// Up to two lines of `text`, the second ellipsized; the second is empty
 /// when the first is enough.
-fn two_lines(
+pub(crate) fn two_lines(
     fonts: &mut Fonts,
     text: &str,
     size: f32,
