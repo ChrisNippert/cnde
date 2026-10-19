@@ -295,7 +295,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or_default();
     let theme = Theme::for_screen(&config.appearance, None);
-    let frosted = config.appearance.material == cnde_config::Material::Frosted;
+    let frosted = config.appearance.material == cnde_config::Material::Frosted && frost_available();
     cnde_ui::anim::set_speed(config.animations.speed as f32);
     let mut icons = Icons::new();
     icons.set_theme(&config.appearance.icon_theme);
@@ -957,7 +957,7 @@ impl App {
             self.res.theme = Theme::for_screen(&config.appearance, self.screen);
             self.res.icons.set_theme(&config.appearance.icon_theme);
             self.res.text.clear();
-            self.ui.frosted = config.appearance.material == cnde_config::Material::Frosted;
+            self.ui.frosted = config.appearance.material == cnde_config::Material::Frosted && frost_available();
         }
         self.ui.config = config;
         self.redraw();
@@ -1741,3 +1741,9 @@ impl ProvidesRegistryState for App {
 
 delegate_registry!(App);
 delegate_dispatch2!(App);
+
+/// Frosting needs cnde's compositor to blur what's behind the window; on
+/// another desktop a translucent window just shows the clutter behind it.
+fn frost_available() -> bool {
+    std::env::var_os(cnde_ipc::SOCKET_ENV).is_some_and(|v| !v.is_empty())
+}
