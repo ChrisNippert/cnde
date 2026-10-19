@@ -25,6 +25,34 @@ pub fn launch(app: &App, files: &[PathBuf], cwd: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// What to call files of `mime` in "Always use for …": its name from the
+/// shared MIME database, pluralised ("PNG images"), else `fallback`.
+pub fn describe_type(mime: &str, fallback: &str) -> String {
+    let comment = mime::data_dirs().into_iter().find_map(|dir| {
+        let xml = std::fs::read_to_string(dir.join("mime").join(format!("{mime}.xml"))).ok()?;
+        let start = xml.find("<comment>")? + "<comment>".len();
+        let end = xml[start..].find("</comment>")? + start;
+        Some(xml[start..end].trim().to_string()).filter(|c| !c.is_empty())
+    });
+    match comment {
+        Some(c) => plural(&c),
+        None => fallback.to_string(),
+    }
+}
+
+/// "PNG image" -> "PNG images"; what doesn't pluralise takes "files".
+fn plural(name: &str) -> String {
+    let last = name.rsplit(' ').next().unwrap_or(name).to_lowercase();
+    let mass = ["audio", "text", "data", "music", "software"];
+    if name.ends_with('s') {
+        name.to_string()
+    } else if mass.contains(&last.as_str()) || !name.ends_with(|c: char| c.is_alphabetic()) {
+        format!("{name} files")
+    } else {
+        format!("{name}s")
+    }
+}
+
 /// Open files with their default apps (call on a thread); what has none
 /// goes to `xdg-open`. Files of one app open together.
 pub fn open_default(files: &[PathBuf]) -> Result<(), String> {
@@ -57,4 +85,18 @@ pub fn open_default(files: &[PathBuf]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pluralises_type_names() {
+        assert_eq!(plural("PNG image"), "PNG images");
+        assert_eq!(plural("Plain text document"), "Plain text documents");
+        assert_eq!(plural("MP3 audio"), "MP3 audio files");
+        assert_eq!(plural("Images"), "Images");
+        assert_eq!(plural("Foo (bar)"), "Foo (bar) files");
+    }
 }

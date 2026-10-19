@@ -5,7 +5,9 @@
 use cnde_ui::{Fonts, Painter, Rect, TextLayout, Weight};
 
 use crate::{
-    model, thumbs,
+    model,
+    scrollbar::Bar,
+    thumbs,
     view::{self, Colors, Painted, TextCache, Ui},
 };
 
@@ -125,7 +127,7 @@ pub fn paint(
     p: &mut Painter<'_, '_>,
     cache: &mut TextCache,
     c: &Colors,
-    out: &Painted,
+    out: &mut Painted,
     h: f32,
     scale: f32,
 ) {
@@ -200,7 +202,12 @@ pub fn paint(
         let name_y = y + TOP + g.icon + 6.0;
         let max_w = g.tile_w - 12.0;
         let mut ly = name_y;
-        if ui.x.rename.as_ref().is_some_and(|r| r.name == entry.name) {
+        if ui
+            .x
+            .rename
+            .as_ref()
+            .is_some_and(|r| r.bookmark.is_none() && r.name == entry.name)
+        {
             crate::ops::paint_rename(
                 ui,
                 p,
@@ -240,22 +247,17 @@ pub fn paint(
         p.canvas.text(p.fonts, layout, lx, sub_y, c.dim);
     }
 
-    // A thin scroll indicator when there's more than fits.
     let content = view::content_height(ui, list.w);
-    if content > list.h {
-        let track_h = list.h - 8.0;
-        let thumb_h = (track_h * list.h / content).max(24.0);
-        let range = (content - list.h).max(1.0);
-        let ty = list.y + 4.0 + (track_h - thumb_h) * (ui.scroll / range).clamp(0.0, 1.0);
-        p.canvas.rounded_rect(
-            list.right() - 7.0,
-            ty,
-            3.0,
-            thumb_h,
-            1.5,
-            c.ink.with_alpha(0.25),
-        );
-    }
+    crate::scrollbar::paint(
+        p,
+        out,
+        Bar::List,
+        list,
+        content,
+        ui.scroll,
+        c.ink,
+        ui.bar_lit(Bar::List),
+    );
 }
 
 #[cfg(test)]

@@ -27,7 +27,7 @@ use crate::{
     clipboard::{GNOME, Payload, URI_LIST},
     folder::Location,
     transfer::{Mode, Msg},
-    view::{self, Target},
+    view::{self, SideSlot, Target},
 };
 
 /// The pointer must move this far (logical px) with the button down to drag.
@@ -54,6 +54,8 @@ pub struct State {
     /// release, unless it turned into a drag.
     pub defer: Option<usize>,
     pub over: Option<Over>,
+    /// A drop would add bookmarks at this slot of the sidebar.
+    pub bookmark_at: Option<usize>,
     /// Where a drop would go right now.
     dest: Option<PathBuf>,
     /// What the drag coming in carries, when known.
@@ -129,6 +131,10 @@ impl App {
                 let p = self.ui.places.get(i)?.path.clone();
                 return Some((p, None, Some(t)));
             }
+            Some(t @ Target::Bookmark(i)) => {
+                let p = self.ui.bookmarks.get(i)?.path.clone();
+                return Some((p, None, Some(t)));
+            }
             Some(t @ Target::Drive(i)) => {
                 let p = self.ui.drives.get(i)?.mount.clone();
                 return Some((p, None, Some(t)));
@@ -160,7 +166,18 @@ impl App {
         if !dnd.incoming {
             return;
         }
-        let target = self.drop_target(at);
+        // Folders dropped between the sidebar's shortcuts become new ones.
+        let slot = match view::side_slot(&self.ui, self.size.1 as f32, at, false) {
+            Some(SideSlot::Insert(k)) if self.ui.x.dnd.paths.iter().all(|p| p.is_dir()) => Some(k),
+            _ => None,
+        };
+        self.ui.x.dnd.bookmark_at = slot;
+        let bm_changed = self.ui.x.bm_insert != slot;
+        self.ui.x.bm_insert = slot;
+        let target = match slot {
+            Some(_) => Some((PathBuf::new(), None, None)),
+            None => self.drop_target(at),
+        };
         let (dest, over, side) = match target {
             Some((d, o, s)) => (Some(d), o, s),
             None => (None, None, None),
@@ -200,7 +217,7 @@ impl App {
         let dnd = &mut self.ui.x.dnd;
         dnd.told = Some(told);
         dnd.dest = dest;
-        let hover_changed = dnd.over != over || self.ui.hover != side;
+        let hover_changed = dnd.over != over || self.ui.hover != side || bm_changed;
         dnd.over = over;
         self.ui.hover = side;
         if hover_changed {
@@ -226,7 +243,14 @@ impl App {
         dnd.dest = None;
         dnd.paths.clear();
         dnd.told = None;
-        if matches!(self.ui.hover, Some(Target::Place(_) | Target::Drive(_))) {
+        dnd.bookmark_at = None;
+        if self.ui.x.bm_drag.is_none() {
+            self.ui.x.bm_insert = None;
+        }
+        if matches!(
+            self.ui.hover,
+            Some(Target::Place(_) | Target::Drive(_) | Target::Bookmark(_))
+        ) {
             self.ui.hover = None;
         }
         if was {
@@ -297,6 +321,22 @@ impl DataDeviceHandler for App {
         };
         let dest = self.ui.x.dnd.dest.clone();
         let told = self.ui.x.dnd.told.as_ref().map(|t| t.1);
+        if let Some(at) = self.ui.x.dnd.bookmark_at {
+            let dirs: Vec<PathBuf> = self
+                .ui
+                .x
+                .dnd
+                .paths
+                .iter()
+                .filter(|p| p.is_dir())
+                .cloned()
+                .collect();
+            let finish = !offer.selected_action.is_empty();
+            self.drag_clear();
+            finish_offer(&offer, finish);
+            self.add_bookmarks(dirs, Some(at));
+            return;
+        }
         self.drag_clear();
         let action = offer.selected_action;
         let mode = if action.contains(DndAction::Copy) {

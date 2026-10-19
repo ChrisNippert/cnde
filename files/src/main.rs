@@ -6,6 +6,7 @@
 //! window never waits on a slow disk.
 
 mod apps;
+mod bookmarks;
 mod clipboard;
 mod dbus;
 mod dnd;
@@ -13,11 +14,14 @@ mod folder;
 mod grid;
 mod info;
 mod mainmenu;
+mod marks;
 use cnde_apps::mime;
 mod model;
 mod newfile;
+mod openwith;
 mod ops;
 mod pages;
+mod scrollbar;
 mod search;
 mod thumbs;
 mod transfer;
@@ -126,6 +130,8 @@ enum Event {
     Drives(Vec<model::Drive>),
     Trash(u64),
     Places(Vec<Place>),
+    /// The bookmarks file was read (the folders that exist).
+    Bookmarks(Vec<bookmarks::Entry>),
     Recent(Vec<pages::RecentRow>),
     Error(String),
     Screen(Option<cnde_ui::Color>),
@@ -337,9 +343,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     apps::start();
     start_places(tx.clone(), home.clone());
+    marks::start(tx.clone(), home.clone());
     start_drives(tx.clone());
 
     let ui = Ui {
+        bookmarks: Vec::new(),
         grid_size: config.files.grid_icon_size as f32,
         list_size: config.files.list_icon_size as f32,
         config,
@@ -585,6 +593,11 @@ impl App {
             }
             Event::Places(places) => {
                 self.ui.places = places;
+                self.apply_bookmarks();
+                self.redraw();
+            }
+            Event::Bookmarks(entries) => {
+                self.set_bookmarks(entries);
                 self.redraw();
             }
             Event::Error(message) => self.show_error(message),
@@ -987,6 +1000,9 @@ impl App {
 
     fn press(&mut self, position: (f64, f64), serial: u32) {
         self.serial = serial;
+        if self.sheet_press(position) {
+            return;
+        }
         if self.menu_press(position) {
             return;
         }
@@ -1014,7 +1030,15 @@ impl App {
             Target::Mode(mode) => self.ui.mode = mode,
             Target::Info => self.ui.info_panel = !self.ui.info_panel,
             Target::Menu => self.toggle_menu(),
-            Target::Zoom => {}
+            Target::Zoom | Target::Sheet(_) => {}
+            Target::Bookmark(i) => {
+                self.bookmark_arm(i, position);
+                return;
+            }
+            Target::Scroll(bar) => {
+                self.bar_press(bar, position);
+                return;
+            }
             Target::Search => {
                 // Searching needs a folder: the Overview and Recent have none.
                 if !matches!(self.ui.location, Location::Dir(_)) {
@@ -1556,6 +1580,9 @@ impl PointerHandler for App {
                     self.pointer_inside = true;
                     let entered = matches!(event.kind, PointerEventKind::Enter { .. });
                     self.update_cursor(entered);
+                    if self.bar_motion(event.position) || self.bookmark_motion(event.position) {
+                        continue;
+                    }
                     self.drag_motion(event.position);
                     if self.main_menu_drag(event.position) {
                         self.redraw();
@@ -1582,6 +1609,8 @@ impl PointerHandler for App {
                 PointerEventKind::Release {
                     button: BTN_LEFT, ..
                 } => {
+                    self.bar_release();
+                    self.bookmark_release();
                     self.drag_release();
                     self.main_menu_release();
                 }
@@ -1603,8 +1632,10 @@ impl PointerHandler for App {
                     } else {
                         vertical.absolute as f32
                     };
-                    if self.ui.x.menu.is_some() {
-                        self.menu_wheel(delta);
+                    if self.ui.x.sheet.is_some() {
+                        self.sheet_wheel(delta);
+                    } else if self.ui.x.menu.is_some() {
+                        // The menu has nothing to scroll.
                     } else if self.modifiers.ctrl && event.position.0 >= view::SIDE_W as f64 {
                         // Ctrl+wheel zooms; down is smaller.
                         self.zoom_by(-delta / WHEEL_STEP, Some(event.position));
@@ -1640,6 +1671,8 @@ impl KeyboardHandler for App {
         _: &[u32],
         _: &[Keysym],
     ) {
+        // Another program may have changed the bookmarks meanwhile.
+        self.reload_bookmarks();
     }
     fn leave(
         &mut self,

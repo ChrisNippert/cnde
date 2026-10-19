@@ -58,14 +58,15 @@ pub enum Act {
     Trash,
     CopyPath,
     Terminal,
-    /// Show or hide the Open With list.
-    OpenWithMenu,
-    /// Open With: this app (an index into the menu's list).
-    OpenWithApp(usize),
-    /// Open With: list every application.
-    OpenWithOther,
-    /// Open With: the "Always use" checkbox.
-    OpenWithAlways,
+    /// Open With…: the app chooser sheet.
+    OpenWith,
+    /// A folder to the sidebar.
+    AddBookmark,
+    /// The sidebar bookmark's menu.
+    MarkOpen,
+    MarkTerminal,
+    MarkRename,
+    MarkRemove,
     /// A recent row: show it in its folder.
     OpenFolder,
     RemoveRecent,
@@ -87,7 +88,7 @@ pub enum Act {
 
 const MENU: [(Act, &str); 9] = [
     (Act::Open, "Open"),
-    (Act::OpenWithMenu, "Open With  ›"),
+    (Act::OpenWith, "Open With…"),
     (Act::Rename, "Rename"),
     (Act::Copy, "Copy"),
     (Act::Cut, "Cut"),
@@ -99,10 +100,30 @@ const MENU: [(Act, &str); 9] = [
 /// The menu over a row of the recent list.
 const MENU_RECENT: [(Act, &str); 5] = [
     (Act::Open, "Open"),
-    (Act::OpenWithMenu, "Open With  ›"),
+    (Act::OpenWith, "Open With…"),
     (Act::OpenFolder, "Open Folder"),
     (Act::CopyPath, "Copy path"),
     (Act::RemoveRecent, "Remove from Recent"),
+];
+/// The menu over a single folder.
+const MENU_DIR: [(Act, &str); 10] = [
+    (Act::Open, "Open"),
+    (Act::AddBookmark, "Add to Sidebar"),
+    (Act::Rename, "Rename"),
+    (Act::Copy, "Copy"),
+    (Act::Cut, "Cut"),
+    (Act::Paste, "Paste"),
+    (Act::Trash, "Move to Trash"),
+    (Act::CopyPath, "Copy path"),
+    (Act::Terminal, "Terminal here"),
+    (Act::OpenWith, "Open With…"),
+];
+/// The menu over a sidebar bookmark.
+const MENU_MARK: [(Act, &str); 4] = [
+    (Act::MarkOpen, "Open"),
+    (Act::MarkTerminal, "Open in Terminal"),
+    (Act::MarkRename, "Rename"),
+    (Act::MarkRemove, "Remove from Sidebar"),
 ];
 /// The menu over empty space in a folder.
 const MENU_EMPTY: [(Act, &str); 5] = [
@@ -116,10 +137,7 @@ const MENU_EMPTY: [(Act, &str); 5] = [
 impl Act {
     /// Rows that open a list or tick a box leave the menu up.
     fn keeps_menu(self) -> bool {
-        matches!(
-            self,
-            Act::OpenWithMenu | Act::OpenWithOther | Act::OpenWithAlways | Act::NewFileMenu
-        )
+        matches!(self, Act::NewFileMenu)
     }
 }
 
@@ -132,12 +150,13 @@ pub struct Rename {
     pub cursor: usize,
     /// Everything is selected: typing replaces it.
     pub fresh: bool,
+    /// Renaming this sidebar bookmark, not a file.
+    pub bookmark: Option<usize>,
 }
 
 /// The list beside the right-click menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sub {
-    OpenWith,
     New,
 }
 
@@ -151,18 +170,10 @@ pub struct Menu {
     /// Over a row of the recent list: which.
     pub recent: Option<usize>,
     pub sub: Option<Sub>,
-    /// What Open With opens, and the type they share.
-    pub files: Vec<PathBuf>,
-    pub mime: String,
-    /// "Always use for …": what to call the type.
-    pub desc: String,
-    /// The apps listed (indexes into the app index), the default first.
-    pub apps: Vec<usize>,
-    /// First app shown, when the list is longer than the window.
-    pub scroll: usize,
-    /// Every app is listed, not just the ones for the type.
-    pub other: bool,
-    pub always: bool,
+    /// Over a single folder: it can go to the sidebar.
+    pub dir: bool,
+    /// Over a bookmark of the sidebar: which.
+    pub bookmark: Option<usize>,
     pub templates: Vec<(String, PathBuf)>,
 }
 
@@ -176,7 +187,11 @@ impl Menu {
     }
 
     fn rows(&self) -> &'static [(Act, &'static str)] {
-        if self.empty {
+        if self.bookmark.is_some() {
+            &MENU_MARK
+        } else if self.dir {
+            &MENU_DIR
+        } else if self.empty {
             &MENU_EMPTY
         } else if self.recent.is_some() {
             &MENU_RECENT
@@ -188,33 +203,8 @@ impl Menu {
     /// The submenu's rows: label, what it does, and the ticked one. At
     /// most `fit` apps show at once.
     fn sub_rows(&self, fit: usize) -> (Vec<String>, Vec<Act>, Option<usize>) {
-        let (mut labels, mut acts, mut tick) = (Vec::new(), Vec::new(), None);
+        let (mut labels, mut acts, tick) = (Vec::new(), Vec::new(), None);
         match self.sub {
-            Some(Sub::OpenWith) => {
-                let ix = crate::apps::index();
-                let footer = 1 + !self.other as usize;
-                let room = fit.saturating_sub(footer).max(1);
-                let end = (self.scroll + room).min(self.apps.len());
-                for i in self.scroll..end {
-                    let name = ix.map_or("?", |ix| ix.apps[self.apps[i]].name.as_str());
-                    let default = i == 0 && !self.other;
-                    labels.push(if default {
-                        format!("{name} (default)")
-                    } else {
-                        name.to_string()
-                    });
-                    acts.push(Act::OpenWithApp(i));
-                }
-                if !self.other {
-                    labels.push("Other Application…".into());
-                    acts.push(Act::OpenWithOther);
-                }
-                if self.always {
-                    tick = Some(labels.len());
-                }
-                labels.push(format!("Always use for {}", self.desc));
-                acts.push(Act::OpenWithAlways);
-            }
             Some(Sub::New) => {
                 labels.push("Empty File".into());
                 acts.push(Act::NewFile);
@@ -242,6 +232,17 @@ pub struct Extra {
     pub pending_rename: Option<String>,
     pub xfer: crate::transfer::State,
     pub dnd: crate::dnd::State,
+    /// A scrollbar thumb being dragged.
+    pub bar_drag: Option<crate::scrollbar::Drag>,
+    /// A bookmark being dragged to a new place in the list.
+    pub bm_drag: Option<crate::marks::Drag>,
+    /// Where the sidebar draws the insertion line of a drag.
+    pub bm_insert: Option<usize>,
+    /// The bookmarks file's folders that exist, before the standard places
+    /// are taken out.
+    pub bookmark_entries: Vec<crate::bookmarks::Entry>,
+    /// The Open With sheet.
+    pub sheet: Option<crate::openwith::Sheet>,
     pub refresh_seq: u64,
     refresh_timer: Option<RegistrationToken>,
     watch: Option<RegistrationToken>,
@@ -280,10 +281,7 @@ pub fn paint_menu(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, w: f32, h
     let hover = |i: usize| (ui.hover == Some(Target::Act(items[i].0))) as u8 as f32;
     let rects = p.popover(x, y, MENU_W, &labels, None, hover, 1.0);
     let mut live = rects.len();
-    let opener = menu.sub.map(|s| match s {
-        Sub::OpenWith => Act::OpenWithMenu,
-        Sub::New => Act::NewFileMenu,
-    });
+    let opener = menu.sub.map(|Sub::New| Act::NewFileMenu);
     let mut row_y = y;
     for (rect, (act, _)) in rects.into_iter().zip(items) {
         if Some(*act) == opener {
@@ -472,12 +470,32 @@ impl App {
                     self.remove_recent(i);
                 }
             }
-            Act::OpenWithApp(i) => {
-                if let Some(menu) = menu {
-                    self.open_with(&menu, i);
+            Act::OpenWith => self.open_with_sheet(recent),
+            Act::AddBookmark => {
+                let dirs = self.selected_dirs();
+                self.add_bookmarks(dirs, None);
+            }
+            Act::MarkOpen => {
+                if let Some(i) = menu.as_ref().and_then(|m| m.bookmark) {
+                    self.open_bookmark(i);
                 }
             }
-            Act::OpenWithMenu | Act::OpenWithOther | Act::OpenWithAlways | Act::NewFileMenu => {}
+            Act::MarkTerminal => {
+                if let Some(i) = menu.as_ref().and_then(|m| m.bookmark) {
+                    self.bookmark_terminal(i);
+                }
+            }
+            Act::MarkRename => {
+                if let Some(i) = menu.as_ref().and_then(|m| m.bookmark) {
+                    self.start_bookmark_rename(i);
+                }
+            }
+            Act::MarkRemove => {
+                if let Some(i) = menu.as_ref().and_then(|m| m.bookmark) {
+                    self.remove_bookmark(i);
+                }
+            }
+            Act::NewFileMenu => {}
             Act::SelectAll => self.ui.folder.select_all(),
             Act::Refresh => self.reload_folder(),
             Act::ToggleHidden => self.toggle_hidden(),
@@ -513,15 +531,7 @@ impl App {
             return;
         };
         match act {
-            Act::OpenWithMenu if menu.sub == Some(Sub::OpenWith) => menu.sub = None,
             Act::NewFileMenu if menu.sub == Some(Sub::New) => menu.sub = None,
-            Act::OpenWithMenu => self.open_with_list(),
-            Act::OpenWithOther => {
-                menu.other = true;
-                menu.scroll = 0;
-                menu.apps = crate::apps::index().map(|ix| ix.all()).unwrap_or_default();
-            }
-            Act::OpenWithAlways => menu.always = !menu.always,
             Act::NewFileMenu => {
                 let env = crate::apps::Env::from_env();
                 menu.templates = crate::newfile::templates_dir(&env.config_home, &self.ui.home)
@@ -534,7 +544,7 @@ impl App {
     }
 
     /// What Open With applies to: the recent row, else the selection.
-    fn menu_files(&self, recent: Option<usize>) -> Vec<(PathBuf, bool)> {
+    pub(crate) fn menu_files(&self, recent: Option<usize>) -> Vec<(PathBuf, bool)> {
         match recent {
             Some(i) => self
                 .ui
@@ -550,74 +560,6 @@ impl App {
                 .map(|e| (e.path, e.is_dir))
                 .collect(),
         }
-    }
-
-    /// Fill and show the Open With list of the open menu.
-    fn open_with_list(&mut self) {
-        let recent = self.ui.x.menu.as_ref().and_then(|m| m.recent);
-        let files = self.menu_files(recent);
-        let Some((first, first_dir)) = files.first().cloned() else {
-            return;
-        };
-        let mime = crate::mime::of_path(&first, first_dir);
-        if files
-            .iter()
-            .any(|(p, d)| crate::mime::of_path(p, *d) != mime)
-        {
-            self.show_error("Pick files of one type to choose an app".into());
-            return;
-        }
-        let apps = crate::apps::index()
-            .map(|ix| ix.for_mime(&mime))
-            .unwrap_or_default();
-        if let Some(menu) = self.ui.x.menu.as_mut() {
-            menu.desc = crate::mime::describe(&first, &mime);
-            menu.files = files.into_iter().map(|(p, _)| p).collect();
-            menu.mime = mime;
-            menu.apps = apps;
-            menu.scroll = 0;
-            menu.other = false;
-            menu.always = false;
-            menu.sub = Some(Sub::OpenWith);
-        }
-    }
-
-    /// Open the menu's files with its `i`th app, and maybe make it the
-    /// default for their type.
-    fn open_with(&mut self, menu: &Menu, i: usize) {
-        let Some((ix, app)) =
-            crate::apps::index().and_then(|ix| menu.apps.get(i).map(|&a| (ix, ix.apps[a].clone())))
-        else {
-            return;
-        };
-        let (files, mime, always) = (menu.files.clone(), menu.mime.clone(), menu.always);
-        let (env, tx) = (ix.env.clone(), self.events.clone());
-        std::thread::spawn(move || {
-            if always && let Err(err) = crate::apps::set_default(&env, &mime, &app.id) {
-                let _ = tx.send(Event::Error(format!("Can't save the default app: {err}")));
-            }
-            let cwd = files[0].parent().unwrap_or(Path::new("/")).to_path_buf();
-            if let Err(err) = crate::apps::launch(&app, &files, &cwd) {
-                let _ = tx.send(Event::Error(err));
-            }
-        });
-    }
-
-    /// The wheel over the open menu's app list. True if it took it.
-    pub(crate) fn menu_wheel(&mut self, delta: f32) -> bool {
-        let Some(menu) = self.ui.x.menu.as_mut() else {
-            return false;
-        };
-        if menu.sub != Some(Sub::OpenWith) {
-            return true;
-        }
-        let fit = ((self.size.1 as f32 - 28.0) / 36.0) as usize;
-        let room = fit.max(3).saturating_sub(1 + !menu.other as usize).max(1);
-        let max = menu.apps.len().saturating_sub(room);
-        let step = if delta > 0.0 { 1 } else { usize::MAX };
-        menu.scroll = menu.scroll.saturating_add(step).min(max);
-        self.redraw();
-        true
     }
 
     // ---- recent rows ----
@@ -668,8 +610,14 @@ impl App {
 
     /// Right-click: select the row under the pointer and show the menu.
     pub(crate) fn context_click(&mut self, position: (f64, f64)) {
+        if self.ui.x.sheet.is_some() {
+            return;
+        }
         self.ui.x.main_menu = None;
         self.ui.x.rename = None;
+        if self.bookmark_context(position) {
+            return;
+        }
         let (x, y) = (position.0 as f32, position.1 as f32);
         if !matches!(self.ui.location, Location::Dir(_)) {
             // The Overview and Recent pages: a menu on a recent row.
@@ -704,7 +652,11 @@ impl App {
             self.ui.folder.select_only(pos);
         }
         self.ui.folder.cursor = Some(pos);
-        self.ui.x.menu = Some(Menu::at(x, y));
+        let dir = self.selected_dirs().len() == 1 && self.ui.folder.selected.len() == 1;
+        self.ui.x.menu = Some(Menu {
+            dir,
+            ..Menu::at(x, y)
+        });
         self.redraw();
     }
 
@@ -753,6 +705,7 @@ impl App {
             text: name.clone(),
             name,
             fresh: true,
+            bookmark: None,
         });
         self.ensure_visible(pos);
     }
@@ -761,6 +714,10 @@ impl App {
         let Some(r) = self.ui.x.rename.take() else {
             return;
         };
+        if let Some(i) = r.bookmark {
+            self.commit_bookmark_rename(i, r.text);
+            return;
+        }
         let new = r.text;
         if new.is_empty() || new == r.name {
             return;
@@ -840,6 +797,9 @@ impl App {
 
     /// Keys while a rename or the menu is up. True if it took the key.
     pub(crate) fn pre_key(&mut self, event: &KeyEvent) -> bool {
+        if self.sheet_key(event) {
+            return true;
+        }
         if self.ui.x.menu.is_some() || self.ui.x.main_menu.is_some() {
             self.ui.x.menu = None;
             self.ui.x.main_menu = None;
@@ -946,6 +906,11 @@ impl App {
             (_, Location::Dir(p)) => p.clone(),
             _ => return,
         };
+        self.terminal_in(dir);
+    }
+
+    /// A terminal in `dir`.
+    pub(crate) fn terminal_in(&mut self, dir: PathBuf) {
         let tx = self.events.clone();
         std::thread::spawn(move || {
             let Some(argv) = terminal_argv() else {

@@ -13,6 +13,7 @@ use crate::{
     folder::Location,
     grid,
     model::{self, Drive},
+    scrollbar::Bar,
     thumbs,
     view::{
         Colors, Painted, SIDE_W, Target, TextCache, Ui, ViewMode, WARN, WARN_AT, icon_for_name,
@@ -191,14 +192,16 @@ pub fn paint(
     }
 
     let content = content_height(ui);
-    if content > list.h {
-        let track_h = list.h - 8.0;
-        let thumb_h = (track_h * list.h / content).max(24.0);
-        let range = (content - list.h).max(1.0);
-        let ty = list.y + 4.0 + (track_h - thumb_h) * (ui.scroll / range).clamp(0.0, 1.0);
-        p.canvas
-            .rounded_rect(w - 7.0, ty, 3.0, thumb_h, 1.5, c.ink.with_alpha(0.25));
-    }
+    crate::scrollbar::paint(
+        p,
+        out,
+        Bar::List,
+        list,
+        content,
+        ui.scroll,
+        c.ink,
+        ui.bar_lit(Bar::List),
+    );
 }
 
 /// The ring grid starting at `y`; returns the y below it.

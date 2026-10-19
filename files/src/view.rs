@@ -18,6 +18,7 @@ use crate::{
     model::{self, Drive, SortKey},
     ops,
     pages::{self, Pages},
+    scrollbar::{self, Bar},
     search::{self, Search},
     transfer, zoom,
 };
@@ -42,7 +43,8 @@ const PLACE_H: f32 = 32.0;
 const HEADING_H: f32 = 30.0;
 const CARD_H: f32 = 74.0;
 const COMPACT_H: f32 = 36.0;
-const SEARCH_BOTTOM: f32 = 52.0;
+/// Where the sidebar's first row starts.
+const SIDE_TOP: f32 = 14.0;
 const TRASH_H: f32 = 44.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,13 +70,20 @@ pub enum Target {
     Maximize,
     /// Empty top bar: drag to move the window.
     Header,
+    /// The (wide) search field, or its button when the bar is narrow.
     Search,
+    /// A scrollbar: the thumb or the track.
+    Scroll(Bar),
+    /// The Open With sheet.
+    Sheet(crate::openwith::Hit),
     Overview,
     Recent,
     /// A row of the recent list: the file, or the folder it is in.
     RecentFile(usize),
     RecentFolder(usize),
     Place(usize),
+    /// A custom shortcut of the sidebar.
+    Bookmark(usize),
     Drive(usize),
     Eject(usize),
     Connect,
@@ -82,6 +91,12 @@ pub enum Target {
     Sort(SortKey),
     /// An info panel button or a context menu row.
     Act(ops::Act),
+}
+
+/// A custom shortcut in the sidebar (see [`crate::bookmarks`]).
+pub struct Mark {
+    pub name: String,
+    pub path: PathBuf,
 }
 
 /// A shortcut in the sidebar.
@@ -103,6 +118,7 @@ pub struct Ui {
     pub drives: Vec<Drive>,
     pub trash: Option<u64>,
     pub places: Vec<Place>,
+    pub bookmarks: Vec<Mark>,
     pub home: PathBuf,
     pub can_back: bool,
     pub can_forward: bool,
@@ -135,6 +151,15 @@ pub struct Painted {
     pub menu_rows: usize,
     /// The icon size slider of the open menu.
     pub slider: Rect,
+    /// The scrollbars shown, with their thumbs.
+    pub bars: Vec<(Bar, scrollbar::Geo)>,
+}
+
+impl Ui {
+    /// The bar is hovered or being dragged.
+    pub fn bar_lit(&self, bar: Bar) -> bool {
+        self.hover == Some(Target::Scroll(bar)) || self.x.bar_drag.is_some_and(|d| d.bar == bar)
+    }
 }
 
 impl Painted {
@@ -262,12 +287,69 @@ pub fn pos_at(ui: &Ui, list: Rect, point: (f64, f64)) -> Option<usize> {
     }
 }
 
+/// Where a drag over the sidebar's shortcuts lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SideSlot {
+    /// Between bookmarks (an index in 0..=count): the line to draw.
+    Insert(usize),
+    /// On a bookmark.
+    Bookmark(usize),
+}
+
+/// What the point `at` of the sidebar means to a drag, in a window `h`
+/// tall. `reorder` is a bookmark being moved: no "on" zones, rows split in
+/// halves. Dropping a folder from the list adds a bookmark between rows
+/// and moves into a row it lands on.
+pub fn side_slot(ui: &Ui, h: f32, at: (f64, f64), reorder: bool) -> Option<SideSlot> {
+    let (top, bottom) = side_band(h);
+    let (x, y) = (at.0 as f32, at.1 as f32);
+    if !(0.0..SIDE_W).contains(&x) || y < top || y >= bottom {
+        return None;
+    }
+    let stride = PLACE_H + 1.0;
+    let rel = y - (top - ui.side_scroll);
+    let (n_std, nb) = (2 + ui.places.len(), ui.bookmarks.len());
+    let end = (n_std + nb) as f32 * stride;
+    if rel >= end && rel < end + HEADING_H {
+        return Some(SideSlot::Insert(nb));
+    }
+    if rel < 0.0 || rel >= end {
+        return None;
+    }
+    let idx = (rel / stride) as usize;
+    let within = rel - idx as f32 * stride;
+    const BAND: f32 = 7.0;
+    if idx < n_std {
+        // Only the bottom edge of the last standard place starts the list.
+        let edge = if reorder {
+            PLACE_H / 2.0
+        } else {
+            PLACE_H - BAND
+        };
+        return (idx == n_std - 1 && within > edge).then_some(SideSlot::Insert(0));
+    }
+    let j = idx - n_std;
+    if reorder {
+        Some(SideSlot::Insert(if within < stride / 2.0 {
+            j
+        } else {
+            j + 1
+        }))
+    } else if within < BAND {
+        Some(SideSlot::Insert(j))
+    } else if within > PLACE_H - BAND {
+        Some(SideSlot::Insert(j + 1))
+    } else {
+        Some(SideSlot::Bookmark(j))
+    }
+}
+
 fn side_band(h: f32) -> (f32, f32) {
-    (SEARCH_BOTTOM, h - TRASH_H)
+    (SIDE_TOP, h - TRASH_H)
 }
 
 fn side_content_height(ui: &Ui) -> f32 {
-    let places = (2 + ui.places.len()) as f32 * (PLACE_H + 1.0);
+    let places = (2 + ui.places.len() + ui.bookmarks.len()) as f32 * (PLACE_H + 1.0);
     let drives = if ui.drives.len() > CARD_DRIVES {
         COMPACT_H
     } else {
@@ -280,6 +362,39 @@ fn side_content_height(ui: &Ui) -> f32 {
 pub fn side_max_scroll(ui: &Ui, h: f32) -> f32 {
     let (top, bottom) = side_band(h);
     (side_content_height(ui) - (bottom - top)).max(0.0)
+}
+
+/// Where the top bar's search goes: a field centred between the
+/// navigation and the right-hand buttons, or, when the window is too narrow
+/// for one, a button next to those.
+struct SearchLayout {
+    field: Option<Rect>,
+    button_x: f32,
+}
+
+/// The widest the search field gets.
+const SEARCH_W: f32 = 280.0;
+/// Narrower than this the field becomes a button.
+const SEARCH_MIN_W: f32 = 170.0;
+/// Room kept for the breadcrumbs left of the field.
+const CRUMBS_MIN_W: f32 = 120.0;
+
+fn search_layout(w: f32, crumbs_x: f32, rx: f32) -> SearchLayout {
+    let cy = TOP_H / 2.0;
+    let room = rx - 10.0 - crumbs_x - CRUMBS_MIN_W - 10.0;
+    let width = room.min(SEARCH_W);
+    let field = (width >= SEARCH_MIN_W).then(|| {
+        // Centred in the bar when that leaves the right buttons alone.
+        let centre = SIDE_W + (w - SIDE_W) / 2.0;
+        let x = (centre - width / 2.0)
+            .min(rx - 10.0 - width)
+            .max(crumbs_x + CRUMBS_MIN_W + 10.0);
+        Rect::new(x, cy - 16.0, width, 32.0)
+    });
+    SearchLayout {
+        field,
+        button_x: rx - 10.0 - 32.0,
+    }
 }
 
 /// The folder's name for the large title.
@@ -525,7 +640,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     // The rows first: they scroll under the bars drawn after them.
     if matches!(ui.location, Location::Dir(_)) {
         if ui.mode == ViewMode::Grid {
-            grid::paint(ui, &mut p, &mut res.text, &c, &out, h, scale);
+            grid::paint(ui, &mut p, &mut res.text, &c, &mut out, h, scale);
         } else {
             rows(ui, &mut p, &mut res.text, &c, &mut out, wm, h, scale);
         }
@@ -578,6 +693,9 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     transfer::paint_strip(ui, &mut p, &c, &mut out, w, h);
     crate::mainmenu::paint(ui, &mut p, &mut out, w, h);
     ops::paint_menu(ui, &mut p, &mut out, w, h);
+    if let Some(sheet) = &ui.x.sheet {
+        crate::openwith::paint(sheet, ui.hover, &mut p, &c, &mut out, (w, h), radius);
+    }
     out
 }
 
@@ -678,7 +796,12 @@ fn rows(
             p.canvas.text(p.fonts, &mut layout, tx, ty, color);
             cache.map.insert(key, layout);
         };
-        if ui.x.rename.as_ref().is_some_and(|r| r.name == entry.name) {
+        if ui
+            .x
+            .rename
+            .as_ref()
+            .is_some_and(|r| r.bookmark.is_none() && r.name == entry.name)
+        {
             let rect = Rect::new(
                 cols[0].0 + name_off - 8.0,
                 y + 2.0,
@@ -750,16 +873,17 @@ fn rows(
         );
     }
 
-    // A thin scroll indicator when there's more than fits.
     let content = content_height(ui, list.w);
-    if content > list.h {
-        let track_h = list.h - 8.0;
-        let thumb_h = (track_h * list.h / content).max(24.0);
-        let range = (content - list.h).max(1.0);
-        let ty = list.y + 4.0 + (track_h - thumb_h) * (ui.scroll / range).clamp(0.0, 1.0);
-        p.canvas
-            .rounded_rect(w - 7.0, ty, 3.0, thumb_h, 1.5, c.ink.with_alpha(0.25));
-    }
+    scrollbar::paint(
+        p,
+        out,
+        Bar::List,
+        list,
+        content,
+        ui.scroll,
+        c.ink,
+        ui.bar_lit(Bar::List),
+    );
 }
 
 /// A message in place of the rows (an error, an empty folder); true if shown.
@@ -992,12 +1116,42 @@ fn top_bar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, w: f
             .push((Rect::new(sx, cy - 13.0, 31.0, 26.0), Target::Mode(mode)));
     }
 
+    // The search field in the middle, or a button when there's no room.
+    let lay = search_layout(w, crumbs_x, rx);
+    let searching = ui.search.focused || ui.search.active();
+    let crumbs_end = match lay.field {
+        Some(rect) => {
+            search::paint_field(p, &ui.search, rect, c.seg, c.dim);
+            out.hits.push((rect, Target::Search));
+            rect.x - 10.0
+        }
+        None if searching => {
+            // Narrow: the field takes over the crumbs' room while in use.
+            let rect = Rect::new(crumbs_x, cy - 16.0, (rx - 10.0 - crumbs_x).max(60.0), 32.0);
+            search::paint_field(p, &ui.search, rect, c.seg, c.dim);
+            out.hits.push((rect, Target::Search));
+            return;
+        }
+        None => {
+            button(
+                p,
+                out,
+                lay.button_x,
+                "edit-find-symbolic",
+                Target::Search,
+                false,
+                true,
+            );
+            lay.button_x - 6.0
+        }
+    };
+
     // Breadcrumbs of the parent folders, as many as fit.
     let Location::Dir(path) = &ui.location else {
         return;
     };
     let all = crumbs(path, &ui.home);
-    let avail = rx - 10.0 - crumbs_x;
+    let avail = crumbs_end - crumbs_x;
     let size = t.font_size - 1.0;
     let widths: Vec<f32> = all
         .iter()
@@ -1064,10 +1218,6 @@ fn sidebar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, h: f
     out.hits
         .push((Rect::new(0.0, 0.0, SIDE_W, 12.0), Target::Header));
 
-    let sr = Rect::new(10.0, 12.0, SIDE_W - 20.0, 32.0);
-    search::paint_field(p, &ui.search, sr, c.seg, c.dim);
-    out.hits.push((sr, Target::Search));
-
     let (top, bottom) = side_band(h);
     let mut y = top - ui.side_scroll;
     let size = t.font_size;
@@ -1111,6 +1261,7 @@ fn sidebar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, h: f
         }
         *y += PLACE_H + 1.0;
     };
+    let first_y = y;
     place_row(
         p,
         out,
@@ -1142,6 +1293,32 @@ fn sidebar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, h: f
             Target::Place(i),
             false,
         );
+    }
+    let drag = ui.x.bm_drag.filter(|d| d.active).map(|d| d.index);
+    for (i, mark) in ui.bookmarks.iter().enumerate() {
+        let renaming = ui.x.rename.as_ref().is_some_and(|r| r.bookmark == Some(i));
+        let row_y = y;
+        place_row(
+            p,
+            out,
+            &mut y,
+            "folder-symbolic",
+            if renaming { "" } else { &mark.name },
+            current == Some(&mark.path),
+            Target::Bookmark(i),
+            drag == Some(i),
+        );
+        if renaming && fits(row_y, PLACE_H) {
+            ops::paint_rename(ui, p, c, Rect::new(38.0, row_y, SIDE_W - 48.0, PLACE_H));
+        }
+    }
+    if let Some(k) = ui.x.bm_insert {
+        let n_std = (2 + ui.places.len()) as f32;
+        let line_y = first_y + (n_std + k as f32) * (PLACE_H + 1.0) - 1.0;
+        if line_y >= top - 1.0 && line_y <= bottom {
+            p.canvas
+                .rounded_rect(16.0, line_y - 1.0, SIDE_W - 32.0, 3.0, 1.5, t.accent);
+        }
     }
 
     let heading = |p: &mut Painter<'_, '_>, y: &mut f32, text: &str| {
@@ -1177,6 +1354,17 @@ fn sidebar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, h: f
         false,
         Target::Connect,
         true,
+    );
+
+    scrollbar::paint(
+        p,
+        out,
+        Bar::Side,
+        Rect::new(0.0, top, SIDE_W, bottom - top),
+        side_content_height(ui),
+        ui.side_scroll,
+        c.ink,
+        ui.bar_lit(Bar::Side),
     );
 
     // Trash, pinned at the bottom.
@@ -1452,6 +1640,7 @@ mod tests {
                 place("Downloads", "Downloads", "folder-download-symbolic"),
                 place("Pictures", "Pictures", "folder-pictures-symbolic"),
             ],
+            bookmarks: Vec::new(),
             home,
             can_back: true,
             can_forward: false,
@@ -1662,7 +1851,89 @@ mod tests {
             ui.folder.set_query("co");
             ui.keyboard_focus = true;
         }
-        ui.pages.width = 1100.0;
+        let size = |name: &str, default: u32| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
+        };
+        // CNDE_PREVIEW_W / _H set the window size.
+        let (w, h) = (size("CNDE_PREVIEW_W", 1100), size("CNDE_PREVIEW_H", 680));
+        ui.pages.width = w as f32;
+        // CNDE_PREVIEW_BOOKMARKS=1 adds custom shortcuts; =drag shows the
+        // insertion line of a drag, =rename a bookmark being renamed.
+        if let Ok(kind) = std::env::var("CNDE_PREVIEW_BOOKMARKS") {
+            ui.bookmarks = ["Projects", "Work stuff", "Holiday photos 2025"]
+                .iter()
+                .map(|n| Mark {
+                    name: n.to_string(),
+                    path: PathBuf::from("/home/me").join(n),
+                })
+                .collect();
+            if kind == "drag" {
+                ui.x.bm_insert = Some(2);
+            } else if kind == "rename" {
+                ui.x.rename = Some(ops::Rename {
+                    name: "Work stuff".into(),
+                    text: "Work stuff".into(),
+                    cursor: 10,
+                    fresh: true,
+                    bookmark: Some(1),
+                });
+            }
+        }
+        // CNDE_PREVIEW_BAR=1 makes the list long; =hover has the pointer on its bar.
+        if let Ok(kind) = std::env::var("CNDE_PREVIEW_BAR") {
+            ui.folder.add(synthetic(300));
+            ui.scroll = 600.0;
+            if kind == "hover" {
+                ui.hover = Some(Target::Scroll(Bar::List));
+            }
+        }
+        // CNDE_PREVIEW_SHEET=1 opens the Open With sheet; =filter types in its field.
+        if let Ok(kind) = std::env::var("CNDE_PREVIEW_SHEET") {
+            let fake = |id: &str, name: &str, icon: &str| crate::apps::App {
+                id: id.into(),
+                name: name.into(),
+                exec: name.into(),
+                icon: Some(icon.into()),
+                mimes: vec![],
+                categories: vec![],
+                terminal: false,
+                no_display: false,
+                path: PathBuf::new(),
+            };
+            crate::apps::install(crate::apps::Index {
+                apps: vec![
+                    fake("a", "Image Viewer", "org.gnome.Loupe"),
+                    fake("b", "GNU Image Manipulation Program", "gimp"),
+                    fake("c", "Web Browser", "firefox"),
+                    fake("d", "Text Editor", "org.gnome.TextEditor"),
+                    fake("e", "Files", "org.gnome.Nautilus"),
+                    fake("f", "Terminal", "utilities-terminal"),
+                    fake("g", "Video Player", "vlc"),
+                    fake("h", "Settings", "preferences-system"),
+                ],
+                env: crate::apps::Env::from_env(),
+            });
+            let mut sheet = crate::openwith::Sheet::new(
+                vec![PathBuf::from("/home/me/Pictures/holiday-0412.png")],
+                "image/png".into(),
+                "Open “holiday-0412.png” with".into(),
+                "Always use for PNG images".into(),
+                vec![0, 1, 2],
+                vec![3, 4, 5, 6, 7],
+            );
+            sheet.selected = 1;
+            sheet.always = true;
+            if kind == "filter" {
+                sheet.search.query = "ed".into();
+                sheet.search.cursor = 2;
+                sheet.selected = 0;
+            }
+            ui.hover = Some(Target::Sheet(crate::openwith::Hit::App(4)));
+            ui.x.sheet = Some(sheet);
+        }
         if std::env::var_os("CNDE_PREVIEW_GRID").is_some() {
             ui.mode = ViewMode::Grid;
         }
@@ -1684,6 +1955,7 @@ mod tests {
                 text: ui.folder.entry(5).unwrap().name.clone(),
                 cursor: 3,
                 fresh: false,
+                bookmark: None,
             });
         }
         // CNDE_PREVIEW_PROGRESS=1 shows a copy under way.
@@ -1713,7 +1985,7 @@ mod tests {
         if std::env::var_os("CNDE_PREVIEW_MAINMENU").is_some() {
             ui.x.main_menu = Some(crate::mainmenu::MainMenu::default());
         }
-        // CNDE_PREVIEW_MENU=file|open-with|empty|new|recent|recent-open-with
+        // CNDE_PREVIEW_MENU=file|folder|empty|new|recent
         if let Ok(kind) = std::env::var("CNDE_PREVIEW_MENU") {
             let mut menu = ops::Menu::at(420.0, 250.0);
             let fake = |id: &str, name: &str| crate::apps::App {
@@ -1744,11 +2016,8 @@ mod tests {
             if kind == "empty" || kind == "new" {
                 menu.empty = true;
             }
-            if kind.ends_with("open-with") {
-                menu.sub = Some(ops::Sub::OpenWith);
-                menu.apps = vec![0, 1, 2];
-                menu.desc = ".md files".into();
-                menu.always = true;
+            if kind == "folder" {
+                menu.dir = true;
             }
             if kind == "new" {
                 menu.sub = Some(ops::Sub::New);
@@ -1761,7 +2030,6 @@ mod tests {
         }
         let theme = Theme::for_appearance(&ui.config.appearance);
         let mut res = Res::new(theme, Icons::new());
-        let (w, h) = (1100u32, 680u32);
         let pixels = render(&ui, &mut res, w, h, 1.0);
         image::RgbaImage::from_raw(w, h, pixels)
             .unwrap()
