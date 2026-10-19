@@ -5,6 +5,7 @@
 //! moved for [`STALL_AFTER`] it logs one error with the loop phase, the main
 //! thread's kernel state (`wchan` names the wait, e.g. a DRM fence) and a
 //! backtrace of the main thread, then logs once more when the loop recovers.
+//! Still hung after [`GIVE_UP_AFTER`], it ends the session.
 //!
 //! The backtrace comes from a SIGUSR2 sent to the main thread whose handler
 //! calls `Backtrace::force_capture`. That is not async-signal-safe (it
@@ -34,6 +35,10 @@ use tracing::{error, info};
 use crate::state::State;
 
 const STALL_AFTER: Duration = Duration::from_secs(5);
+/// Hung this long, the session ends, back to the login screen: a desktop
+/// that takes no input (not even a VT switch) otherwise needs the power
+/// button.
+const GIVE_UP_AFTER: Duration = Duration::from_secs(30);
 const CHECK_EVERY: Duration = Duration::from_secs(1);
 
 /// Which part of the main loop is running, for the stall report.
@@ -126,6 +131,12 @@ fn watch() {
                 stalled_since = None;
                 let secs = beat_at.saturating_sub(since) / 1000;
                 info!("main loop recovered after about {secs} s");
+            }
+            Some(_) if age >= GIVE_UP_AFTER => {
+                let text = format!("main loop hung for {} s; ending the session", age.as_secs());
+                error!("{text}");
+                save(&text);
+                std::process::abort();
             }
             _ => {}
         }
