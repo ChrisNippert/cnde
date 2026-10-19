@@ -802,6 +802,14 @@ impl State {
                 .and_then(|surface| self.scene(&surface.output, now)),
             Backend::Winit(_) => None,
         };
+        let bar_tint = match &self.backend {
+            Backend::Udev(udev) => udev
+                .gpu
+                .as_ref()
+                .and_then(|gpu| gpu.surfaces.get(&crtc))
+                .and_then(|surface| self.bar_tint(&surface.output)),
+            Backend::Winit(_) => None,
+        };
         let Backend::Udev(udev) = &mut self.backend else {
             return;
         };
@@ -879,11 +887,7 @@ impl State {
                 &output,
                 &self.config,
                 &self.popup_anims,
-                &crate::frost::Behind::new(
-                    &self.space,
-                    &output,
-                    self.config.appearance.adaptive_color.then_some(&self.tints),
-                ),
+                &crate::frost::Behind::new(&self.space, &output, bar_tint),
                 now,
             );
             let backdrop = match self.space.output_geometry(&output) {

@@ -11,7 +11,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::window::{Placement, with_state};
 use smithay::{
     backend::renderer::{
         element::{AsRenderElements, Element, surface::WaylandSurfaceRenderElement},
@@ -30,6 +29,13 @@ const EVERY: Duration = Duration::from_millis(250);
 const WIDTH: f64 = 160.0;
 /// Logical px along the top and bottom edges that count as "the edge".
 const EDGE: f64 = 24.0;
+/// How long a window no longer matched keeps its sample, so switching
+/// between windows doesn't read them back again (or drop to no colour
+/// for a moment).
+const KEEP: Duration = Duration::from_secs(10);
+/// A read-back with less than this share drawn (a frame not in yet, or
+/// a see-through window) keeps the last colour.
+const MIN_DRAWN: f32 = 0.5;
 
 /// A window's colours, sRGB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +59,8 @@ struct Entry {
     /// The commits it was taken at.
     commits: u64,
     at: Instant,
+    /// When it was last wanted.
+    wanted: Instant,
 }
 
 impl Tints {
@@ -68,11 +76,14 @@ impl Tints {
     /// Bring the samples of `windows` up to date, and forget the rest.
     /// Whether any changed.
     pub fn update(&mut self, renderer: &mut GlesRenderer, windows: &[Window], now: Instant) -> bool {
-        let count = self.samples.len();
-        self.samples
-            .retain(|id, _| windows.iter().any(|w| key(w).as_ref() == Some(id)));
+        for window in windows {
+            if let Some(entry) = key(window).and_then(|id| self.samples.get_mut(&id)) {
+                entry.wanted = now;
+            }
+        }
+        self.samples.retain(|_, e| now < e.wanted + KEEP);
         self.retry_at = None;
-        let mut changed = self.samples.len() != count;
+        let mut changed = false;
         for window in windows {
             let Some(id) = key(window) else {
                 continue;
@@ -101,34 +112,38 @@ impl Tints {
                     continue;
                 }
             }
-            let Some(texture) =
-                crate::screenshot::render_to_texture(renderer, &elements, size, scale)
-            else {
+            let Some(pixels) = read_back(renderer, &elements, size, scale) else {
                 continue;
             };
-            let rect = Rectangle::<i32, Buffer>::from_size((size.w, size.h).into());
-            let Some(image) = crate::screenshot::read_texture(renderer, &texture, rect) else {
-                continue;
-            };
-            let edge = ((EDGE * scale.y).ceil() as u32).clamp(1, image.height());
-            let rows = |from: u32, to: u32| {
-                image
-                    .rows()
-                    .skip(from as usize)
-                    .take((to - from) as usize)
-                    .flatten()
+            let (w, h) = (size.w as usize, size.h as usize);
+            let edge = ((EDGE * scale.y).ceil() as usize).clamp(1, h);
+            let last = self.samples.get(&id).map(|e| e.sample);
+            let strip = |from: usize, to: usize, last: Option<[u8; 3]>| {
+                let all = &pixels[from * w..to * w];
+                let drawn: Vec<[u8; 3]> = all
+                    .iter()
+                    .filter(|p| p[3] >= 128)
                     .map(|p| [p[0], p[1], p[2]])
-                    .collect::<Vec<_>>()
+                    .collect();
+                if (drawn.len() as f32) < all.len() as f32 * MIN_DRAWN {
+                    last
+                } else {
+                    Some(dominant(&drawn))
+                }
             };
-            let sample = Sample {
-                top: dominant(&rows(0, edge)),
-                bottom: dominant(&rows(image.height() - edge, image.height())),
-                main: dominant(&rows(0, image.height())),
+            let (Some(top), Some(bottom), Some(main)) = (
+                strip(0, edge, last.map(|s| s.top)),
+                strip(h - edge, h, last.map(|s| s.bottom)),
+                strip(0, h, last.map(|s| s.main)),
+            ) else {
+                continue;
             };
+            let sample = Sample { top, bottom, main };
             let entry = Entry {
                 sample,
                 commits,
                 at: now,
+                wanted: now,
             };
             if self.samples.insert(id, entry).is_none_or(|old| old.sample != sample) {
                 changed = true;
@@ -165,8 +180,21 @@ impl crate::state::State {
         }
     }
 
-    /// Per monitor: the front window if it's maximized (the bar and dock
-    /// match it), and the windows under cnde's own windows and popups.
+    /// The colour the bar on `output` takes: the top edge of the frontmost
+    /// window against the top.
+    pub fn bar_tint(&self, output: &smithay::output::Output) -> Option<[u8; 3]> {
+        if !self.config.appearance.adaptive_color {
+            return None;
+        }
+        let geo = self.space.output_geometry(output)?;
+        let top = self.touching_edges(output, geo).top?;
+        Some(self.tints.get(&top)?.top)
+    }
+
+    /// Per monitor: the frontmost windows against its top and bottom edges
+    /// (the bar and dock take their colours; a floating window elsewhere
+    /// changes nothing), and the windows under cnde's own windows and
+    /// popups.
     fn tint_targets(&self) -> Vec<Window> {
         let mut targets: Vec<Window> = Vec::new();
         let mut add = |window: &Window| {
@@ -176,10 +204,11 @@ impl crate::state::State {
         };
         for output in self.space.outputs() {
             let behind = crate::frost::Behind::new(&self.space, output, None);
-            if let Some((front, _)) = behind.windows.last()
-                && with_state(front, |s| s.placement == Placement::Maximized)
-            {
-                add(front);
+            if let Some(geo) = self.space.output_geometry(output) {
+                let touching = self.touching_edges(output, geo);
+                for window in touching.top.iter().chain(&touching.bottom) {
+                    add(window);
+                }
             }
             for (index, (window, rect)) in behind.windows.iter().enumerate() {
                 if crate::frost::WindowFrost::wants(window)
@@ -198,6 +227,45 @@ impl crate::state::State {
         }
         targets
     }
+}
+
+/// `elements` drawn into a `size` texture over nothing, read back as
+/// RGBA rows, top down.
+fn read_back(
+    renderer: &mut GlesRenderer,
+    elements: &[WaylandSurfaceRenderElement<GlesRenderer>],
+    size: Size<i32, Physical>,
+    scale: Scale<f64>,
+) -> Option<Vec<[u8; 4]>> {
+    use smithay::backend::{
+        allocator::Fourcc,
+        renderer::{Bind, ExportMem, Offscreen, Texture, TextureMapping, damage::OutputDamageTracker},
+    };
+    let buffer_size = Size::<i32, Buffer>::from((size.w, size.h));
+    let mut texture: smithay::backend::renderer::gles::GlesTexture =
+        renderer.create_buffer(Fourcc::Abgr8888, buffer_size).ok()?;
+    {
+        let mut target = renderer.bind(&mut texture).ok()?;
+        let mut tracker = OutputDamageTracker::new(size, scale, smithay::utils::Transform::Normal);
+        let result = tracker
+            .render_output(renderer, &mut target, 0, elements, [0.0, 0.0, 0.0, 0.0])
+            .ok()?;
+        let _ = result.sync.wait();
+    }
+    let rect = Rectangle::<i32, Buffer>::from_size(buffer_size);
+    let mapping = renderer.copy_texture(&texture, rect, Fourcc::Abgr8888).ok()?;
+    let top_down = mapping.flipped();
+    let bytes = renderer.map_texture(&mapping).ok()?;
+    let (w, h) = (texture.width() as usize, texture.height() as usize);
+    let pixels: Vec<[u8; 4]> = bytes.as_chunks::<4>().0.to_vec();
+    if pixels.len() < w * h {
+        return None;
+    }
+    Some(if top_down {
+        pixels[..w * h].to_vec()
+    } else {
+        pixels[..w * h].chunks(w).rev().flatten().copied().collect()
+    })
 }
 
 fn key(window: &Window) -> Option<ObjectId> {

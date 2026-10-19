@@ -168,6 +168,10 @@ impl State {
             Backend::Winit(winit) => self.space.output_geometry(&winit.output),
             Backend::Udev(_) => None,
         };
+        let bar_tint = match &self.backend {
+            Backend::Winit(winit) => self.bar_tint(&winit.output),
+            Backend::Udev(_) => None,
+        };
 
         // Why age 0 (full redraw): smithay 0.7's winit `buffer_age()` needs the EGL
         // surface current, which it often isn't between frames, so it fails with
@@ -207,11 +211,7 @@ impl State {
                 &backend.output,
                 &self.config,
                 &self.popup_anims,
-                &crate::frost::Behind::new(
-                    &self.space,
-                    &backend.output,
-                    self.config.appearance.adaptive_color.then_some(&self.tints),
-                ),
+                &crate::frost::Behind::new(&self.space, &backend.output, bar_tint),
                 now,
             );
             let backdrop = match output_geo {

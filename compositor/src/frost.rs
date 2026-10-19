@@ -53,15 +53,15 @@ pub struct DockFrost {
 }
 
 /// What's behind the shell's popups: the windows on the output
-/// (output-local, title bars included, bottom to top) and, when matching
-/// them, their colours.
-pub struct Behind<'a> {
+/// (output-local, title bars included, bottom to top) and, with adaptive
+/// colour, the bar's colour (popups hang from it and take it too).
+pub struct Behind {
     pub windows: Vec<(Window, Rectangle<i32, Logical>)>,
-    pub tints: Option<&'a Tints>,
+    pub bar: Option<[u8; 3]>,
 }
 
-impl<'a> Behind<'a> {
-    pub fn new(space: &Space<Window>, output: &Output, tints: Option<&'a Tints>) -> Self {
+impl Behind {
+    pub fn new(space: &Space<Window>, output: &Output, bar: Option<[u8; 3]>) -> Self {
         let origin = space.output_geometry(output).map(|g| g.loc).unwrap_or_default();
         let windows = space
             .elements_for_output(output)
@@ -76,7 +76,7 @@ impl<'a> Behind<'a> {
                 Some((w.clone(), rect))
             })
             .collect();
-        Self { windows, tints }
+        Self { windows, bar }
     }
 
     /// The topmost window under `rect`.
@@ -115,7 +115,7 @@ impl DockFrost {
         output: &Output,
         config: &cnde_config::Config,
         popups: &crate::popup_anim::PopupAnims,
-        behind: &Behind<'_>,
+        behind: &Behind,
         now: Instant,
     ) -> Vec<OutputElement> {
         let mut elements = if config.appearance.material == cnde_config::Material::Frosted {
@@ -213,7 +213,7 @@ impl DockFrost {
         output: &Output,
         config: &cnde_config::Config,
         popups: &crate::popup_anim::PopupAnims,
-        behind: &Behind<'_>,
+        behind: &Behind,
         now: Instant,
     ) -> Vec<OutputElement> {
         use crate::popup_anim::{open_progress, scale_at};
@@ -247,8 +247,11 @@ impl DockFrost {
                 ((rect.loc.x as f64 + rect.size.w as f64 / 2.0) * scale).round() as i32,
                 (rect.loc.y as f64 * scale).round() as i32,
             ));
-            let under = behind.under(rect);
-            let colour = under.map(|w| backing_colour(behind.tints, w, theme.qs_background));
+            // Over a window: solid, in the bar's colour if it has one.
+            let colour = behind.under(rect).map(|_| match behind.bar {
+                Some(bar) => bar.map(|c| c as f32 / 255.0),
+                None => [theme.qs_background.r, theme.qs_background.g, theme.qs_background.b],
+            });
             let (solid, solidity) = self.backing(
                 renderer,
                 output,

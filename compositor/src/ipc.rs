@@ -266,49 +266,16 @@ impl State {
                 let (Some(geo), false) = (self.space.output_geometry(output), open) else {
                     return edges;
                 };
-                if let Some(front) = self
-                    .space
-                    .elements_for_output(output)
-                    .rfind(|w| !crate::window::with_state(w, |s| s.minimized))
-                    && crate::window::with_state(front, |s| {
-                        s.placement == crate::window::Placement::Maximized
-                    })
-                    && let Some(sample) = self.tints.get(front)
-                {
-                    edges.top_tint = Some(sample.top);
-                    edges.bottom_tint = Some(sample.bottom);
-                }
-                let zone = smithay::desktop::layer_map_for_output(output).non_exclusive_zone();
-                let zone = smithay::utils::Rectangle::new(zone.loc + geo.loc, zone.size);
-                for window in self.space.elements_for_output(output) {
-                    let Some(mut rect) = self.space.element_geometry(window) else {
-                        continue;
-                    };
-                    if crate::window::with_state(window, |s| s.minimized) {
-                        continue;
-                    }
-                    // A new tile's committed size lags its configure (it
-                    // maps at the client's own, maybe full-screen, size), which
-                    // would flash the bars solid; judge tiles by their slot.
-                    if self.is_tiled(window)
-                        && !self.workspaces.is_moving()
-                        && let Some(slot) = self.tile_rect_now(window)
-                    {
-                        rect = slot;
-                    }
-                    // A server-drawn titlebar sits above the geometry.
-                    let top = rect.loc.y - crate::decorations::titlebar_height(window);
-                    let overlaps_x = rect.loc.x < zone.loc.x + zone.size.w
-                        && rect.loc.x + rect.size.w > zone.loc.x;
-                    let overlaps_y =
-                        top < zone.loc.y + zone.size.h && rect.loc.y + rect.size.h > zone.loc.y;
-                    edges.top |= overlaps_x && top <= zone.loc.y;
-                    edges.bottom |=
-                        overlaps_x && rect.loc.y + rect.size.h >= zone.loc.y + zone.size.h;
-                    edges.left |= overlaps_y && rect.loc.x <= zone.loc.x;
-                    edges.right |=
-                        overlaps_y && rect.loc.x + rect.size.w >= zone.loc.x + zone.size.w;
-                }
+                let touching = self.touching_edges(output, geo);
+                edges.top = touching.top.is_some();
+                edges.bottom = touching.bottom.is_some();
+                edges.left = touching.left;
+                edges.right = touching.right;
+                let sample = |w: &Option<smithay::desktop::Window>| {
+                    w.as_ref().and_then(|w| self.tints.get(w))
+                };
+                edges.top_tint = sample(&touching.top).map(|s| s.top);
+                edges.bottom_tint = sample(&touching.bottom).map(|s| s.bottom);
                 edges
             })
             .collect();
@@ -318,6 +285,51 @@ impl State {
             });
             self.ipc.edges = Some(edges);
         }
+    }
+
+    /// Which edges of `output`'s free area windows are against, and the
+    /// frontmost window at the top and bottom ones.
+    pub fn touching_edges(
+        &self,
+        output: &smithay::output::Output,
+        geo: smithay::utils::Rectangle<i32, smithay::utils::Logical>,
+    ) -> Touching {
+        let zone = smithay::desktop::layer_map_for_output(output).non_exclusive_zone();
+        let zone = smithay::utils::Rectangle::new(zone.loc + geo.loc, zone.size);
+        let mut touching = Touching::default();
+        // Bottom to top, so the last one found is in front.
+        for window in self.space.elements_for_output(output) {
+            let Some(mut rect) = self.space.element_geometry(window) else {
+                continue;
+            };
+            if crate::window::with_state(window, |s| s.minimized) {
+                continue;
+            }
+            // A new tile's committed size lags its configure (it
+            // maps at the client's own, maybe full-screen, size), which
+            // would flash the bars solid; judge tiles by their slot.
+            if self.is_tiled(window)
+                && !self.workspaces.is_moving()
+                && let Some(slot) = self.tile_rect_now(window)
+            {
+                rect = slot;
+            }
+            // A server-drawn titlebar sits above the geometry.
+            let top = rect.loc.y - crate::decorations::titlebar_height(window);
+            let overlaps_x =
+                rect.loc.x < zone.loc.x + zone.size.w && rect.loc.x + rect.size.w > zone.loc.x;
+            let overlaps_y =
+                top < zone.loc.y + zone.size.h && rect.loc.y + rect.size.h > zone.loc.y;
+            if overlaps_x && top <= zone.loc.y {
+                touching.top = Some(window.clone());
+            }
+            if overlaps_x && rect.loc.y + rect.size.h >= zone.loc.y + zone.size.h {
+                touching.bottom = Some(window.clone());
+            }
+            touching.left |= overlaps_y && rect.loc.x <= zone.loc.x;
+            touching.right |= overlaps_y && rect.loc.x + rect.size.w >= zone.loc.x + zone.size.w;
+        }
+        touching
     }
 
     /// The dock picked a window: show its workspace (on the main monitor,
@@ -356,4 +368,13 @@ impl State {
             self.set_overview(false);
         }
     }
+}
+
+/// See `State::touching_edges`.
+#[derive(Default)]
+pub struct Touching {
+    pub top: Option<smithay::desktop::Window>,
+    pub bottom: Option<smithay::desktop::Window>,
+    pub left: bool,
+    pub right: bool,
 }
