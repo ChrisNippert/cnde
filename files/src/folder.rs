@@ -59,6 +59,12 @@ impl Folder {
         self.resort();
     }
 
+    /// The listing was read again: swap it in, keeping selection by name.
+    pub fn replace(&mut self, entries: Vec<Entry>) {
+        self.entries = entries;
+        self.resort();
+    }
+
     pub fn set_sort(&mut self, key: SortKey) {
         if self.sort == key {
             self.descending = !self.descending;

@@ -14,7 +14,9 @@ use cnde_ui::{Canvas, Color, Fonts, Icons, Painter, Rect, TextLayout, Theme, Wei
 
 use crate::{
     folder::{Folder, Location},
+    grid, info,
     model::{self, Drive, SortKey},
+    ops,
 };
 
 pub const SIDE_W: f32 = 228.0;
@@ -70,6 +72,8 @@ pub enum Target {
     Connect,
     Trash,
     Sort(SortKey),
+    /// An info panel button or a context menu row.
+    Act(ops::Act),
 }
 
 /// A shortcut in the sidebar.
@@ -103,6 +107,8 @@ pub struct Ui {
     pub frosted: bool,
     /// The keyboard moved the cursor last: show it.
     pub keyboard_focus: bool,
+    /// Info panel, rename, menu and refresh state.
+    pub x: ops::Extra,
 }
 
 /// The result of a paint, for hit-testing.
@@ -111,14 +117,23 @@ pub struct Painted {
     pub hits: Vec<(Rect, Target)>,
     pub crumbs: Vec<PathBuf>,
     pub list: Rect,
+    /// How many of the last hits are rows of the open context menu; while
+    /// there is one, nothing else can be hit.
+    pub menu_rows: usize,
 }
 
 impl Painted {
     /// The topmost target under `point`.
     pub fn hit(&self, point: (f64, f64)) -> Option<Target> {
+        let live = if self.menu_rows > 0 {
+            self.menu_rows
+        } else {
+            self.hits.len()
+        };
         self.hits
             .iter()
             .rev()
+            .take(live)
             .find(|(rect, _)| rect.contains(point))
             .map(|(_, t)| *t)
     }
@@ -128,12 +143,12 @@ impl Painted {
 #[derive(Default)]
 pub struct TextCache {
     stamp: (u64, u32, i32, u32),
-    map: HashMap<(usize, u8), TextLayout>,
+    pub(crate) map: HashMap<(usize, u8), TextLayout>,
     now: Option<SystemTime>,
 }
 
 impl TextCache {
-    fn sync(&mut self, version: u64, scale: f32, name_w: f32, size: f32) {
+    pub(crate) fn sync(&mut self, version: u64, scale: f32, name_w: f32, size: f32) {
         let stamp = (version, scale.to_bits(), name_w as i32, size.to_bits());
         if stamp != self.stamp || self.map.len() > 6000 {
             self.stamp = stamp;
@@ -166,16 +181,62 @@ impl Res {
     }
 }
 
-/// The list's area for a window `w` x `h` (logical).
-pub fn list_rect(w: f32, h: f32) -> Rect {
-    let top = TOP_H + TITLE_H + HEAD_H + 2.0;
-    Rect::new(SIDE_W, top, w - SIDE_W, (h - top).max(0.0))
+/// Width taken by the info panel (0 when it's off).
+pub fn panel_w(ui: &Ui) -> f32 {
+    if ui.info_panel && matches!(ui.location, Location::Dir(_)) {
+        info::PANEL_W
+    } else {
+        0.0
+    }
 }
 
-/// How far the list can scroll in a window `h` tall.
-pub fn max_scroll(ui: &Ui, h: f32) -> f32 {
-    let list = list_rect(SIDE_W + 1.0, h);
-    (ui.folder.visible.len() as f32 * ROW_H + 8.0 - list.h).max(0.0)
+/// The list's area for a window `w` x `h` (logical). The grid has no
+/// column header, so it starts higher.
+pub fn list_rect(ui: &Ui, w: f32, h: f32) -> Rect {
+    let head = if ui.mode == ViewMode::List {
+        HEAD_H + 2.0
+    } else {
+        0.0
+    };
+    let top = TOP_H + TITLE_H + head;
+    Rect::new(SIDE_W, top, list_w(ui, w), (h - top).max(0.0))
+}
+
+/// Width of the list area in a window `w` wide.
+pub fn list_w(ui: &Ui, w: f32) -> f32 {
+    (w - SIDE_W - panel_w(ui)).max(0.0)
+}
+
+/// Items per row and a row's height, in a list area `list_w` wide.
+pub fn cells(ui: &Ui, list_w: f32) -> (usize, f32) {
+    match ui.mode {
+        ViewMode::List => (1, ROW_H),
+        ViewMode::Grid => (grid::geo(list_w).cols, grid::TILE_H),
+    }
+}
+
+/// Height of all the rows in a list area `list_w` wide.
+pub fn content_height(ui: &Ui, list_w: f32) -> f32 {
+    let (cols, row_h) = cells(ui, list_w);
+    ui.folder.visible.len().div_ceil(cols) as f32 * row_h + 8.0
+}
+
+/// How far the list can scroll in a window `w` x `h`.
+pub fn max_scroll(ui: &Ui, w: f32, h: f32) -> f32 {
+    let list = list_rect(ui, w, h);
+    (content_height(ui, list_w(ui, w)) - list.h).max(0.0)
+}
+
+/// The item under a point of the list area, if any.
+pub fn pos_at(ui: &Ui, list: Rect, point: (f64, f64)) -> Option<usize> {
+    let n = ui.folder.visible.len();
+    match ui.mode {
+        ViewMode::Grid => grid::pos_at(list, grid::geo(list.w), ui.scroll, n, point),
+        ViewMode::List => {
+            let pos = ((point.1 as f32 - list.y - 4.0 + ui.scroll) / ROW_H).floor();
+            (pos >= 0.0 && (pos as usize) < n).then_some(pos as usize)
+        }
+    }
 }
 
 fn side_band(h: f32) -> (f32, f32) {
@@ -244,6 +305,9 @@ fn subtitle_of(ui: &Ui) -> String {
 /// Labels and paths for the parents of `path`, nearest last.
 pub fn crumbs(path: &Path, home: &Path) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
+    if path == home {
+        return vec![("~".into(), home.to_path_buf())];
+    }
     let mut cur = path.parent();
     while let Some(p) = cur {
         let label = if p == home {
@@ -262,7 +326,7 @@ pub fn crumbs(path: &Path, home: &Path) -> Vec<(String, PathBuf)> {
     out
 }
 
-fn icon_for(entry: &model::Entry) -> &'static str {
+pub(crate) fn icon_for(entry: &model::Entry) -> &'static str {
     if entry.is_dir {
         return "folder-symbolic";
     }
@@ -315,7 +379,7 @@ fn columns(inner_x: f32, inner_w: f32) -> [(f32, f32); 4] {
 }
 
 /// Text shortened with "…" to fit `max_w`.
-fn fit(
+pub(crate) fn fit(
     fonts: &mut Fonts,
     text: &str,
     size: f32,
@@ -349,20 +413,20 @@ fn fit(
     best.unwrap_or_else(|| fonts.layout("…", size, weight, scale))
 }
 
-struct Colors {
-    ink: Color,
-    dim: Color,
-    hair: Color,
-    on: Color,
-    sel: Color,
-    fold: Color,
-    seg: Color,
-    seg_on: Color,
-    track: Color,
+pub(crate) struct Colors {
+    pub ink: Color,
+    pub dim: Color,
+    pub hair: Color,
+    pub on: Color,
+    pub sel: Color,
+    pub fold: Color,
+    pub seg: Color,
+    pub seg_on: Color,
+    pub track: Color,
 }
 
 impl Colors {
-    fn new(t: &Theme) -> Self {
+    pub(crate) fn new(t: &Theme) -> Self {
         let ink = t.window_text;
         let dark = t.dark;
         let a = |dark_a: f32, light_a: f32| ink.with_alpha(if dark { dark_a } else { light_a });
@@ -402,7 +466,9 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         theme: t,
     };
     let radius = if ui.rounded { t.window_radius } else { 0.0 };
-    let list = list_rect(w, h);
+    let list = list_rect(ui, w, h);
+    // The info panel takes the right edge; everything else lays out in `wm`.
+    let wm = w - panel_w(ui);
     out.list = list;
 
     if ui.rounded && ui.frosted {
@@ -424,7 +490,11 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
 
     // The rows first: they scroll under the bars drawn after them.
     if matches!(ui.location, Location::Dir(_)) {
-        rows(ui, &mut p, &mut res.text, &c, &mut out, w, h, scale);
+        if ui.mode == ViewMode::Grid {
+            grid::paint(ui, &mut p, &mut res.text, &c, &out, h, scale);
+        } else {
+            rows(ui, &mut p, &mut res.text, &c, &mut out, wm, h, scale);
+        }
     } else {
         let msg = "Coming soon";
         let tw = p.measure(msg, t.font_size, Weight::Normal);
@@ -449,10 +519,13 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         t.window_background,
         (SIDE_W, 0.0, w - SIDE_W, list.y),
     );
+    if panel_w(ui) > 0.0 {
+        info::paint(ui, &mut p, &c, &mut out, w, h);
+    }
     top_bar(ui, &mut p, &c, &mut out, w);
-    title(ui, &mut p, &c, w);
-    if matches!(ui.location, Location::Dir(_)) {
-        column_header(ui, &mut p, &c, &mut out, w, list.y - HEAD_H - 2.0);
+    title(ui, &mut p, &c, wm);
+    if matches!(ui.location, Location::Dir(_)) && ui.mode == ViewMode::List {
+        column_header(ui, &mut p, &c, &mut out, wm, list.y - HEAD_H - 2.0);
     }
     sidebar(ui, &mut p, &c, &mut out, h);
 
@@ -475,6 +548,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
             t.error,
         );
     }
+    ops::paint_menu(ui, &mut p, &mut out, w, h);
     out
 }
 
@@ -499,19 +573,7 @@ fn rows(
     let small = t.font_size - 1.5;
     cache.sync(folder.version, scale, cols[0].1, name_size);
 
-    if let Some(err) = &folder.error {
-        message(p, c, list, err);
-        return;
-    }
-    if folder.visible.is_empty() {
-        if !folder.loading {
-            let msg = if folder.entries.is_empty() {
-                "This folder is empty"
-            } else {
-                "Only hidden files here (Ctrl+H shows them)"
-            };
-            message(p, c, list, msg);
-        }
+    if status(ui, p, c, list) {
         return;
     }
 
@@ -563,16 +625,21 @@ fn rows(
             p.canvas.text(p.fonts, &mut layout, tx, ty, color);
             cache.map.insert(key, layout);
         };
-        draw(
-            p,
-            0,
-            &|| entry.name.clone(),
-            cols[0].0 + 28.0,
-            cols[0].1 - 28.0,
-            false,
-            name_size,
-            ink,
-        );
+        if ui.x.rename.as_ref().is_some_and(|r| r.name == entry.name) {
+            let rect = Rect::new(cols[0].0 + 20.0, y + 2.0, cols[0].1 - 20.0, ROW_H - 4.0);
+            ops::paint_rename(ui, p, c, rect);
+        } else {
+            draw(
+                p,
+                0,
+                &|| entry.name.clone(),
+                cols[0].0 + 28.0,
+                cols[0].1 - 28.0,
+                false,
+                name_size,
+                ink,
+            );
+        }
         draw(
             p,
             1,
@@ -623,6 +690,27 @@ fn rows(
         p.canvas
             .rounded_rect(w - 7.0, ty, 3.0, thumb_h, 1.5, c.ink.with_alpha(0.25));
     }
+}
+
+/// A message in place of the rows (an error, an empty folder); true if shown.
+pub(crate) fn status(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, list: Rect) -> bool {
+    let folder = &ui.folder;
+    if let Some(err) = &folder.error {
+        message(p, c, list, err);
+        return true;
+    }
+    if folder.visible.is_empty() {
+        if !folder.loading {
+            let msg = if folder.entries.is_empty() {
+                "This folder is empty"
+            } else {
+                "Only hidden files here (Ctrl+H shows them)"
+            };
+            message(p, c, list, msg);
+        }
+        return true;
+    }
+    false
 }
 
 fn message(p: &mut Painter<'_, '_>, c: &Colors, list: Rect, text: &str) {
@@ -1312,6 +1400,7 @@ mod tests {
             rounded: true,
             frosted: false,
             keyboard_focus: false,
+            x: ops::Extra::default(),
         }
     }
 
@@ -1331,9 +1420,12 @@ mod tests {
         let theme = Theme::for_appearance(&Config::default().appearance);
         let mut res = Res::new(theme, Icons::new());
         let mut pixels = vec![0u8; (w * h * 4) as usize];
-        for frosted in [false, true] {
+        for (frosted, grid) in [(false, false), (true, false), (false, true)] {
             let mut ui = ui(Path::new("/x"));
             ui.frosted = frosted;
+            if grid {
+                ui.mode = ViewMode::Grid;
+            }
             ui.folder.add(synthetic(10_000));
             let frames = 120;
             let mut total = Duration::ZERO;
@@ -1349,8 +1441,9 @@ mod tests {
                 worst = worst.max(took);
             }
             println!(
-                "10k entries{}: {:.2} ms a frame, worst {:.2} ms",
+                "10k entries{}{}: {:.2} ms a frame, worst {:.2} ms",
                 if frosted { " frosted" } else { "" },
+                if grid { " grid" } else { "" },
                 total.as_secs_f64() * 1000.0 / frames as f64,
                 worst.as_secs_f64() * 1000.0
             );
@@ -1401,6 +1494,32 @@ mod tests {
                 });
             }
             ui.drives = d;
+        }
+        if std::env::var_os("CNDE_PREVIEW_GRID").is_some() {
+            ui.mode = ViewMode::Grid;
+        }
+        if std::env::var_os("CNDE_PREVIEW_INFO").is_some() {
+            ui.info_panel = true;
+            // `CNDE_PREVIEW_INFO=folder` shows the open folder, else the selection.
+            if std::env::var("CNDE_PREVIEW_INFO").as_deref() == Ok("folder") {
+                ui.folder.clear_selection();
+            }
+            let paths: Vec<PathBuf> = match info::subject(&ui) {
+                Some(info::Subject::One(e)) => vec![e.path.clone()],
+                _ => vec![root.clone()],
+            };
+            ui.x.info.scan = Some(info::scan(&paths, &cancel));
+        }
+        if std::env::var_os("CNDE_PREVIEW_RENAME").is_some() {
+            ui.x.rename = Some(ops::Rename {
+                name: ui.folder.entry(5).unwrap().name.clone(),
+                text: ui.folder.entry(5).unwrap().name.clone(),
+                cursor: 3,
+                fresh: false,
+            });
+        }
+        if std::env::var_os("CNDE_PREVIEW_MENU").is_some() {
+            ui.x.menu = Some(ops::Menu { x: 420.0, y: 250.0 });
         }
         let theme = Theme::for_appearance(&ui.config.appearance);
         let mut res = Res::new(theme, Icons::new());
