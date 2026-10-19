@@ -94,6 +94,7 @@ impl CompositorHandler for State {
                 // what's under the pointer.
                 let size = window.geometry().size;
                 if with_state(&window, |s| std::mem::replace(&mut s.last_size, size)) != size {
+                    self.promote_borderless(&window);
                     self.queue_pointer_refresh();
                 } else {
                     only_window = Some(window.clone());

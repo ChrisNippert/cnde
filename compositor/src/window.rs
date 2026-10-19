@@ -63,6 +63,9 @@ pub struct WindowState {
     /// (Super+Shift+T, dropped off the tiles, resized), or lifted while
     /// being dragged.
     pub keep_floating: bool,
+    /// Already promoted to fullscreen for covering its monitor, so leaving
+    /// fullscreen again sticks.
+    pub auto_fullscreened: bool,
     /// Local position and size before its workspace started tiling, to
     /// return to when it stops.
     pub untiled: Option<Rectangle<i32, Logical>>,
@@ -189,6 +192,75 @@ impl State {
         }
     }
 
+    /// Smithay tells a window about every monitor its whole buffer touches,
+    /// shadows, hidden frames and all. Clients (xwayland-satellite places an
+    /// X11 window on the last monitor it entered) should only hear about the
+    /// monitors the window itself is on, and a fullscreen or maximized one
+    /// only about its own. Runs after `Space::refresh`, which sends the
+    /// buffer-based enters; the leaves go out in the same flush.
+    pub fn trim_window_outputs(&mut self) {
+        let mut leaves = Vec::new();
+        for window in self.space.elements() {
+            let entered = self.space.outputs_for_element(window);
+            if entered.len() < 2 && !entered.iter().any(|o| !self.window_on(window, o)) {
+                continue;
+            }
+            let own = matches!(
+                Self::placement_of(window),
+                Placement::Fullscreen | Placement::Maximized
+            )
+            .then(|| self.output_for(window))
+            .flatten();
+            for output in entered {
+                let keep = match &own {
+                    Some(own) => *own == output,
+                    None => self.window_on(window, &output),
+                };
+                if !keep {
+                    leaves.push((window.clone(), output));
+                }
+            }
+        }
+        for (window, output) in leaves {
+            smithay::desktop::space::SpaceElement::output_leave(&window, &output);
+        }
+    }
+
+    fn window_on(&self, window: &Window, output: &Output) -> bool {
+        match (
+            self.space.element_geometry(window),
+            self.space.output_geometry(output),
+        ) {
+            (Some(geo), Some(out)) => geo.overlaps(out),
+            _ => true,
+        }
+    }
+
+    /// A "borderless fullscreen" game: a floating window that fills (or
+    /// overfills) its whole monitor and has no cnde title bar, without asking
+    /// for fullscreen. Make it a real one: above the panels, only on that
+    /// monitor. Only once per window, so leaving fullscreen sticks.
+    pub fn promote_borderless(&mut self, window: &Window) {
+        if with_state(window, |s| s.placement != Placement::Floating || s.auto_fullscreened)
+            || titlebar_height(window) != 0
+            || window.toplevel().is_none()
+        {
+            return;
+        }
+        let Some(output) = self.output_for(window) else {
+            return;
+        };
+        let Some(out_geo) = self.space.output_geometry(&output) else {
+            return;
+        };
+        if !covers_output(window.geometry().size, out_geo.size) {
+            return;
+        }
+        debug!(size = ?window.geometry().size, output = %output.name(), "borderless window covers its monitor; fullscreening");
+        with_state(window, |s| s.auto_fullscreened = true);
+        self.set_placement(window, Placement::Fullscreen, false);
+    }
+
     /// Called on a toplevel's first buffer commit.
     pub fn map_new_window(&mut self, window: Window) {
         self.unmapped.retain(|w| w != &window);
@@ -219,6 +291,7 @@ impl State {
         self.add_window_to_workspace(&window);
         // On a tiling workspace it grows in its tile and the others make room.
         self.relayout_visible(true);
+        self.promote_borderless(&window);
         self.focus_window(Some(&window));
         self.queue_redraw();
         self.queue_pointer_refresh();
@@ -527,5 +600,24 @@ pub fn placement_rect(
             Size::from((area.size.w - half, area.size.h)),
         ),
         Placement::Floating | Placement::Maximized | Placement::Fullscreen => area,
+    }
+}
+
+/// Whether a window of `window` size hides a whole monitor of `output` size.
+fn covers_output(window: Size<i32, Logical>, output: Size<i32, Logical>) -> bool {
+    output.w > 0 && output.h > 0 && window.w >= output.w && window.h >= output.h
+}
+
+#[cfg(test)]
+mod borderless_tests {
+    use super::covers_output;
+
+    #[test]
+    fn covering_sizes() {
+        assert!(covers_output((2560, 1440).into(), (2560, 1440).into()));
+        assert!(covers_output((2566, 1472).into(), (2560, 1440).into()));
+        assert!(!covers_output((1920, 1080).into(), (2560, 1440).into()));
+        assert!(!covers_output((2560, 1400).into(), (2560, 1440).into()));
+        assert!(!covers_output((100, 100).into(), (0, 0).into()));
     }
 }

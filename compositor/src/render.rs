@@ -11,7 +11,7 @@ use smithay::{
             solid::SolidColorRenderElement,
             surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
             texture::TextureRenderElement,
-            utils::RescaleRenderElement,
+            utils::{CropRenderElement, RescaleRenderElement},
         },
         gles::{GlesRenderer, GlesTexture, element::PixelShaderElement},
     },
@@ -88,6 +88,8 @@ render_elements! {
     // Every element is wrapped in a rescale so animations can move and stretch
     // it; at rest the scale is exactly 1.
     Window = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+    // A fullscreen window, cut off at its monitor's edge.
+    WindowClipped = CropRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>>,
     Snapshot = RescaleRenderElement<TextureRenderElement<GlesTexture>>,
     Solid = SolidColorRenderElement,
     Cursor = MemoryRenderBufferRenderElement<GlesRenderer>,
@@ -404,8 +406,17 @@ fn window_elements(
         };
         let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
             win.render_elements(renderer, render_location, scale, frame.alpha);
-        elements.extend(surfaces.into_iter().map(|surface| {
-            OutputElement::Window(RescaleRenderElement::from_element(surface, origin, stretch))
+        // A fullscreen window can be bigger than its monitor (Wine keeps a
+        // hidden frame around the game); don't let it bleed onto a neighbour.
+        let clip = (state.placement == Placement::Fullscreen)
+            .then(|| rect.to_physical_precise_round::<_, i32>(scale));
+        elements.extend(surfaces.into_iter().filter_map(|surface| {
+            let surface = RescaleRenderElement::from_element(surface, origin, stretch);
+            match clip {
+                Some(clip) => CropRenderElement::from_element(surface, scale, clip)
+                    .map(OutputElement::WindowClipped),
+                None => Some(OutputElement::Window(surface)),
+            }
         }));
 
         // cnde's title bar, just above the geometry. It grows with the

@@ -300,6 +300,7 @@ impl State {
     pub fn on_loop_iteration(&mut self) {
         crate::watchdog::beat(Phase::Housekeeping);
         self.space.refresh();
+        self.trim_window_outputs();
         self.popups.cleanup();
         self.update_idle_inhibit();
         self.finish_workspace_motion(Instant::now());
