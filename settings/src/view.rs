@@ -206,8 +206,8 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     let sw = t.sidebar_width;
     let hh = t.window_header_height;
 
-    p.canvas.clear(Color::rgba(0, 0, 0, 0.0));
     if ui.rounded && ui.frosted {
+        p.canvas.clear(Color::rgba(0, 0, 0, 0.0));
         // Only the content is solid; the sidebar, drawn over nothing,
         // lets the frost behind the window show.
         // Rounded on the right only: the left edge meets the sidebar.
@@ -221,8 +221,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
             (sw, 0.0, w - sw, h),
         );
     } else {
-        p.canvas
-            .rounded_rect(0.0, 0.0, w, h, radius, t.window_background);
+        p.canvas.rounded_fill(radius, t.window_background);
     }
 
     // The page first: it scrolls under the header bar drawn after it.
@@ -1385,8 +1384,13 @@ mod tests {
             anim: Anim::new(),
         };
         let mut pixels = vec![0u8; (w * h * 4) as usize];
-        for page in [Page::Appearance, Page::Accessibility] {
+        for (page, frosted) in [
+            (Page::Appearance, false),
+            (Page::Appearance, true),
+            (Page::Accessibility, false),
+        ] {
             let mut ui = ui(page);
+            ui.frosted = frosted;
             let frames = 60;
             let mut total = std::time::Duration::ZERO;
             let mut worst = std::time::Duration::ZERO;
@@ -1401,7 +1405,8 @@ mod tests {
                 worst = worst.max(took);
             }
             println!(
-                "{page:?}: {:.1} ms a frame, worst {:.1} ms",
+                "{page:?}{}: {:.1} ms a frame, worst {:.1} ms",
+                if frosted { " frosted" } else { "" },
                 total.as_secs_f64() * 1000.0 / frames as f64,
                 worst.as_secs_f64() * 1000.0
             );
@@ -1462,6 +1467,7 @@ mod tests {
                 cnde_config::ColorScheme::Dark,
             ),
             Ok("dusk") => (cnde_config::Palette::Cnde, cnde_config::ColorScheme::Dark),
+            Ok("custom") => (cnde_config::Palette::Custom, cnde_config::ColorScheme::Dark),
             _ => (cnde_config::Palette::Quiet, cnde_config::ColorScheme::Dark),
         };
         ui.config.appearance.palette = palette;
