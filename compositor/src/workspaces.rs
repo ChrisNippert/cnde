@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use smithay::{
     desktop::Window,
     output::Output,
-    utils::{Logical, Point, Rectangle, Scale},
+    utils::{Logical, Point, Rectangle, Scale, Size},
 };
 use tracing::debug;
 
@@ -562,7 +562,7 @@ impl State {
         Some(match Self::placement_of(window) {
             Placement::Floating => self
                 .layout_rest(window, geo, area)
-                .unwrap_or_else(|| floating_rest(window, geo)),
+                .unwrap_or_else(|| floating_rest(window, geo, area)),
             Placement::Fullscreen => geo,
             placement => crate::decorations::content_rect(
                 placement_rect(placement, area),
@@ -703,20 +703,41 @@ impl State {
 }
 
 /// Where a floating `window` rests on a monitor at `geo`: its local
-/// position, kept reachable on a smaller monitor.
+/// position, kept reachable on a smaller monitor and with its title bar
+/// clear of the panels around `area` (dropped under the dock, it was
+/// stuck there).
 pub(crate) fn floating_rest(
     window: &Window,
     geo: Rectangle<i32, Logical>,
+    area: Rectangle<i32, Logical>,
 ) -> Rectangle<i32, Logical> {
     let size = window.geometry().size;
     let local = with_state(window, |s| s.local);
-    let local = Point::from((
-        local
-            .x
-            .clamp(-(size.w - 64).max(0), (geo.size.w - 64).max(0)),
-        local.y.clamp(0, (geo.size.h - 32).max(0)),
-    ));
-    Rectangle::new(geo.loc + local, size)
+    let bar = crate::decorations::titlebar_height(window);
+    Rectangle::new(geo.loc + reachable(local, size, bar, geo, area), size)
+}
+
+/// How much of a window's top edge must stay grabbable.
+const GRAB: i32 = 32;
+
+/// `local` (a window's position on a monitor at `geo`) moved so at least
+/// 64px of its width and its title bar (`bar` tall, or the top GRAB px
+/// without one) lie within `area`.
+fn reachable(
+    local: Point<i32, Logical>,
+    size: Size<i32, Logical>,
+    bar: i32,
+    geo: Rectangle<i32, Logical>,
+    area: Rectangle<i32, Logical>,
+) -> Point<i32, Logical> {
+    let top = area.loc.y - geo.loc.y + bar;
+    let bottom = area.loc.y - geo.loc.y + area.size.h - bar.max(GRAB) + bar;
+    let left = area.loc.x - geo.loc.x;
+    let right = left + area.size.w;
+    Point::from((
+        local.x.clamp(left - (size.w - 64).max(0), (right - 64).max(left)),
+        local.y.min(bottom).max(top),
+    ))
 }
 
 #[cfg(test)]
@@ -735,6 +756,25 @@ mod tests {
         }
         ws.active = active;
         ws
+    }
+
+    #[test]
+    fn dropped_windows_keep_their_title_bar_reachable() {
+        let geo = Rectangle::new((1920, 0).into(), (1920, 1080).into());
+        // A 32px top bar and a 72px dock.
+        let area = Rectangle::new((1920, 32).into(), (1920, 976).into());
+        let size = Size::from((800, 600));
+        let at = |x, y| reachable(Point::from((x, y)), size, 36, geo, area);
+        // Dropped under the dock: the title bar comes back above it.
+        // Title bar top at 1008 - 36, just above the dock.
+        assert_eq!(at(400, 1060), Point::from((400, 1008)));
+        // Under the top bar: just below it.
+        assert_eq!(at(400, 10), Point::from((400, 32 + 36)));
+        // Mostly off a side: 64px stay on screen.
+        assert_eq!(at(-2000, 300).x, -(800 - 64));
+        assert_eq!(at(5000, 300).x, 1920 - 64);
+        // Already reachable: left alone.
+        assert_eq!(at(400, 300), Point::from((400, 300)));
     }
 
     fn shape(ws: &Workspaces<u32>) -> (Vec<bool>, usize) {

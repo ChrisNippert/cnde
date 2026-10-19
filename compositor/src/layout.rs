@@ -558,7 +558,7 @@ impl State {
         let layout = self.layout_of(index);
         if !layout.tiles() {
             // Floating: every window where it is.
-            let own = with_bar(floating_rest(window, geo), window);
+            let own = with_bar(floating_rest(window, geo, area), window);
             let rect = layout.arrange(area, &[own]).first().copied()?;
             return Some(content_rect(rect, titlebar_height(window)));
         }
