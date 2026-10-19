@@ -62,7 +62,28 @@ pub struct PopupAnims {
     opening_until: Option<Instant>,
 }
 
+/// How far `surface` (a popup) has opened, 0 to 1: its alpha, and its
+/// scale is `START_SCALE` on the way to 1. 0 until it's first drawn.
+pub fn open_progress(surface: &WlSurface, now: Instant) -> f64 {
+    let opened = with_states(surface, |states| states.data_map.get::<Opened>().map(|o| o.0));
+    opened.map_or(0.0, |at| Animation::progress_since(at, presets::POPUP_OPEN, now))
+}
+
+/// How big a popup is drawn at `progress` through opening (or closing,
+/// counting down), relative to its size.
+pub fn scale_at(progress: f64) -> f64 {
+    START_SCALE + (1.0 - START_SCALE) * progress
+}
+
 impl PopupAnims {
+    /// Popups fading out: where each was (global) and how far it's still
+    /// open, 1 to 0.
+    pub fn closing(&self, now: Instant) -> impl Iterator<Item = (Rectangle<f64, Logical>, f64)> + '_ {
+        self.closing
+            .iter()
+            .map(move |c| (c.rect, 1.0 - c.anim.value_at(now)))
+    }
+
     pub fn is_animating(&self, now: Instant) -> bool {
         self.opening_until.is_some_and(|until| until > now) || !self.closing.is_empty()
     }

@@ -17,7 +17,9 @@ use smithay::{
         },
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
-    desktop::layer_map_for_output,
+    backend::renderer::element::utils::RescaleRenderElement,
+    desktop::{PopupKind, PopupManager, layer_map_for_output},
+    reexports::wayland_server::Resource,
     output::Output,
     utils::{Buffer, Physical, Point, Rectangle, Scale, Transform},
 };
@@ -51,7 +53,14 @@ impl DockFrost {
         wallpapers: &Wallpapers,
         output: &Output,
         config: &cnde_config::Config,
+        popups: &crate::popup_anim::PopupAnims,
+        now: std::time::Instant,
     ) -> Vec<OutputElement> {
+        let mut elements = if config.panel.frosted {
+            self.popup_elements(renderer, wallpapers, output, config, popups, now)
+        } else {
+            Vec::new()
+        };
         let dock = &config.dock;
         // As the dock draws itself (the palette sets the shape).
         let dock_radius_full = cnde_ui::Theme::for_appearance(&config.appearance).dock_radius as f64;
@@ -65,7 +74,6 @@ impl DockFrost {
             // Just the bar, not the shadow a rounded one casts below it.
             wanted.push(("cnde-panel", 0.0, Some(config.panel.height as i32)));
         }
-        let mut elements = Vec::new();
         for (namespace, mut radius, height) in wanted {
             let layer = {
                 let map = layer_map_for_output(output);
@@ -105,16 +113,100 @@ impl DockFrost {
             if let Some(height) = height {
                 area.size.h = area.size.h.min(height);
             }
-            if let Some(element) =
-                self.element(renderer, wallpapers, output, namespace, area, radius)
+            if let Some(frost) =
+                self.frost(renderer, wallpapers, output, namespace, area, radius, 1.0)
             {
-                elements.push(element);
+                elements.push(OutputElement::Frost(frost));
             }
         }
         elements
     }
 
-    fn element(
+    /// Frost under the shell's popups (quick settings, the calendar,
+    /// menus) on the top layer, opening and closing with them: the same
+    /// scale from the middle of their top edge, the same fade.
+    fn popup_elements(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        wallpapers: &Wallpapers,
+        output: &Output,
+        config: &cnde_config::Config,
+        popups: &crate::popup_anim::PopupAnims,
+        now: std::time::Instant,
+    ) -> Vec<OutputElement> {
+        use crate::popup_anim::{open_progress, scale_at};
+        // Never larger than any popup's own corners, so no frost shows
+        // past them (a little missing in a corner doesn't show).
+        let theme = cnde_ui::Theme::for_appearance(&config.appearance);
+        let radius = theme.qs_radius.max(theme.menu_radius) as f64;
+        let scale = output.current_scale().fractional_scale();
+        let mut open = Vec::new();
+        {
+            let map = layer_map_for_output(output);
+            for layer in map.layers_on(smithay::wayland::shell::wlr_layer::Layer::Top) {
+                if !layer.namespace().starts_with("cnde-") {
+                    continue;
+                }
+                let Some(parent) = map.layer_geometry(layer) else {
+                    continue;
+                };
+                for (popup, offset) in PopupManager::popups_for_surface(layer.wl_surface()) {
+                    let PopupKind::Xdg(xdg) = &popup else {
+                        continue;
+                    };
+                    let rect = Rectangle::new(parent.loc + offset, popup.geometry().size);
+                    let progress = open_progress(xdg.wl_surface(), now);
+                    open.push((format!("{:?}", xdg.wl_surface().id()), rect, progress));
+                }
+            }
+        }
+        let Some(output_geo) = output_logical_geo(output) else {
+            return Vec::new();
+        };
+        let closing = popups.closing(now).filter_map(|(rect, progress)| {
+            let local = Rectangle::new(rect.loc - output_geo.loc, rect.size).to_i32_round();
+            local
+                .overlaps(Rectangle::from_size(output_geo.size.to_i32_round()))
+                .then(|| (String::from("closing"), local, progress))
+        });
+        let all: Vec<_> = open.into_iter().chain(closing).collect();
+        let mut elements = Vec::new();
+        let mut drawn = Vec::new();
+        for (key, rect, progress) in all {
+            if progress <= 0.0 {
+                continue;
+            }
+            drawn.push(format!("{}/popup/{key}", output.name()));
+            let Some(frost) = self.frost(
+                renderer,
+                wallpapers,
+                output,
+                &format!("popup/{key}"),
+                rect,
+                radius,
+                progress as f32,
+            ) else {
+                continue;
+            };
+            let origin = Point::<i32, Physical>::from((
+                ((rect.loc.x as f64 + rect.size.w as f64 / 2.0) * scale).round() as i32,
+                (rect.loc.y as f64 * scale).round() as i32,
+            ));
+            elements.push(OutputElement::PopupFrost(RescaleRenderElement::from_element(
+                frost,
+                origin,
+                Scale::from(scale_at(progress)),
+            )));
+        }
+        // Forget popups that are gone, or their ids pile up.
+        let prefix = format!("{}/popup/", output.name());
+        self.ids
+            .retain(|key, _| !key.starts_with(&prefix) || drawn.contains(key));
+        elements
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn frost(
         &mut self,
         renderer: &mut GlesRenderer,
         wallpapers: &Wallpapers,
@@ -122,7 +214,8 @@ impl DockFrost {
         namespace: &str,
         area: Rectangle<i32, smithay::utils::Logical>,
         radius: f64,
-    ) -> Option<OutputElement> {
+        alpha: f32,
+    ) -> Option<Frost> {
         if self.shader.is_none() && !self.broken {
             match renderer.compile_custom_texture_shader(
                 crate::shaders::ROUNDED_TEXTURE,
@@ -137,7 +230,7 @@ impl DockFrost {
         }
         let shader = self.shader.as_ref()?;
         let scale = output.current_scale().fractional_scale();
-        let (texture, crop) = wallpapers.blurred_crop(output, area)?;
+        let (texture, crop) = wallpapers.blurred_crop(output, area, alpha)?;
         let inner = TextureShaderElement::new(
             texture,
             shader.clone(),
@@ -155,8 +248,19 @@ impl DockFrost {
         );
         let key = format!("{}/{namespace}", output.name());
         let id = self.ids.entry(key).or_insert_with(Id::new).clone();
-        Some(OutputElement::Frost(Frost { inner, id }))
+        Some(Frost { inner, id })
     }
+}
+
+/// `output`'s place and size, logical.
+fn output_logical_geo(output: &Output) -> Option<Rectangle<f64, smithay::utils::Logical>> {
+    let mode = output.current_mode()?;
+    let size = output
+        .current_transform()
+        .transform_size(mode.size)
+        .to_f64()
+        .to_logical(output.current_scale().fractional_scale());
+    Some(Rectangle::new(output.current_location().to_f64(), size))
 }
 
 impl Element for Frost {

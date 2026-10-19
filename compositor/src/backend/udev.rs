@@ -878,6 +878,8 @@ impl State {
                 &self.wallpapers,
                 &output,
                 &self.config,
+                &self.popup_anims,
+                now,
             );
             let backdrop = match self.space.output_geometry(&output) {
                 Some(geo) => crate::overview::backdrop(

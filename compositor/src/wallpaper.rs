@@ -238,6 +238,7 @@ impl Wallpapers {
         &self,
         output: &Output,
         area: Rectangle<i32, Logical>,
+        alpha: f32,
     ) -> Option<(TextureRenderElement<GlesTexture>, [f32; 4])> {
         let entry = self.entries.get(&output.name())?;
         let texture = entry.blurred.as_ref()?;
@@ -264,7 +265,7 @@ impl Wallpapers {
         let element = TextureRenderElement::from_texture_buffer(
             area.loc.to_physical(scale),
             texture,
-            None,
+            Some(alpha),
             Some(src),
             Some(area.size.to_i32_round()),
             Kind::Unspecified,

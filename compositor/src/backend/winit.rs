@@ -201,7 +201,14 @@ impl State {
             let wallpaper = self.wallpapers.element(renderer, &backend.output);
             let frost =
                 self.dock_frost
-                    .elements(renderer, &self.wallpapers, &backend.output, &self.config);
+                    .elements(
+                renderer,
+                &self.wallpapers,
+                &backend.output,
+                &self.config,
+                &self.popup_anims,
+                now,
+            );
             let backdrop = match output_geo {
                 Some(geo) => crate::overview::backdrop(
                     &mut self.overview,

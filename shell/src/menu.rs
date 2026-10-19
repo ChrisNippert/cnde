@@ -373,7 +373,7 @@ fn paint(
         width,
         height,
         theme.menu_radius,
-        theme.search_background,
+        theme.qs_background,
     );
     let check_space = if has_checks(entries) {
         CHECK_SPACE

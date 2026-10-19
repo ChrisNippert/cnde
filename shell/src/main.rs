@@ -386,6 +386,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             TimeoutAction::ToDuration(until_next_minute())
         })?;
 
+    // Debug aid: CNDE_SHELL_OPEN=quick_settings or calendar opens that
+    // popup on the first panel, for looking at it without a click.
+    if let Ok(which) = std::env::var("CNDE_SHELL_OPEN") {
+        event_loop.handle().insert_source(
+            Timer::from_duration(Duration::from_secs(2)),
+            move |_, _, app| {
+                let serial = app.last_serial;
+                match which.as_str() {
+                    "calendar" => app.toggle_calendar(0, serial),
+                    _ => app.toggle_quick_settings(0, serial),
+                }
+                TimeoutAction::Drop
+            },
+        )?;
+    }
     // Debug aid: CNDE_SHELL_EDIT=dock,panel starts in edit mode, for
     // looking at it without a right-click.
     if let Ok(which) = std::env::var("CNDE_SHELL_EDIT") {

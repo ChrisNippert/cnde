@@ -95,6 +95,8 @@ render_elements! {
     Wallpaper = TextureRenderElement<GlesTexture>,
     Shader = PixelShaderElement,
     Frost = crate::frost::Frost,
+    // Under a shell popup, growing and fading with it.
+    PopupFrost = RescaleRenderElement<crate::frost::Frost>,
     Night = crate::night_light::Filter,
     Titlebar = RescaleRenderElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
 }
