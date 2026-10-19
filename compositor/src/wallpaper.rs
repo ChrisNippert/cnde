@@ -29,7 +29,7 @@ use smithay::{
 };
 use tracing::{info, warn};
 
-use crate::state::State;
+use crate::{state::State, tint::dominant};
 
 /// What to draw: everything that affects the pixels.
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +102,46 @@ fn top_is_light(pixels: &[u8], size: Size<i32, Buffer>) -> bool {
     n > 0 && sum / n as f64 > 0.3
 }
 
+/// The spread between a pixel's strongest and weakest channel; low is grey.
+fn chroma(p: &[u8; 3]) -> u8 {
+    p.iter().max().unwrap_or(&0) - p.iter().min().unwrap_or(&0)
+}
+
+/// A colour to tint UI with, from a wallpaper's pixels: the dominant
+/// colour, unless that is near-grey or near-black while a colourful group
+/// holds at least 15% of the pixels, in which case that group's.
+fn wallpaper_tint(pixels: &[[u8; 3]]) -> [u8; 3] {
+    let main = dominant(pixels);
+    if chroma(&main) >= 40 && main.iter().any(|&c| c >= 60) {
+        return main;
+    }
+    let colourful: Vec<[u8; 3]> = pixels
+        .iter()
+        .copied()
+        .filter(|p| chroma(p) >= 40 && p.iter().any(|&c| c >= 60))
+        .collect();
+    if colourful.len() * 100 >= pixels.len() * 15 && !colourful.is_empty() {
+        dominant(&colourful)
+    } else {
+        main
+    }
+}
+
+/// `wallpaper_tint` of an RGBA image, sampled down to at most 64 columns.
+fn image_tint(pixels: &[u8], size: Size<i32, Buffer>) -> Option<[u8; 3]> {
+    let (w, h) = (size.w.max(0) as usize, size.h.max(0) as usize);
+    if w == 0 || h == 0 || pixels.len() < w * h * 4 {
+        return None;
+    }
+    let step = w.div_ceil(64);
+    let sample: Vec<[u8; 3]> = (0..h)
+        .step_by(step)
+        .flat_map(|y| (0..w).step_by(step).map(move |x| (y * w + x) * 4))
+        .map(|i| [pixels[i], pixels[i + 1], pixels[i + 2]])
+        .collect();
+    Some(wallpaper_tint(&sample))
+}
+
 /// The blurred copy is made this many times smaller; the GPU's filtering
 /// smooths it back up, and it costs 1/16 of the memory.
 const BLUR_DOWNSCALE: u32 = 4;
@@ -118,6 +158,8 @@ struct Entry {
     upload: Option<(Vec<u8>, Vec<u8>)>,
     /// The strip along the top is light (see `top_is_light`).
     top_light: bool,
+    /// A colour to tint UI with (see `wallpaper_tint`).
+    tint: Option<[u8; 3]>,
 }
 
 pub struct Wallpapers {
@@ -173,6 +215,7 @@ impl Wallpapers {
             blurred_size: done.blurred_size,
             upload: None,
             top_light: false,
+            tint: None,
         });
         // A newer result may already be here (jobs can finish out of order
         // across a fast config change); keep the newest.
@@ -181,6 +224,7 @@ impl Wallpapers {
             entry.generation = done.generation;
             entry.blurred_size = done.blurred_size;
             entry.top_light = top_is_light(&done.blurred, done.blurred_size);
+            entry.tint = image_tint(&done.blurred, done.blurred_size);
             entry.upload = Some((done.pixels, done.blurred));
         }
     }
@@ -189,6 +233,12 @@ impl Wallpapers {
     /// straight on it (a clear bar) should be dark.
     pub fn top_light(&self, output: &str) -> bool {
         self.entries.get(output).is_some_and(|e| e.top_light)
+    }
+
+    /// The wallpaper's tint colour on `output`, once it has loaded.
+    #[allow(dead_code)]
+    pub fn tint(&self, output: &str) -> Option<[u8; 3]> {
+        self.entries.get(output).and_then(|e| e.tint)
     }
 
     /// The background for `output`, or `None` to show the clear color.
@@ -574,6 +624,27 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn tint_prefers_a_colourful_group_over_black() {
+        let mut px = vec![[5, 5, 8]; 70];
+        px.extend([[20, 60, 200]; 30]);
+        assert_eq!(wallpaper_tint(&px), [20, 60, 200]);
+        // Too small a share of colour: stay with the black.
+        let mut px = vec![[5, 5, 8]; 95];
+        px.extend([[20, 60, 200]; 5]);
+        assert_eq!(wallpaper_tint(&px), [5, 5, 8]);
+    }
+
+    #[test]
+    fn tint_of_grey_and_mixes() {
+        assert_eq!(wallpaper_tint(&[[128, 128, 128]; 20]), [128, 128, 128]);
+        let mut px = vec![[200, 120, 40]; 50];
+        px.extend([[20, 90, 160]; 30]);
+        px.extend([[30, 30, 30]; 20]);
+        assert_eq!(wallpaper_tint(&px), [200, 120, 40]);
+        assert_eq!(wallpaper_tint(&[]), [0, 0, 0]);
+    }
 
     #[test]
     fn fill_crops_to_cover() {
