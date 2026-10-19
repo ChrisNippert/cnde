@@ -158,7 +158,7 @@ impl App {
             panel.apply_theme(&self.theme);
         }
         if dock_moved {
-            self.dock = None;
+            self.docks.clear();
         }
         self.sync_panels();
         self.redraw_all();

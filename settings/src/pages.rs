@@ -2395,6 +2395,15 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
         );
     }
     if on_edge {
+        rows.push(Row::new(
+            "dock.all_monitors",
+            "On every display",
+            Control::switch(),
+            Value::Bool(c.dock.all_monitors),
+            Value::Bool(d.dock.all_monitors),
+        ));
+    }
+    if on_edge {
         rows.push(
             Row::new(
                 "dock.mode",

@@ -68,7 +68,7 @@ impl App {
     /// Match the dock to `dock_editing` (also after it's recreated).
     pub fn apply_dock_edit(&mut self) {
         let icon = self.config.dock.icon_size as f32;
-        if let Some(dock) = &mut self.dock
+        if let Some(dock) = self.docks.first_mut()
             && dock.edit.is_some() != self.dock_editing
         {
             dock.edit = self.dock_editing.then(DockEdit::default);
@@ -101,7 +101,7 @@ impl App {
     /// the event was used up.
     pub fn dock_press_pointer(&mut self, event: &PointerEvent) -> bool {
         let icon = self.config.dock.icon_size as f32;
-        let Some(dock) = &mut self.dock else {
+        let Some(dock) = self.docks.first_mut() else {
             return false;
         };
         match event.kind {
@@ -156,7 +156,7 @@ impl App {
         let icon = self.config.dock.icon_size as f32;
         // Work out what the event means, then act (acting needs `self`).
         let step = {
-            let Some(dock) = &mut self.dock else {
+            let Some(dock) = self.docks.first_mut() else {
                 return;
             };
             if dock.edit.is_none() && dock.drag.is_none() {
@@ -242,8 +242,8 @@ impl App {
             }
             DockStep::Unpin(index) => {
                 let id = self
-                    .dock
-                    .as_ref()
+                    .docks
+                    .first()
                     .and_then(|d| d.items().get(index))
                     .and_then(|i| i.app.clone());
                 if let Some(id) = id {
@@ -281,7 +281,7 @@ impl App {
 
     /// While the grip is dragged: show where the dock would land.
     fn update_dock_preview(&mut self) {
-        let Some(dock) = &self.dock else {
+        let Some(dock) = self.docks.first() else {
             return;
         };
         let Some(DockDrag::Move { at }) = dock.drag else {
@@ -300,7 +300,7 @@ impl App {
         if self.dock_preview.as_ref().is_some_and(|p| p.edge == edge) {
             return;
         }
-        let Some(dock) = &self.dock else {
+        let Some(dock) = self.docks.first() else {
             return;
         };
         // The dock's length and thickness, turned to fit the new edge.
@@ -358,7 +358,7 @@ impl App {
         if size.0 > 0 && size.1 > 0 {
             preview.size = size;
         }
-        let scale = self.dock.as_ref().map_or(1, |d| d.scale());
+        let scale = self.docks.first().map_or(1, |d| d.scale());
         let (w, h) = (preview.size.0 as i32 * scale, preview.size.1 as i32 * scale);
         let (buffer, pixels) = match self.pool.create_buffer(w, h, w * 4, self.shm_format) {
             Ok(created) => created,
@@ -396,8 +396,8 @@ impl App {
     /// installed (kept, so a reinstall brings them back in place).
     fn pinned_order(&self) -> Vec<String> {
         let shown: Vec<String> = self
-            .dock
-            .as_ref()
+            .docks
+            .first()
             .map(|d| {
                 d.items()
                     .iter()
@@ -441,7 +441,7 @@ impl App {
 
     /// The screen edge nearest to `at` (dock-surface coordinates).
     fn dock_edge_at(&self, at: (f64, f64)) -> Option<DockPosition> {
-        let dock = self.dock.as_ref()?;
+        let dock = self.docks.first()?;
         let (w, h) = self
             .outputs
             .info(&dock.output)?

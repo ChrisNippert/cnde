@@ -172,7 +172,9 @@ pub struct App {
     ipc: ipc::Ipc,
     /// The overview's search box, while the overview is open.
     launcher: Option<Launcher>,
-    dock: Option<Dock>,
+    /// The dock, on the main monitor first, then (`dock.all_monitors`)
+    /// the others. Editing and dragging happen on the first.
+    docks: Vec<Dock>,
     /// The open right-click menu.
     menu: Option<menu::Menu>,
     /// The desktop menu's anchor surface, waiting to be configured, and the
@@ -326,7 +328,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop_handle: event_loop.handle(),
         ipc: ipc::Ipc::connect(ipc_tx),
         launcher: None,
-        dock: None,
+        docks: Vec::new(),
         screenshot: None,
         menu: None,
         desktop_holder: None,
@@ -673,9 +675,9 @@ impl App {
             _ => return 0.0,
         };
         let height = self
-            .dock
-            .as_ref()
-            .filter(|d| d.output == launcher.output && d.size().1 > 0)
+            .docks
+            .iter()
+            .find(|d| d.output == launcher.output && d.size().1 > 0)
             .map_or(
                 self.config.dock.icon_size as f32 + 2.0 * self.config.dock.padding + 12.0,
                 |d| d.size().1 as f32,
@@ -716,7 +718,7 @@ impl App {
 
     /// `id` was just launched: its dock icon hops until a window opens.
     fn dock_launching(&mut self, id: &str) {
-        if let Some(dock) = &mut self.dock {
+        for dock in &mut self.docks {
             dock.launching.retain(|(other, _)| other != id);
             dock.launching
                 .push((id.to_string(), std::time::Instant::now()));
@@ -783,45 +785,63 @@ impl App {
         self.sync_dock();
     }
 
-    /// Create, move or drop the dock to match the config (and, for an
-    /// overview dock, whether the overview is open), then refresh it.
+    /// Create, move or drop the docks to match the config (and, for an
+    /// overview dock, whether the overview is open), then refresh them.
     fn sync_dock(&mut self) {
         use cnde_config::DockPosition;
         let position = self.config.dock.position;
-        let wanted = match position {
-            DockPosition::Off => None,
-            DockPosition::Overview if !self.overview_open => None,
-            _ => self.dock_output.clone(),
+        let mut wanted: Vec<wl_output::WlOutput> = match position {
+            DockPosition::Off => Vec::new(),
+            DockPosition::Overview if !self.overview_open => Vec::new(),
+            _ => self.dock_output.clone().into_iter().collect(),
         };
-        if self.dock.as_ref().is_some_and(|d| {
-            Some(&d.output) != wanted.as_ref()
-                || d.position() != position
-                || d.placement()
-                    != (
-                        self.config.dock.extend && position != DockPosition::Overview,
-                        self.config.dock.align,
-                        self.config.dock.float_align.unwrap_or(self.config.dock.align),
-                        self.config.dock.reserve,
-                    )
-        }) {
-            self.dock = None;
+        // The others, unless it's the overview's dock or being edited.
+        if self.config.dock.all_monitors
+            && position != DockPosition::Overview
+            && !self.dock_editing
+            && let Some(main) = wanted.first().cloned()
+        {
+            wanted.extend(self.outputs.outputs().filter(|o| *o != main));
         }
-        let Some(output) = wanted else {
-            self.dock = None;
+        let placement = (
+            self.config.dock.extend && position != DockPosition::Overview,
+            self.config.dock.align,
+            self.config.dock.float_align.unwrap_or(self.config.dock.align),
+            self.config.dock.reserve,
+        );
+        // Each dock in its place: the same monitor at the same index.
+        let stale = self.docks.len() > wanted.len()
+            || self.docks.iter().zip(&wanted).any(|(d, output)| {
+                &d.output != output || d.position() != position || d.placement() != placement
+            });
+        if stale {
+            let keep = self
+                .docks
+                .iter()
+                .zip(&wanted)
+                .take_while(|(d, output)| {
+                    &d.output == *output
+                        && d.position() == position
+                        && d.placement() == placement
+                })
+                .count();
+            self.docks.truncate(keep);
+        }
+        if wanted.is_empty() {
             // Editing ends with the dock (the overview closing).
             self.dock_editing = false;
             return;
-        };
-        if self.dock.is_none() {
+        }
+        for output in wanted.iter().skip(self.docks.len()) {
             let scale = self
                 .outputs
-                .info(&output)
+                .info(output)
                 .map_or(1, |info| info.scale_factor);
-            self.dock = Some(Dock::new(
+            self.docks.push(Dock::new(
                 &self.compositor,
                 &self.layer_shell,
                 &self.qh,
-                output,
+                output.clone(),
                 position,
                 self.config.dock.extend,
                 self.config.dock.align,
@@ -832,34 +852,41 @@ impl App {
         }
         let items = dock::items(&self.config.dock.favorites, &self.apps, &self.windows);
         let icon = self.config.dock.icon_size as f32;
-        // A window against the dock's edge makes it solid.
-        let touched = self.dock.as_ref().is_some_and(|dock| {
-            self.edges_of(&dock.output)
-                .is_some_and(|e| match dock.position() {
-                    cnde_config::DockPosition::Left => e.left,
-                    cnde_config::DockPosition::Right => e.right,
-                    _ => e.bottom,
+        for i in 0..self.docks.len() {
+            let dock = &self.docks[i];
+            // A window against the dock's edge makes it solid.
+            let edges = self.edges_of(&dock.output);
+            let touched = edges.is_some_and(|e| match dock.position() {
+                DockPosition::Left => e.left,
+                DockPosition::Right => e.right,
+                _ => e.bottom,
+            });
+            // The colour to take (`dock.adaptive_color`). Only a bottom dock
+            // has a window's bottom edge colour to follow.
+            let tint = edges.and_then(|e| {
+                let side = matches!(dock.position(), DockPosition::Left | DockPosition::Right);
+                let colour = |c: Option<[u8; 3]>| c.map(|[r, g, b]| cnde_ui::Color::rgb(r, g, b));
+                cnde_ui::tint::dock_choice(
+                    self.config.dock.adaptive_color,
+                    colour(e.top_tint),
+                    colour(e.bottom_tint.filter(|_| !side)),
+                    colour(e.wallpaper_tint),
+                )
+            });
+            let edge_length = self
+                .outputs
+                .info(&dock.output)
+                .and_then(|info| info.logical_size)
+                .map_or(0, |(w, h)| match dock.position() {
+                    DockPosition::Left | DockPosition::Right => h,
+                    _ => w,
                 })
-        });
-        // The colour to take (`dock.adaptive_color`). Only a bottom dock
-        // has a window's bottom edge colour to follow.
-        let tint = self.dock.as_ref().and_then(|dock| {
-            let e = self.edges_of(&dock.output)?;
-            let side = matches!(
-                dock.position(),
-                cnde_config::DockPosition::Left | cnde_config::DockPosition::Right
-            );
-            let colour = |c: Option<[u8; 3]>| c.map(|[r, g, b]| cnde_ui::Color::rgb(r, g, b));
-            cnde_ui::tint::dock_choice(
-                self.config.dock.adaptive_color,
-                colour(e.top_tint),
-                colour(e.bottom_tint.filter(|_| !side)),
-                colour(e.wallpaper_tint),
-            )
-        });
-        if let Some(dock) = &mut self.dock {
-            if dock.edit.is_some() != self.dock_editing {
-                dock.edit = self.dock_editing.then(dock::DockEdit::default);
+                .max(0) as u32;
+            let pinned = self.overview_open || self.dock_editing || self.menu.is_some();
+            let dock = &mut self.docks[i];
+            let editing = self.dock_editing && i == 0;
+            if dock.edit.is_some() != editing {
+                dock.edit = editing.then(dock::DockEdit::default);
             }
             dock.frosted = self.config.dock_frosted();
             dock.solid = touched;
@@ -870,23 +897,15 @@ impl App {
             if !self.overview_open {
                 dock.touched = touched;
             }
-            dock.pinned = self.overview_open || self.dock_editing || self.menu.is_some();
+            dock.pinned = pinned;
             dock.mode = self.config.dock.mode;
-            dock.edge_length = self
-                .outputs
-                .info(&dock.output)
-                .and_then(|info| info.logical_size)
-                .map_or(0, |(w, h)| match dock.position() {
-                    cnde_config::DockPosition::Left | cnde_config::DockPosition::Right => h,
-                    _ => w,
-                })
-                .max(0) as u32;
+            dock.edge_length = edge_length;
             dock.pad = self.config.dock.padding;
             dock.launcher = dock::LauncherPlace {
                 first: self.config.dock.launcher == cnde_config::LauncherSide::Start,
                 gap: self.config.dock.launcher_gap,
             };
-            dock.update(items, icon);
+            dock.update(items.clone(), icon);
         }
         self.draw_dock();
         // A dock that grew (bigger icons, edit mode) pushes the grid up.
@@ -927,7 +946,7 @@ impl App {
     }
 
     fn draw_dock(&mut self) {
-        if let Some(dock) = &mut self.dock {
+        for dock in &mut self.docks {
             dock.draw(
                 &self.qh,
                 &mut self.pool,
@@ -1256,8 +1275,10 @@ impl CompositorHandler for App {
             menu.set_scale(factor);
             self.draw_menu();
         }
-        if let Some(dock) = &mut self.dock
-            && dock.layer.wl_surface() == surface
+        if let Some(dock) = self
+            .docks
+            .iter_mut()
+            .find(|d| d.layer.wl_surface() == surface)
         {
             dock.set_scale(factor);
             self.draw_dock();
@@ -1322,9 +1343,11 @@ impl CompositorHandler for App {
         {
             self.draw_launcher();
         }
-        if let Some(dock) = &mut self.dock
-            && dock.layer.wl_surface() == surface
-            && dock.frame_done()
+        if self
+            .docks
+            .iter_mut()
+            .find(|d| d.layer.wl_surface() == surface)
+            .is_some_and(|dock| dock.frame_done())
         {
             self.draw_dock();
         }
@@ -1381,8 +1404,8 @@ impl LayerShellHandler for App {
         if self.launcher.as_ref().is_some_and(|l| &l.layer == layer) {
             self.launcher = None;
         }
-        if self.dock.as_ref().is_some_and(|d| &d.layer == layer) {
-            self.dock = None;
+        if self.docks.iter().any(|d| &d.layer == layer) {
+            self.docks.retain(|d| &d.layer != layer);
         }
         if self.osd.as_ref().is_some_and(|o| &o.layer == layer) {
             self.osd = None;
@@ -1435,9 +1458,7 @@ impl LayerShellHandler for App {
             launcher.configured();
             self.draw_launcher();
         }
-        if let Some(dock) = &mut self.dock
-            && &dock.layer == layer
-        {
+        if let Some(dock) = self.docks.iter_mut().find(|d| &d.layer == layer) {
             dock.configured(configure.new_size);
             self.draw_dock();
         }
@@ -1585,9 +1606,12 @@ impl PointerHandler for App {
                 self.screenshot_outcome(outcome);
                 continue;
             }
-            if let Some(dock) = &mut self.dock
-                && dock.layer.wl_surface() == &event.surface
+            if let Some(i) = self
+                .docks
+                .iter()
+                .position(|d| d.layer.wl_surface() == &event.surface)
             {
+                let dock = &mut self.docks[i];
                 match event.kind {
                     PointerEventKind::Enter { .. } => dock.pointer(true),
                     PointerEventKind::Leave { .. } => {
@@ -1605,9 +1629,6 @@ impl PointerHandler for App {
                     self.close_menu();
                     continue;
                 }
-                let Some(dock) = &mut self.dock else {
-                    continue;
-                };
                 let right_click = matches!(
                     event.kind,
                     PointerEventKind::Press {
@@ -1615,14 +1636,18 @@ impl PointerHandler for App {
                         ..
                     }
                 );
-                if (dock.edit.is_some() || dock.drag.is_some()) && !right_click {
-                    self.dock_edit_pointer(event);
-                    continue;
+                // Editing and dragging are the first dock's.
+                if i == 0 {
+                    let dock = &self.docks[0];
+                    if (dock.edit.is_some() || dock.drag.is_some()) && !right_click {
+                        self.dock_edit_pointer(event);
+                        continue;
+                    }
+                    if self.dock_press_pointer(event) {
+                        continue;
+                    }
                 }
-                if self.dock_press_pointer(event) {
-                    continue;
-                }
-                let Some(dock) = &mut self.dock else {
+                let Some(dock) = self.docks.get_mut(i) else {
                     continue;
                 };
                 let icon = self.config.dock.icon_size as f32;
@@ -1650,7 +1675,7 @@ impl PointerHandler for App {
                         serial,
                         ..
                     } => {
-                        self.dock_menu(event.position, serial);
+                        self.dock_menu(i, event.position, serial);
                         continue;
                     }
                     _ => continue,

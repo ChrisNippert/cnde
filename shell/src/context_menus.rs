@@ -24,9 +24,9 @@ use crate::{
 const HOLDER: i32 = 9;
 
 impl App {
-    /// Right-click on the dock at `point` (dock-surface coordinates).
-    pub fn dock_menu(&mut self, point: (f64, f64), serial: u32) {
-        let Some(dock) = &self.dock else {
+    /// Right-click on dock `index` at `point` (dock-surface coordinates).
+    pub fn dock_menu(&mut self, index: usize, point: (f64, f64), serial: u32) {
+        let Some(dock) = self.docks.get(index) else {
             return;
         };
         let icon = self.config.dock.icon_size as f32;
@@ -209,7 +209,7 @@ impl App {
     pub fn close_menu(&mut self) {
         self.menu = None;
         // An autohide dock the menu held out lets go after a moment.
-        if let Some(dock) = &mut self.dock {
+        for dock in &mut self.docks {
             dock.linger();
         }
         self.sync_dock();
@@ -285,6 +285,15 @@ impl App {
         let monitor = self.config.dock.system_monitor.trim();
         if !monitor.is_empty() {
             entries.push(Entry::item("System Monitor", Action::Run(monitor.into())));
+        }
+        if self.config.dock.position != DockPosition::Overview && self.outputs.outputs().count() > 1
+        {
+            let all = self.config.dock.all_monitors;
+            entries.push(Entry::check(
+                "On Every Display",
+                all,
+                Action::Config(vec![("dock.all_monitors", Value::Bool(!all))]),
+            ));
         }
         entries.push(Entry::item("Dock Settings", Action::Settings(Some("dock"))));
         entries

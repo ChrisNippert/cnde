@@ -458,6 +458,8 @@ pub struct Dock {
     pub position: DockPosition,
     /// For a dock on a screen edge.
     pub visibility: DockVisibility,
+    /// On an edge: a dock on every monitor, not only the main one.
+    pub all_monitors: bool,
     /// Desktop file IDs, e.g. "firefox.desktop". Ones not installed are
     /// skipped.
     pub favorites: Vec<String>,
@@ -497,6 +499,7 @@ impl Default for Dock {
         Self {
             position: DockPosition::Overview,
             visibility: DockVisibility::Always,
+            all_monitors: false,
             favorites: vec![
                 "firefox.desktop".into(),
                 "org.gnome.Nautilus.desktop".into(),
