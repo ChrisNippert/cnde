@@ -145,6 +145,7 @@ impl XdgShellHandler for State {
         if self.lock.is_locked() {
             return;
         }
+        let from_shell = self.is_layer_surface(&root);
         let mut grab = match self.popups.grab_popup(root, kind, &seat, serial) {
             Ok(grab) => grab,
             Err(err) => {
@@ -175,6 +176,7 @@ impl XdgShellHandler for State {
                 return;
             }
             pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
+            self.shell_popup_grab = from_shell;
         }
     }
 }

@@ -88,6 +88,9 @@ pub struct State {
     /// Toplevels that exist but haven't attached a buffer yet. They are mapped
     /// (placed + animated in) on their first buffer commit.
     pub unmapped: Vec<Window>,
+    /// The open popup grab is the shell's (quick settings, a menu): a
+    /// click that dismisses it also reaches the window under it.
+    pub shell_popup_grab: bool,
     /// Snapshots of destroyed windows, still animating out.
     pub closing: Vec<ClosingWindow>,
     pub wallpapers: crate::wallpaper::Wallpapers,
@@ -218,6 +221,7 @@ impl State {
             swipe_sideways: None,
             swipe_pending: (0.0, 0.0),
             unmapped: Vec::new(),
+            shell_popup_grab: false,
             closing: Vec::new(),
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
             dock_frost: Default::default(),

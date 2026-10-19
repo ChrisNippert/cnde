@@ -632,8 +632,14 @@ impl State {
                 let window = self.space.element_under(location).map(|(w, _)| w.clone());
                 self.focus_window(window.as_ref());
                 // The grab swallowed the press; hand it to what is under the
-                // pointer, as a click with no menu open would have gone.
-                if window.is_some() && !self.mod_held() && !self.bar_press(button, location) {
+                // pointer, as a click with no menu open would have gone. Not
+                // for an app's own menus: clicking off one shouldn't also
+                // click a link under it.
+                if window.is_some()
+                    && self.shell_popup_grab
+                    && !self.mod_held()
+                    && !self.bar_press(button, location)
+                {
                     let under = self.surface_under(location);
                     pointer.motion(
                         self,
