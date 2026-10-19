@@ -136,6 +136,8 @@ pub struct BluetoothDevice {
     /// BlueZ's freedesktop icon name ("audio-headphones"), or empty.
     pub icon: String,
     pub connected: bool,
+    /// Percent, if it reports one.
+    pub battery: Option<u8>,
 }
 
 pub fn start(tx: Sender<Update>) {
@@ -571,6 +573,9 @@ pub fn read_bluez(objects: &BluezObjects) -> Option<Bluetooth> {
                 address,
                 icon: value(device, "Icon").unwrap_or_default(),
                 connected: value(device, "Connected").unwrap_or(false),
+                battery: ifaces
+                    .get("org.bluez.Battery1")
+                    .and_then(|b| value::<u8>(b, "Percentage")),
             })
         })
         .collect();
@@ -679,6 +684,8 @@ mod tests {
             ("00:00:00:00:00:02", "Buds", true, true),
             ("00:00:00:00:00:03", "Stranger", false, false),
         ] {
+            let battery = (alias == "Buds")
+                .then(|| HashMap::from([("Percentage".to_string(), v(Value::from(82u8)))]));
             let props = HashMap::from([
                 ("Address".to_string(), v(Value::from(address))),
                 ("Alias".to_string(), v(Value::from(alias))),
@@ -696,10 +703,14 @@ mod tests {
                     "/org/bluez/hci0/dev_{}",
                     address.replace(':', "_")
                 )),
-                HashMap::from([("org.bluez.Device1".to_string(), props)]),
+                HashMap::from([("org.bluez.Device1".to_string(), props)])
+                    .into_iter()
+                    .chain(battery.map(|b| ("org.bluez.Battery1".to_string(), b)))
+                    .collect(),
             );
         }
         let bt = read_bluez(&objects).unwrap();
+        assert_eq!(bt.connected().and_then(|d| d.battery), Some(82));
         assert!(bt.powered);
         let names: Vec<&str> = bt.devices.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, ["Buds", "Mouse"]);
