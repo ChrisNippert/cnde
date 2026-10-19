@@ -117,10 +117,17 @@ fn settings_page(hit: Hit) -> Option<&'static str> {
 
 const FOOTER_HEIGHT: f32 = 40.0;
 const POWER_TILE_HEIGHT: f32 = 64.0;
-const LABEL_GAP: f32 = 6.0;
-const PROFILE_TILE_HEIGHT: f32 = 64.0;
-/// The arrow after a label that opens a settings page.
-const LINK_ARROW: f32 = 10.0;
+/// A toggle tile: two columns of these.
+const TOGGLE_TILE_HEIGHT: f32 = 56.0;
+const TOGGLE_GAP: f32 = 8.0;
+/// The icon chip inside a toggle tile.
+const CHIP: f32 = 36.0;
+/// The chevron zone at a toggle tile's right end, to its Settings page.
+const CHEVRON_ZONE: f32 = 28.0;
+const SLIDER_HEIGHT: f32 = 40.0;
+/// The power mode control: inner padding around the segments.
+const PROFILE_INSET: f32 = 4.0;
+const PROFILE_SEGMENT_HEIGHT: f32 = 36.0;
 const DEVICE_ROW_HEIGHT: f32 = 40.0;
 /// More devices than this are left to the Settings page.
 const MAX_DEVICES: usize = 6;
@@ -166,40 +173,36 @@ pub fn layout(
     let inner = width - 2.0 * pad;
     let mut y = pad;
 
-    // A tile of round toggles, labels underneath.
-    let toggle = theme.qs_toggle_size;
-    let tile_h = 14.0 + toggle + LABEL_GAP + theme.qs_label_size * 1.4 + 12.0;
+    // Two columns of labelled tiles.
+    let kinds = [Hit::Wifi, Hit::Bluetooth, Hit::DarkMode, Hit::DoNotDisturb];
+    let tile_w = (inner - TOGGLE_GAP) / 2.0;
+    let rows = kinds.len().div_ceil(2) as f32;
+    let tile_h = rows * TOGGLE_TILE_HEIGHT + (rows - 1.0) * TOGGLE_GAP;
     let toggle_tile = Rect {
         x: pad,
         y,
         w: inner,
         h: tile_h,
     };
-    let kinds = [Hit::Wifi, Hit::Bluetooth, Hit::DarkMode, Hit::DoNotDisturb];
-    let slot = inner / kinds.len() as f32;
     let toggles = kinds
         .iter()
         .enumerate()
         .map(|(i, &hit)| {
-            let cx = pad + slot * (i as f32 + 0.5);
+            let rect = Rect {
+                x: pad + (i % 2) as f32 * (tile_w + TOGGLE_GAP),
+                y: y + (i / 2) as f32 * (TOGGLE_TILE_HEIGHT + TOGGLE_GAP),
+                w: tile_w,
+                h: TOGGLE_TILE_HEIGHT,
+            };
             if settings && let Some(page) = settings_page(hit) {
-                let label = Rect {
-                    x: pad + slot * i as f32,
-                    y: y + 14.0 + toggle + LABEL_GAP - 3.0,
-                    w: slot,
-                    h: theme.qs_label_size * 1.4 + 6.0,
+                let chevron = Rect {
+                    x: rect.x + rect.w - CHEVRON_ZONE,
+                    w: CHEVRON_ZONE,
+                    ..rect
                 };
-                settings_links.push((label, page));
+                settings_links.push((chevron, page));
             }
-            (
-                Rect {
-                    x: cx - toggle / 2.0,
-                    y: y + 14.0,
-                    w: toggle,
-                    h: toggle,
-                },
-                hit,
-            )
+            (rect, hit)
         })
         .collect();
     y += tile_h + theme.qs_gap;
@@ -233,12 +236,12 @@ pub fn layout(
         x: pad,
         y,
         w: inner,
-        h: theme.qs_slider_height,
+        h: SLIDER_HEIGHT,
     };
-    y += theme.qs_slider_height + theme.qs_gap;
+    y += SLIDER_HEIGHT + theme.qs_gap;
 
     let brightness = features.brightness.then(|| {
-        let h = theme.qs_slider_height;
+        let h = SLIDER_HEIGHT;
         let mut rect = Rect {
             x: pad,
             y,
@@ -256,29 +259,29 @@ pub fn layout(
             };
             settings_links.push((arrow, page));
         }
-        y += theme.qs_slider_height + theme.qs_gap;
+        y += SLIDER_HEIGHT + theme.qs_gap;
         rect
     });
 
     let power_profiles = (features.power_profiles > 0).then(|| {
+        let h = PROFILE_SEGMENT_HEIGHT + 2.0 * PROFILE_INSET;
         let tile = Rect {
             x: pad,
             y,
             w: inner,
-            h: PROFILE_TILE_HEIGHT,
+            h,
         };
         let n = features.power_profiles as f32;
-        let inset = 6.0;
-        let seg_w = (inner - 2.0 * inset) / n;
+        let seg_w = (inner - 2.0 * PROFILE_INSET) / n;
         let segments = (0..features.power_profiles)
             .map(|i| Rect {
-                x: pad + inset + i as f32 * seg_w,
-                y: y + inset,
+                x: pad + PROFILE_INSET + i as f32 * seg_w,
+                y: y + PROFILE_INSET,
                 w: seg_w,
-                h: PROFILE_TILE_HEIGHT - 2.0 * inset,
+                h: PROFILE_SEGMENT_HEIGHT,
             })
             .collect();
-        y += PROFILE_TILE_HEIGHT + theme.qs_gap;
+        y += h + theme.qs_gap;
         (tile, segments)
     });
 
@@ -907,111 +910,127 @@ fn paint(
         theme.qs_background,
     );
 
-    // Toggles.
-    let tile = layout.toggle_tile;
-    canvas.rounded_rect(
-        tile.x,
-        tile.y,
-        tile.w,
-        tile.h,
-        theme.qs_tile_radius,
-        theme.qs_tile,
-    );
+    // Toggles: labelled tiles, an icon chip and two lines of text.
     let wifi_on = status.wifi_enabled;
     for (i, (rect, hit)) in layout.toggles.iter().enumerate() {
-        // (on?, available?, icon, label)
-        let (on, available, icon, label) = match hit {
+        // (on?, available?, icon, name, state)
+        let (on, available, icon, name, state) = match hit {
             Hit::Wifi => {
-                let label = match &status.network {
-                    crate::status::Network::Wifi { ssid, .. } if !ssid.is_empty() => ssid.clone(),
-                    _ => "Wi-Fi".into(),
+                let (name, connected) = match &status.network {
+                    crate::status::Network::Wifi { ssid, .. } if !ssid.is_empty() => {
+                        (ssid.clone(), true)
+                    }
+                    crate::status::Network::Wifi { .. } => ("Wi-Fi".into(), true),
+                    _ => ("Wi-Fi".into(), false),
                 };
                 let icon = if wifi_on == Some(false) {
                     "network-wireless-disabled-symbolic"
                 } else {
                     "network-wireless-symbolic"
                 };
-                (wifi_on == Some(true), wifi_on.is_some(), icon, label)
+                let state = if wifi_on == Some(false) {
+                    "Off"
+                } else if connected {
+                    "Connected"
+                } else {
+                    "Not connected"
+                };
+                (wifi_on == Some(true), wifi_on.is_some(), icon, name, state)
             }
             Hit::Bluetooth => {
                 let bluetooth = status.bluetooth.as_ref();
                 let on = bluetooth.is_some_and(|b| b.powered);
                 // The connected device's name, the way Wi-Fi shows the network.
-                let label = bluetooth
-                    .filter(|b| b.powered)
-                    .and_then(|b| b.connected())
-                    .map_or_else(|| "Bluetooth".into(), |d| d.name.clone());
+                let device = bluetooth.filter(|b| b.powered).and_then(|b| b.connected());
+                let name = device.map_or_else(|| "Bluetooth".into(), |d| d.name.clone());
                 let icon = if on {
                     "bluetooth-active-symbolic"
                 } else {
                     "bluetooth-disabled-symbolic"
                 };
-                (on, bluetooth.is_some(), icon, label)
+                let state = if device.is_some() {
+                    "Connected"
+                } else if on {
+                    "On"
+                } else {
+                    "Off"
+                };
+                (on, bluetooth.is_some(), icon, name, state)
             }
             Hit::DarkMode => (
                 theme.dark,
                 true,
                 "weather-clear-night-symbolic",
                 "Dark Mode".into(),
+                if theme.dark { "On" } else { "Off" },
             ),
             _ => (
                 false,
                 false,
                 "notifications-disabled-symbolic",
                 "Do Not Disturb".into(),
+                "Off",
             ),
         };
         let fade = if available { 1.0 } else { 0.4 };
         let lit = anim.get(Moving::Toggle(i), if on { 1.0 } else { 0.0 }, SHORT);
-        let circle = theme.qs_toggle_off.mix(theme.qs_toggle_on, lit);
-        canvas.circle(
-            rect.x + rect.w / 2.0,
-            rect.y + rect.h / 2.0,
-            rect.w / 2.0,
-            circle.with_alpha(circle.a * fade),
+        canvas.rounded_rect(
+            rect.x,
+            rect.y,
+            rect.w,
+            rect.h,
+            theme.qs_tile_radius,
+            theme.qs_toggle_off,
         );
-        let icon_size = 22.0;
+        // The chip: accent when on, a subtle fill when off.
+        let chip_off = theme.popup_text.with_alpha(0.08);
+        let chip_color = chip_off.mix(theme.qs_toggle_on, lit);
+        let chip_x = rect.x + (rect.h - CHIP) / 2.0;
+        let chip_y = rect.y + (rect.h - CHIP) / 2.0;
+        canvas.rounded_rect(
+            chip_x,
+            chip_y,
+            CHIP,
+            CHIP,
+            (theme.qs_tile_radius - 4.0).clamp(4.0, CHIP / 2.0),
+            chip_color.with_alpha(chip_color.a * fade),
+        );
+        let icon_size = 20.0;
+        let fg = theme.popup_text.mix(theme.on_accent, lit);
         canvas.icon(
             icons,
             icon,
-            rect.x + (rect.w - icon_size) / 2.0,
-            rect.y + (rect.h - icon_size) / 2.0,
+            chip_x + (CHIP - icon_size) / 2.0,
+            chip_y + (CHIP - icon_size) / 2.0,
             icon_size,
-            {
-                let fg = theme.popup_text.mix(theme.on_accent, lit);
-                fg.with_alpha(fg.a * fade)
-            },
+            fg.with_alpha(fg.a * fade),
         );
-        // A label that opens the section's settings page ends in an arrow.
+        // A chevron to the section's settings page.
         let linked = settings_page(*hit)
             .is_some_and(|page| layout.settings_links.iter().any(|(_, p)| *p == page));
-        let arrow = if linked { LINK_ARROW + 2.0 } else { 0.0 };
-        // Fit the label under its toggle: a little smaller if need be,
-        // shortened only as a last resort (long network names).
-        let room = layout.toggle_tile.w / layout.toggles.len() as f32 - 4.0 - arrow;
-        let mut text = fonts.layout(&label, theme.qs_label_size, Weight::Normal, s);
-        let mut size = theme.qs_label_size;
-        while text.width > room && size > theme.qs_label_size - 1.5 {
-            size -= 0.5;
-            text = fonts.layout(&label, size, Weight::Normal, s);
-        }
-        if text.width > room {
-            text = fonts.layout(&ellipsize(&label, 13), size, Weight::Normal, s);
-        }
-        let tx = (rect.x + rect.w / 2.0 - (text.width + arrow) / 2.0).round();
-        let ty = rect.y + rect.h + LABEL_GAP;
+        let text_x = chip_x + CHIP + 10.0;
+        let right = rect.x + rect.w - if linked { CHEVRON_ZONE } else { 10.0 };
         let dim = theme.qs_dim.with_alpha(theme.qs_dim.a * fade);
         if linked {
+            let size = 14.0;
             canvas.icon(
                 icons,
                 "go-next-symbolic",
-                tx + text.width + 2.0,
-                ty + (text.height - LINK_ARROW) / 2.0,
-                LINK_ARROW,
+                rect.x + rect.w - CHEVRON_ZONE + (CHEVRON_ZONE - size) / 2.0 - 2.0,
+                rect.y + (rect.h - size) / 2.0,
+                size,
                 dim,
             );
         }
-        canvas.text(fonts, &mut text, tx, ty, dim);
+        let room = right - text_x;
+        let mut name_text = fit(fonts, &name, 13.0, Weight::Bold, room, s);
+        let mut state_text = fit(fonts, state, 11.5, Weight::Normal, room, s);
+        let block = name_text.height + state_text.height + 1.0;
+        let ty = rect.y + (rect.h - block) / 2.0;
+        let name_color = theme.popup_text.with_alpha(theme.popup_text.a * fade);
+        let state_y = (ty + name_text.height + 1.0).round();
+        canvas.text(fonts, &mut name_text, text_x.round(), ty.round(), name_color);
+        canvas.text(fonts, &mut state_text, text_x.round(), state_y, dim);
     }
 
     // Paired Bluetooth devices.
@@ -1027,11 +1046,12 @@ fn paint(
     } else {
         theme.qs_slider_fill
     };
-    canvas.slider(
+    canvas.slider_rounded(
         v.x,
         v.y,
         v.w,
         v.h,
+        theme.qs_tile_radius,
         volume_shown,
         theme.qs_slider_track,
         fill,
@@ -1062,11 +1082,12 @@ fn paint(
 
     // Brightness: the same fat slider, a sun inside.
     if let (Some(b), Some(shown)) = (layout.brightness, brightness_shown) {
-        canvas.slider(
+        canvas.slider_rounded(
             b.x,
             b.y,
             b.w,
             b.h,
+            theme.qs_tile_radius,
             shown,
             theme.qs_slider_track,
             theme.qs_slider_fill,
@@ -1093,10 +1114,12 @@ fn paint(
         .iter()
         .find(|(_, page)| Some(*page) == settings_page(Hit::Brightness))
     {
-        canvas.circle(
-            rect.x + rect.w / 2.0,
-            rect.y + rect.h / 2.0,
-            rect.w / 2.0,
+        canvas.rounded_rect(
+            rect.x,
+            rect.y,
+            rect.w,
+            rect.h,
+            theme.qs_tile_radius,
             theme.qs_slider_track,
         );
         canvas.icon(
@@ -1119,7 +1142,7 @@ fn paint(
             tile.w,
             tile.h,
             theme.qs_tile_radius,
-            theme.qs_tile,
+            theme.qs_toggle_off,
         );
         // The highlight slides from mode to mode.
         if let Some(index) = profiles
@@ -1134,7 +1157,7 @@ fn paint(
                 first.y,
                 first.w,
                 first.h,
-                theme.qs_tile_radius - 6.0,
+                (theme.qs_tile_radius - PROFILE_INSET).max(0.0),
                 theme.qs_toggle_on,
             );
         }
@@ -1154,19 +1177,30 @@ fn paint(
             let fg = if active {
                 theme.on_accent
             } else {
-                theme.qs_dim
+                theme.popup_text
             };
+            // Icon and label side by side, centred in the segment.
+            let icon_size = 16.0;
+            let mut text = fit(
+                fonts,
+                label,
+                theme.qs_label_size,
+                Weight::Normal,
+                rect.w - icon_size - 6.0 - 8.0,
+                s,
+            );
+            let total = icon_size + 6.0 + text.width;
+            let x = rect.x + (rect.w - total) / 2.0;
             canvas.icon(
                 icons,
                 icon,
-                rect.x + (rect.w - 18.0) / 2.0,
-                rect.y + 7.0,
-                18.0,
+                x.round(),
+                rect.y + (rect.h - icon_size) / 2.0,
+                icon_size,
                 fg,
             );
-            let mut text = fonts.layout(label, theme.qs_label_size, Weight::Normal, s);
-            let tx = (rect.x + (rect.w - text.width) / 2.0).round();
-            canvas.text(fonts, &mut text, tx, rect.y + 29.0, fg);
+            let ty = (rect.y + (rect.h - text.height) / 2.0).round();
+            canvas.text(fonts, &mut text, (x + icon_size + 6.0).round(), ty, fg);
         }
     }
 
@@ -1247,17 +1281,13 @@ fn paint(
             theme.qs_dim,
         );
     }
+    let button_radius = (theme.qs_tile_radius - 4.0).max(0.0);
     let g = Rect {
         y: layout.settings_button.y - shift,
         ..layout.settings_button
     };
     if g.w > 0.0 {
-        canvas.circle(
-            g.x + g.w / 2.0,
-            g.y + g.h / 2.0,
-            g.w / 2.0,
-            theme.qs_toggle_off,
-        );
+        canvas.rounded_rect(g.x, g.y, g.w, g.h, button_radius, theme.qs_toggle_off);
         canvas.icon(
             icons,
             "emblem-system-symbolic",
@@ -1272,7 +1302,7 @@ fn paint(
         ..layout.power_button
     };
     let power_bg = theme.qs_toggle_off.mix(theme.qs_toggle_on, reveal);
-    canvas.circle(p.x + p.w / 2.0, p.y + p.h / 2.0, p.w / 2.0, power_bg);
+    canvas.rounded_rect(p.x, p.y, p.w, p.h, button_radius, power_bg);
     canvas.icon(
         icons,
         "system-shutdown-symbolic",
@@ -1296,15 +1326,6 @@ fn paint_devices(
     theme: &Theme,
     s: f32,
 ) {
-    let tile = list.tile;
-    canvas.rounded_rect(
-        tile.x,
-        tile.y,
-        tile.w,
-        tile.h,
-        theme.qs_tile_radius.min(tile.h / 2.0),
-        theme.qs_tile,
-    );
     let open = !list.rows.is_empty();
     let header = list.header;
     let arrow = if open {
@@ -1315,7 +1336,7 @@ fn paint_devices(
     canvas.icon(
         icons,
         arrow,
-        header.x + header.w - 14.0 - 16.0,
+        header.x + header.w - 4.0 - 16.0,
         header.y + (header.h - 16.0) / 2.0,
         16.0,
         theme.qs_dim,
@@ -1328,25 +1349,25 @@ fn paint_devices(
                     name: &str,
                     right: Option<(&str, Color)>| {
         let iy = rect.y + (rect.h - icon_size) / 2.0;
-        if !canvas.icon(icons, icon, rect.x + 14.0, iy, icon_size, theme.popup_text) {
+        if !canvas.icon(icons, icon, rect.x + 4.0, iy, icon_size, theme.popup_text) {
             canvas.icon(
                 icons,
                 "bluetooth-active-symbolic",
-                rect.x + 14.0,
+                rect.x + 4.0,
                 iy,
                 icon_size,
                 theme.popup_text,
             );
         }
-        let mut right_w = 14.0;
+        let mut right_w = 4.0;
         if let Some((text, color)) = right {
             let mut text = fonts.layout(text, theme.qs_label_size, Weight::Normal, s);
             right_w += text.width + 8.0;
             let ty = (rect.y + (rect.h - text.height) / 2.0).round();
-            let tx = (rect.x + rect.w - 14.0 - text.width).round();
+            let tx = (rect.x + rect.w - 4.0 - text.width).round();
             canvas.text(fonts, &mut text, tx, ty, color);
         }
-        let x = rect.x + 14.0 + icon_size + 10.0;
+        let x = rect.x + 4.0 + icon_size + 10.0;
         let room = rect.x + rect.w - right_w - x;
         let mut text = fonts.layout(name, theme.font_size, Weight::Normal, s);
         let mut keep = name.chars().count();
@@ -1360,14 +1381,7 @@ fn paint_devices(
 
     line(canvas, header, "bluetooth-active-symbolic", "Devices", None);
     for (rect, device) in list.rows.iter().zip(&bluetooth.devices) {
-        canvas.rounded_rect(
-            rect.x + 14.0,
-            rect.y,
-            rect.w - 28.0,
-            1.0,
-            0.0,
-            theme.qs_dim.with_alpha(theme.qs_dim.a * 0.2),
-        );
+        canvas.rounded_rect(rect.x, rect.y, rect.w, 1.0, 0.0, theme.card_separator);
         let state = match pending {
             Some((address, true)) if address == device.address => {
                 Some(("Connecting…", theme.qs_dim))
@@ -1402,6 +1416,24 @@ fn positioner(
     Some(positioner)
 }
 
+/// Text that fits in `room`: shortened only as needed.
+fn fit(
+    fonts: &mut Fonts,
+    text: &str,
+    size: f32,
+    weight: Weight,
+    room: f32,
+    s: f32,
+) -> cnde_ui::TextLayout {
+    let mut keep = text.chars().count();
+    let mut layout = fonts.layout(text, size, weight, s);
+    while layout.width > room && keep > 2 {
+        keep -= 1;
+        layout = fonts.layout(&ellipsize(text, keep), size, weight, s);
+    }
+    layout
+}
+
 fn ellipsize(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         text.to_string()
@@ -1417,7 +1449,7 @@ mod tests {
 
     #[test]
     fn layout_hits() {
-        let theme = Theme::dark();
+        let theme = Theme::quiet_dark();
         let l = layout(&theme, false, false, Features::default());
         let centre = |r: Rect| ((r.x + r.w / 2.0) as f64, (r.y + r.h / 2.0) as f64);
         assert_eq!(l.hit(centre(l.toggles[0].0)), Some(Hit::Wifi));
@@ -1473,12 +1505,14 @@ mod tests {
             ..Features::default()
         };
         let l = layout(&Theme::dark(), false, false, features);
+        // The chevron at a tile's right end opens its page; the body toggles.
+        let chevron = |r: Rect| ((r.x + r.w - 10.0) as f64, (r.y + r.h / 2.0) as f64);
         let (wifi, _) = l.toggles[0];
-        let label = (
-            (wifi.x + wifi.w / 2.0) as f64,
-            (wifi.y + wifi.h + LABEL_GAP + 4.0) as f64,
+        assert_eq!(l.hit(chevron(wifi)), Some(Hit::SettingsPage("wifi")));
+        assert_eq!(
+            l.hit(((wifi.x + 20.0) as f64, (wifi.y + wifi.h / 2.0) as f64)),
+            Some(Hit::Wifi)
         );
-        assert_eq!(l.hit(label), Some(Hit::SettingsPage("wifi")));
         let b = l.brightness.unwrap();
         let end = l.toggle_tile.x + l.toggle_tile.w;
         assert!(b.x + b.w < end - b.h);
@@ -1487,18 +1521,21 @@ mod tests {
             Some(Hit::SettingsPage("displays"))
         );
         let (bt, _) = l.toggles[1];
-        let label = (
-            (bt.x + bt.w / 2.0) as f64,
-            (bt.y + bt.h + LABEL_GAP + 4.0) as f64,
-        );
-        assert_eq!(l.hit(label), Some(Hit::SettingsPage("bluetooth")));
-        // Do Not Disturb has no page.
+        assert_eq!(l.hit(chevron(bt)), Some(Hit::SettingsPage("bluetooth")));
+        // Do Not Disturb has no page: its whole tile toggles.
         let (dnd, _) = l.toggles[3];
-        let label = (
-            (dnd.x + dnd.w / 2.0) as f64,
-            (dnd.y + dnd.h + LABEL_GAP + 4.0) as f64,
-        );
-        assert_eq!(l.hit(label), None);
+        assert_eq!(l.hit(chevron(dnd)), Some(Hit::DoNotDisturb));
+    }
+
+    #[test]
+    fn toggles_are_two_columns() {
+        let l = layout(&Theme::dark(), false, false, Features::default());
+        let rects: Vec<Rect> = l.toggles.iter().map(|t| t.0).collect();
+        assert_eq!(rects[0].y, rects[1].y);
+        assert_eq!(rects[2].y, rects[3].y);
+        assert!(rects[2].y > rects[0].y + rects[0].h);
+        assert!(rects[1].x > rects[0].x + rects[0].w);
+        assert_eq!(rects[0].h, TOGGLE_TILE_HEIGHT);
     }
 
     #[test]
