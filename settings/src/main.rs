@@ -7,6 +7,7 @@
 mod arrange;
 mod backlight;
 mod bluetooth;
+mod defaults;
 mod pages;
 mod power_mode;
 mod view;
@@ -146,6 +147,8 @@ struct App {
     bluetooth: Option<std::sync::mpsc::Sender<bluetooth::Command>>,
     /// Commands for the power mode worker, started when the Power page opens.
     power_mode: Option<std::sync::mpsc::Sender<power_mode::Command>>,
+    /// Where the app index built when the Default Apps page opens arrives.
+    default_apps: Option<channel::Sender<defaults::State>>,
     /// Where a picture chosen through "Add" arrives.
     picked: Option<channel::Sender<Result<Option<wallpapers::Thumb>, String>>>,
     /// The colour on screen, for the adaptive palette (from the compositor).
@@ -317,6 +320,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wifi_details: None,
             bluetooth: None,
             power_mode: None,
+            default_apps: None,
             brightness: backlight::read(),
             arranged: None,
             arranging: None,
@@ -353,6 +357,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wifi: None,
         bluetooth: None,
         power_mode: None,
+        default_apps: None,
         picked: Some(picked_tx),
         screen: None,
         no_vrr: HashSet::new(),
@@ -367,6 +372,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if app.ui.page == Page::Power {
         app.open_power();
+    }
+    if app.ui.page == Page::DefaultApps {
+        app.open_default_apps();
     }
 
     let mut lost = None;
@@ -471,6 +479,46 @@ impl App {
             }
         } else if let Some(tx) = &self.power_mode {
             let _ = tx.send(power_mode::Command::Refresh);
+        }
+    }
+
+    /// The Default Apps page is showing: scan the installed apps and read
+    /// the lists again, off this thread.
+    fn open_default_apps(&mut self) {
+        if self.default_apps.is_none() {
+            let (tx, rx) = channel::channel::<defaults::State>();
+            let inserted = self
+                .loop_handle
+                .insert_source(rx, |event, _, app: &mut App| {
+                    if let channel::Event::Msg(state) = event {
+                        app.ui.default_apps = Some(state);
+                        if app.ui.page == Page::DefaultApps {
+                            app.redraw();
+                        }
+                    }
+                });
+            if inserted.is_ok() {
+                self.default_apps = Some(tx);
+            }
+        }
+        if let Some(tx) = self.default_apps.clone() {
+            std::thread::spawn(move || {
+                let _ = tx.send(defaults::State::load(cnde_apps::Env::from_env()));
+            });
+        }
+    }
+
+    /// A Default Apps dropdown sets the app for the category's file types.
+    fn write_default_app(&mut self, category: &str, value: &Value) {
+        let (Some(cat), Some(state)) = (defaults::category(category), &mut self.ui.default_apps)
+        else {
+            return;
+        };
+        if value.as_str().is_empty() {
+            return;
+        }
+        if let Err(err) = state.set(cat, value.as_str()) {
+            self.show_error(format!("Can't set the default app: {err}"));
         }
     }
 
@@ -762,6 +810,7 @@ impl App {
                 Key::Bluetooth(key) => self.write_bluetooth(key, value),
                 Key::Brightness => self.write_brightness(value),
                 Key::PowerMode => self.write_power_mode(value),
+                Key::DefaultApp(cat) => self.write_default_app(cat, value),
                 _ => config_changes.push((key.clone(), value.clone())),
             }
         }
@@ -968,6 +1017,9 @@ impl App {
                     }
                     if page == Page::Power {
                         self.open_power();
+                    }
+                    if page == Page::DefaultApps {
+                        self.open_default_apps();
                     }
                     if page == Page::Displays {
                         self.ui.brightness = backlight::read();

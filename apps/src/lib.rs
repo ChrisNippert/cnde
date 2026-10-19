@@ -55,7 +55,10 @@ pub fn parse_desktop(text: &str, id: &str, path: &Path) -> Option<App> {
     if name.is_empty() || exec.is_empty() {
         return None;
     }
-    if kv.get("TryExec").is_some_and(|t| !t.is_empty() && !in_path(t)) {
+    if kv
+        .get("TryExec")
+        .is_some_and(|t| !t.is_empty() && !in_path(t))
+    {
         return None;
     }
     Some(App {

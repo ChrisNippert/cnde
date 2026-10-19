@@ -123,6 +123,8 @@ pub struct Ui {
     pub brightness: Option<u32>,
     /// The power mode worker's last report (once the page has been opened).
     pub power_mode: Option<crate::power_mode::State>,
+    /// The installed apps and defaults (once the page has been opened).
+    pub default_apps: Option<crate::defaults::State>,
     /// Where the arrangement shows each display while one's dragged (and
     /// until the compositor reports the result).
     pub arranged: Option<Vec<(i32, i32)>>,
@@ -454,6 +456,7 @@ fn page(
         ui.bluetooth.as_ref(),
         ui.brightness,
         ui.power_mode.as_ref(),
+        ui.default_apps.as_ref(),
     );
     let show_advanced = ui.advanced.contains(&ui.page);
     let has_advanced = groups.iter().flat_map(|g| &g.rows).any(|r| r.advanced);
@@ -1339,6 +1342,7 @@ mod tests {
             bluetooth: None,
             brightness: Some(50),
             power_mode: None,
+            default_apps: None,
             arranged: None,
             arranging: None,
         }
@@ -1452,6 +1456,18 @@ mod tests {
                 error: None,
                 details: None,
             });
+        }
+        if page == Page::DefaultApps {
+            let root = std::env::temp_dir().join(format!("cnde-preview-apps-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("cfg")).unwrap();
+            std::fs::write(
+                root.join("cfg/mimeapps.list"),
+                "[Default Applications]\nx-scheme-handler/http=firefox.desktop;\n",
+            )
+            .unwrap();
+            ui.default_apps = Some(crate::defaults::fake_state(&root));
+            let _ = std::fs::remove_dir_all(&root);
         }
         if let Ok(v) = std::env::var("CNDE_PREVIEW_SCROLL") {
             ui.scroll = v.parse().unwrap_or(0.0);

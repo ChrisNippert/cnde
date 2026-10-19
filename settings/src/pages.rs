@@ -16,12 +16,13 @@ pub enum Page {
     Panel,
     Dock,
     Power,
+    DefaultApps,
     Accessibility,
 }
 
 impl Page {
     /// In sidebar order: each section's pages run together.
-    pub const ALL: [Page; 11] = [
+    pub const ALL: [Page; 12] = [
         Page::Appearance,
         Page::Panel,
         Page::Dock,
@@ -32,6 +33,7 @@ impl Page {
         Page::Mouse,
         Page::Keyboard,
         Page::Power,
+        Page::DefaultApps,
         Page::Accessibility,
     ];
 
@@ -41,7 +43,7 @@ impl Page {
             Page::Appearance | Page::Panel | Page::Dock | Page::Windows => "Personalize",
             Page::Wifi | Page::Bluetooth => "Connections",
             Page::Displays | Page::Mouse | Page::Keyboard | Page::Power => "Devices",
-            Page::Accessibility => "System",
+            Page::DefaultApps | Page::Accessibility => "System",
         }
     }
 
@@ -66,6 +68,7 @@ impl Page {
             Page::Panel => "Top Bar",
             Page::Dock => "Dock",
             Page::Power => "Power",
+            Page::DefaultApps => "Default Apps",
             Page::Accessibility => "Accessibility",
         }
     }
@@ -82,6 +85,7 @@ impl Page {
             Page::Panel => "focus-top-bar-symbolic",
             Page::Dock => "view-app-grid-symbolic",
             Page::Power => "battery-symbolic",
+            Page::DefaultApps => "applications-system-symbolic",
             Page::Accessibility => "preferences-desktop-accessibility-symbolic",
         }
     }
@@ -173,6 +177,9 @@ pub enum Key {
     Brightness,
     /// Not in the config: the power mode, set through the power daemon.
     PowerMode,
+    /// Not in the config: the default app for a category (by id), in
+    /// `mimeapps.list`.
+    DefaultApp(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -284,7 +291,7 @@ impl Key {
             }
             // Not the config's business: the window sends these to the
             // Wi-Fi and Bluetooth workers instead.
-            Key::Wifi(_) | Key::Bluetooth(_) | Key::Brightness | Key::PowerMode => {}
+            Key::Wifi(_) | Key::Bluetooth(_) | Key::Brightness | Key::PowerMode | Key::DefaultApp(_) => {}
             Key::OutputPosition { name, axis } => {
                 let old = config.output(name).and_then(|o| o.position);
                 let Some(v) = value.as_f64() else {
@@ -597,6 +604,7 @@ pub struct WifiView<'a> {
     pub details: Option<&'a str>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     page: Page,
     c: &Config,
@@ -605,6 +613,7 @@ pub fn build(
     bluetooth: Option<&crate::bluetooth::State>,
     brightness: Option<u32>,
     power_mode: Option<&crate::power_mode::State>,
+    default_apps: Option<&crate::defaults::State>,
 ) -> Vec<Group> {
     let d = Config::default();
     match page {
@@ -618,6 +627,7 @@ pub fn build(
         Page::Panel => panel(c, &d),
         Page::Dock => dock(c, &d),
         Page::Power => power(c, &d, power_mode),
+        Page::DefaultApps => default_apps_page(c, &d, default_apps),
         Page::Accessibility => accessibility(c, &d),
     }
 }
@@ -2604,6 +2614,80 @@ fn idle_time_label(secs: u32) -> String {
     }
 }
 
+/// The apps that can open each kind of file, from the index once it's built.
+fn default_apps_page(
+    c: &Config,
+    d: &Config,
+    state: Option<&crate::defaults::State>,
+) -> Vec<Group> {
+    use crate::defaults::CATEGORIES;
+    let Some(state) = state else {
+        return vec![Group {
+            title: "Default Apps".into(),
+            description: "Looking for installed apps…".into(),
+            rows: Vec::new(),
+        }];
+    };
+    let mut rows = Vec::new();
+    for cat in &CATEGORIES {
+        let offered = state.offered(cat);
+        let current = state.current(cat).map_or("", |a| a.id.as_str());
+        let mut list: Vec<Choice> = offered
+            .iter()
+            .map(|a| Choice {
+                label: a.name.clone(),
+                value: s(&a.id),
+            })
+            .collect();
+        let mut row = Row {
+            key: Key::DefaultApp(cat.id),
+            subtitle: cat.subtitle.into(),
+            ..wifi_row(WifiKey::Hidden, cat.title, Control::Dropdown(Vec::new()), s(current))
+        };
+        if list.is_empty() {
+            list.push(Choice {
+                label: "None".into(),
+                value: s(""),
+            });
+            row.subtitle = "No installed app opens this".into();
+            row.disabled = true;
+        }
+        row.control = Control::Dropdown(list);
+        rows.push(row);
+    }
+    // The terminal has no MIME type: it's a config key.
+    let mut terminals = vec![Choice {
+        label: "Automatic".into(),
+        value: s(""),
+    }];
+    terminals.extend(state.terminals().iter().map(|a| Choice {
+        label: a.name.clone(),
+        value: s(&a.id),
+    }));
+    let current = &c.apps.terminal;
+    if !current.is_empty() && !terminals.iter().any(|t| t.value.as_str() == current) {
+        terminals.push(Choice {
+            label: current.clone(),
+            value: s(current),
+        });
+    }
+    rows.push(
+        Row::new(
+            "apps.terminal",
+            "Terminal",
+            Control::Dropdown(terminals),
+            s(current),
+            s(&d.apps.terminal),
+        )
+        .sub("Opens with Super+Enter and for terminal apps; automatic picks one it finds"),
+    );
+    vec![Group {
+        title: "Default Apps".into(),
+        description: "What opens links, folders and files. Picking an app sets it for every file type it handles in the group.".into(),
+        rows,
+    }]
+}
+
 /// A row that isn't a config key: the power mode.
 fn power_mode_row(key: Key, title: &str, control: Control, value: Value) -> Row {
     Row {
@@ -2913,6 +2997,7 @@ mod tests {
                 WifiView::default(),
                 None,
                 Some(50),
+                None,
                 None,
             ) {
                 for row in group.rows {

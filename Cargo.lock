@@ -496,6 +496,7 @@ dependencies = [
 name = "cnde-settings"
 version = "0.1.0"
 dependencies = [
+ "cnde-apps",
  "cnde-config",
  "cnde-ipc",
  "cnde-ui",
