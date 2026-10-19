@@ -2,7 +2,7 @@
 //!
 //! The main loop bumps a heartbeat every iteration, and a 1 s calloop timer
 //! bumps it while idle. A plain thread checks it once a second; when it hasn't
-//! moved for [`STALL_AFTER`] it logs one error with the loop phase, the main
+//! moved for [`STALL_AFTER`] (2 s) it logs one error with the loop phase, the main
 //! thread's kernel state (`wchan` names the wait, e.g. a DRM fence) and a
 //! backtrace of the main thread, then logs once more when the loop recovers.
 //! Still hung after [`GIVE_UP_AFTER`], it ends the session.
@@ -34,7 +34,9 @@ use tracing::{error, info};
 
 use crate::state::State;
 
-const STALL_AFTER: Duration = Duration::from_secs(5);
+/// Short enough to catch a few-second freeze (the screen stops, then
+/// carries on) with a report, not just the ones that end the session.
+const STALL_AFTER: Duration = Duration::from_secs(2);
 /// Hung this long, the session ends, back to the login screen: a desktop
 /// that takes no input (not even a VT switch) otherwise needs the power
 /// button.

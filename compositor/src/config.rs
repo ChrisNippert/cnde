@@ -107,9 +107,16 @@ impl State {
         if new == self.config {
             return;
         }
-        info!("config reloaded");
+        let started = std::time::Instant::now();
         let old = std::mem::replace(&mut self.config, new);
         self.apply_config(Some(&old));
+        // A slow apply freezes the screen (everything waits on this thread).
+        let ms = started.elapsed().as_millis();
+        if ms >= 50 {
+            warn!(ms, "config reloaded, slowly");
+        } else {
+            info!(ms, "config reloaded");
+        }
     }
 
     /// Push config values into the running compositor. `old` is `None` at
