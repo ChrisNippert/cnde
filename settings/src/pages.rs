@@ -1246,7 +1246,15 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     material(c.appearance.material),
                     material(d.appearance.material),
                 )
-                .sub("Menus, quick settings and window sidebars; solid when maximized"),
+                .sub("Menus, quick settings and window sidebars; solid when maximized or over a window"),
+                Row::new(
+                    "appearance.match_windows",
+                    "Match windows",
+                    Control::switch(),
+                    Value::Bool(c.appearance.match_windows),
+                    Value::Bool(d.appearance.match_windows),
+                )
+                .sub("The bar and dock take a maximized window's colour; menus and sidebars over a window, a tint of it"),
             ],
         ),
         group(

@@ -70,6 +70,13 @@ pub struct OutputEdges {
     /// The wallpaper along the top is light: a clear bar needs dark text.
     #[serde(default)]
     pub top_light: bool,
+    /// A maximized window is in front (and `appearance.match_windows` is
+    /// on): its colour along its top and bottom edges, for the bar and
+    /// dock to take.
+    #[serde(default)]
+    pub top_tint: Option<[u8; 3]>,
+    #[serde(default)]
+    pub bottom_tint: Option<[u8; 3]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

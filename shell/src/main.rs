@@ -826,12 +826,26 @@ impl App {
                     _ => e.bottom,
                 })
         });
+        // A maximized window's colour along a bottom dock's edge.
+        let tint = self
+            .dock
+            .as_ref()
+            .filter(|dock| {
+                !matches!(
+                    dock.position(),
+                    cnde_config::DockPosition::Left | cnde_config::DockPosition::Right
+                )
+            })
+            .and_then(|dock| self.edges_of(&dock.output))
+            .and_then(|e| e.bottom_tint)
+            .map(|[r, g, b]| cnde_ui::Color::rgb(r, g, b));
         if let Some(dock) = &mut self.dock {
             if dock.edit.is_some() != self.dock_editing {
                 dock.edit = self.dock_editing.then(dock::DockEdit::default);
             }
             dock.frosted = dock::frosted(self.config.dock.background);
             dock.solid = touched;
+            dock.tint = tint;
             dock.autohide = self.config.dock.visibility != cnde_config::DockVisibility::Always;
             // Windows aren't judged while the overview's open (it holds the
             // dock out anyway); keep what they were.
@@ -1117,6 +1131,12 @@ impl App {
             .get(index)
             .and_then(|p| self.edges_of(&p.output))
             .is_some_and(|e| e.top_light);
+        let tint = self
+            .panels
+            .get(index)
+            .and_then(|p| self.edges_of(&p.output))
+            .and_then(|e| e.top_tint)
+            .map(|[r, g, b]| cnde_ui::Color::rgb(r, g, b));
         let Some(panel) = self.panels.get_mut(index) else {
             return;
         };
@@ -1144,6 +1164,7 @@ impl App {
                 mode: self.config.panel.mode,
                 clear: self.config.panel.clear,
                 backdrop_light,
+                tint,
             },
         );
     }

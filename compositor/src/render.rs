@@ -97,6 +97,8 @@ render_elements! {
     Frost = crate::frost::Frost,
     // Under a shell popup, growing and fading with it.
     PopupFrost = RescaleRenderElement<crate::frost::Frost>,
+    // A popup's solid backing over a window (see `frost`).
+    PopupSolid = RescaleRenderElement<PixelShaderElement>,
     Night = crate::night_light::Filter,
     Titlebar = RescaleRenderElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
 }
@@ -218,10 +220,25 @@ pub fn output_elements(
             layers.push(closing_elements(closed, output_loc, scale, now));
         }
         top_window_layer = Some(layers.len());
+        // The topmost window it covers, for a solid backing under a cnde
+        // window's see-through parts.
+        let under = windows[..index]
+            .iter()
+            .rev()
+            .find(|below| {
+                let bar = crate::decorations::titlebar_height(&below.window) as f64;
+                let rect = Rectangle::new(
+                    Point::from((below.rect.loc.x, below.rect.loc.y - bar)),
+                    Size::from((below.rect.size.w, below.rect.size.h + bar)),
+                );
+                !with_state(&below.window, |s| s.minimized) && rect.overlaps(placed.rect)
+            })
+            .map(|below| &below.window);
         layers.push(window_elements(
             renderer,
             decorations,
             window_frost.as_mut(),
+            under,
             &placed.window,
             placed.rect,
             placed.zoom,
@@ -349,6 +366,7 @@ fn window_elements(
     renderer: &mut GlesRenderer,
     decorations: &mut crate::decorations::Decorations,
     frost: Option<&mut crate::frost::WindowFrost<'_>>,
+    under: Option<&Window>,
     win: &Window,
     // Where the window geometry is laid out (space coordinates).
     live: Rectangle<f64, Logical>,
@@ -418,9 +436,7 @@ fn window_elements(
             && crate::frost::WindowFrost::wants(win)
         {
             let key = format!("{:?}", win.toplevel().map(|t| t.wl_surface().id()));
-            if let Some(element) = frost.element(renderer, &key, rect, frame.alpha) {
-                elements.push(element);
-            }
+            elements.extend(frost.elements(renderer, &key, rect, frame.alpha, under));
         }
         elements
     })

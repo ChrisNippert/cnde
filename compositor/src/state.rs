@@ -92,6 +92,10 @@ pub struct State {
     pub closing: Vec<ClosingWindow>,
     pub wallpapers: crate::wallpaper::Wallpapers,
     pub dock_frost: crate::frost::DockFrost,
+    /// Window colours for `appearance.match_windows`.
+    pub tints: crate::tint::Tints,
+    /// A timer is set to sample a window `tints` held back.
+    pub tint_wake: bool,
     pub crossfade: crate::crossfade::Crossfade,
     /// Dark mode on a timer.
     pub schedules: crate::schedule::Schedules,
@@ -217,6 +221,8 @@ impl State {
             closing: Vec::new(),
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
             dock_frost: Default::default(),
+            tints: Default::default(),
+            tint_wake: false,
             crossfade: Default::default(),
             schedules: Default::default(),
             night_light: Default::default(),
@@ -332,6 +338,7 @@ impl State {
         {
             crate::capture::capture_toplevels(&mut self.capture, renderer, &self.space);
         }
+        self.update_tints();
         self.refresh_ext_workspaces();
         self.sync_ipc_windows();
         self.sync_ipc_edges();

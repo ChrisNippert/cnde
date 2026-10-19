@@ -879,6 +879,11 @@ impl State {
                 &output,
                 &self.config,
                 &self.popup_anims,
+                &crate::frost::Behind::new(
+                    &self.space,
+                    &output,
+                    self.config.appearance.match_windows.then_some(&self.tints),
+                ),
                 now,
             );
             let backdrop = match self.space.output_geometry(&output) {
@@ -925,6 +930,8 @@ impl State {
                     &self.wallpapers,
                     &output,
                     &self.config,
+                    self.config.appearance.match_windows.then_some(&self.tints),
+                    now,
                 ),
                 &output,
                 now,
@@ -1034,6 +1041,7 @@ impl State {
             self.workspaces.is_moving()
                 || self.overview.is_animating(now)
                 || self.popup_anims.is_animating(now)
+                || self.dock_frost.is_animating(now)
                 || self.crossfade.is_animating()
                 || self.night_light.is_animating(now)
                 || self.launching.is_some(),

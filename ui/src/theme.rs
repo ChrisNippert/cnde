@@ -29,6 +29,16 @@ impl Color {
         Self { a, ..self }
     }
 
+    /// Near-black or white, whichever reads on this colour.
+    pub fn ink(self) -> Color {
+        let luminance = 0.2126 * self.r + 0.7152 * self.g + 0.0722 * self.b;
+        if luminance > 0.55 {
+            Color::rgb(0x1b, 0x1d, 0x1a)
+        } else {
+            Color::rgb(0xff, 0xff, 0xff)
+        }
+    }
+
     /// Hue (0-360), saturation and lightness (0-1).
     pub fn hsl(self) -> (f32, f32, f32) {
         let (r, g, b) = (self.r, self.g, self.b);
@@ -390,6 +400,29 @@ impl Theme {
     /// The theme the config's appearance asks for.
     pub fn for_appearance(appearance: &cnde_config::Appearance) -> Self {
         Self::colours_for(appearance).rounded(appearance.roundness())
+    }
+
+    /// The bar and dock in `tint` (a maximized window's colour, with
+    /// `appearance.match_windows`), `amount` of the way, with ink that
+    /// reads on it.
+    pub fn matched(&self, tint: Color, amount: f32) -> Self {
+        let ink = tint.ink();
+        let background = tint.with_alpha(1.0);
+        let fg = |c: Color| c.mix(ink.with_alpha(c.a), amount);
+        let wash = |c: Color, a: f32| c.mix(ink.with_alpha(a), amount);
+        Self {
+            panel_background: self.panel_background.mix(background, amount),
+            search_background: self.search_background.mix(background, amount),
+            panel_foreground: fg(self.panel_foreground),
+            workspace_active: fg(self.workspace_active),
+            workspace_dot: fg(self.workspace_dot),
+            popup_text: fg(self.popup_text),
+            qs_dim: wash(self.qs_dim, 0.6),
+            panel_button_hover: wash(self.panel_button_hover, 0.12),
+            panel_button_active: wash(self.panel_button_active, 0.2),
+            search_selected: wash(self.search_selected, 0.12),
+            ..self.clone()
+        }
     }
 
     /// Every corner radius times `k` (1: as designed, 0: square).

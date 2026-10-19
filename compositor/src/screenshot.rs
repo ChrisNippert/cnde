@@ -388,7 +388,7 @@ pub(crate) fn render_to_texture<E: RenderElement<GlesRenderer>>(
 }
 
 /// Read `rect` of `texture` back as an image, the right way up.
-fn read_texture(
+pub(crate) fn read_texture(
     renderer: &mut GlesRenderer,
     texture: &GlesTexture,
     rect: Rectangle<i32, Buffer>,

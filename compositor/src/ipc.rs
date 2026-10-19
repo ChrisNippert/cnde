@@ -266,6 +266,18 @@ impl State {
                 let (Some(geo), false) = (self.space.output_geometry(output), open) else {
                     return edges;
                 };
+                if let Some(front) = self
+                    .space
+                    .elements_for_output(output)
+                    .rfind(|w| !crate::window::with_state(w, |s| s.minimized))
+                    && crate::window::with_state(front, |s| {
+                        s.placement == crate::window::Placement::Maximized
+                    })
+                    && let Some(sample) = self.tints.get(front)
+                {
+                    edges.top_tint = Some(sample.top);
+                    edges.bottom_tint = Some(sample.bottom);
+                }
                 let zone = smithay::desktop::layer_map_for_output(output).non_exclusive_zone();
                 let zone = smithay::utils::Rectangle::new(zone.loc + geo.loc, zone.size);
                 for window in self.space.elements_for_output(output) {

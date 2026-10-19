@@ -313,6 +313,11 @@ pub struct Dock {
     /// A window's against the dock's edge: a frosted dock fades to solid.
     pub solid: bool,
     solid_fade: cnde_ui::Animator<()>,
+    /// A maximized window's colour along the dock's edge, to take.
+    pub tint: Option<Color>,
+    /// Taking it (1), and the colour last taken.
+    tint_fade: cnde_ui::Animator<()>,
+    last_tint: Option<Color>,
     /// Autohide (`dock.visibility`): slides off the edge while a window
     /// touches it.
     pub autohide: bool,
@@ -482,6 +487,9 @@ impl Dock {
             frosted: false,
             solid: false,
             solid_fade: cnde_ui::Animator::new(),
+            tint: None,
+            tint_fade: cnde_ui::Animator::new(),
+            last_tint: None,
             autohide: false,
             touched: false,
             pinned: false,
@@ -866,6 +874,23 @@ impl Dock {
             if self.solid { 1.0 } else { 0.0 },
             cnde_ui::anim::MEDIUM,
         );
+        self.tint_fade.begin();
+        let matching = self.tint_fade.get(
+            (),
+            if self.tint.is_some() { 1.0 } else { 0.0 },
+            cnde_ui::anim::MEDIUM,
+        );
+        if self.tint.is_some() {
+            self.last_tint = self.tint;
+        }
+        let matched;
+        let theme = match self.last_tint {
+            Some(tint) if matching > 0.0 => {
+                matched = theme.matched(tint, matching);
+                &matched
+            }
+            _ => theme,
+        };
         // Bouncing icons: done once the app has a window, or after a while.
         let items = &self.items;
         self.launching.retain(|(id, at)| {
@@ -940,7 +965,11 @@ impl Dock {
             surface.commit();
         }
         // Keep hopping: draw again on the next frame.
-        if !self.launching.is_empty() || self.solid_fade.running() || self.shape.running() {
+        if !self.launching.is_empty()
+            || self.solid_fade.running()
+            || self.tint_fade.running()
+            || self.shape.running()
+        {
             self.dirty = true;
         }
     }

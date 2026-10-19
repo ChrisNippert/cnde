@@ -33,6 +33,7 @@ mod snap;
 mod snapshot;
 mod spawn;
 mod state;
+mod tint;
 mod wallpaper;
 mod watchdog;
 mod window;
