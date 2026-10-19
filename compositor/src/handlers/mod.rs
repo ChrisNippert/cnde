@@ -185,11 +185,20 @@ delegate_pointer_constraints!(State);
 delegate_relative_pointer!(State);
 
 pub(crate) fn set_preferred_scale(surface: &WlSurface, output: &smithay::output::Output) {
-    let scale = output.current_scale().fractional_scale();
     smithay::wayland::compositor::with_states(surface, |states| {
-        smithay::wayland::fractional_scale::with_fractional_scale(states, |f| {
-            f.set_preferred_scale(scale)
-        });
+        set_preferred_scale_in(states, output)
+    });
+}
+
+/// The same, given the surface's states: inside a surface-tree walk, which
+/// holds each surface's lock, `with_states` would wait on it forever.
+fn set_preferred_scale_in(
+    states: &smithay::wayland::compositor::SurfaceData,
+    output: &smithay::output::Output,
+) {
+    let scale = output.current_scale().fractional_scale();
+    smithay::wayland::fractional_scale::with_fractional_scale(states, |f| {
+        f.set_preferred_scale(scale)
     });
 }
 
@@ -232,7 +241,7 @@ impl State {
                 &root,
                 (),
                 |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
-                |surface, _, _| set_preferred_scale(surface, &output),
+                |_, states, _| set_preferred_scale_in(states, &output),
                 |_, _, _| true,
             );
         }
