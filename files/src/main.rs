@@ -13,7 +13,7 @@ mod folder;
 mod grid;
 mod info;
 mod mainmenu;
-mod mime;
+use cnde_apps::mime;
 mod model;
 mod newfile;
 mod ops;

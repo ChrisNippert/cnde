@@ -423,6 +423,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cnde-apps"
+version = "0.1.0"
+
+[[package]]
 name = "cnde-compositor"
 version = "0.1.0"
 dependencies = [
@@ -455,6 +459,7 @@ dependencies = [
 name = "cnde-files"
 version = "0.1.0"
 dependencies = [
+ "cnde-apps",
  "cnde-config",
  "cnde-ipc",
  "cnde-ui",

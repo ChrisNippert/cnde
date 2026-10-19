@@ -94,20 +94,8 @@ pub fn md5_hex(data: &[u8]) -> String {
     md5(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The `file://` URI of a path, escaped the way GLib does (what Nautilus
-/// hashes): letters, digits and `-_.~!$&'()*+,;=:@/` stay as they are.
-pub fn uri_for(path: &Path) -> String {
-    use std::os::unix::ffi::OsStrExt;
-    let mut out = String::from("file://");
-    for &b in path.as_os_str().as_bytes() {
-        if b.is_ascii_alphanumeric() || b"-_.~!$&'()*+,;=:@/".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
-}
+// The `file://` URI of a path, escaped the way GLib does (what Nautilus hashes).
+pub use cnde_apps::uri_for;
 
 // ------------------------------------------------------------ PNG text
 

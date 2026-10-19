@@ -9,6 +9,7 @@ name = "cnde-files"
 path = "src/main.rs"
 
 [dependencies]
+cnde-apps = { path = "../apps" }
 cnde-ui = { path = "../ui" }
 cnde-config = { path = "../config" }
 cnde-ipc = { path = "../ipc" }
