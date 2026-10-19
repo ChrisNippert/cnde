@@ -84,18 +84,24 @@ impl DataDeviceHandler for State {
 impl ClientDndGrabHandler for State {
     /// A drop lands on a window (a file into a chat, say): focus it, so you
     /// can type the message that goes with it.
+    ///
+    /// Done once the grab has ended: smithay calls this holding the
+    /// pointer's lock and the seat's data, which asking the pointer where
+    /// it is and moving keyboard focus both take again (a hang, a panic).
     fn dropped(&mut self, target: Option<WlSurface>, validated: bool, seat: Seat<Self>) {
-        let Some(pointer) = seat.get_pointer() else {
-            return;
-        };
         if target.is_none() || !validated {
             return;
         }
-        let location = pointer.current_location();
-        if let Some((window, _)) = self.space.element_under(location) {
-            let window = window.clone();
-            self.focus_window(Some(&window));
-        }
+        self.loop_handle.insert_idle(move |state| {
+            let Some(pointer) = seat.get_pointer() else {
+                return;
+            };
+            let location = pointer.current_location();
+            if let Some((window, _)) = state.space.element_under(location) {
+                let window = window.clone();
+                state.focus_window(Some(&window));
+            }
+        });
     }
 }
 impl ServerDndGrabHandler for State {}
