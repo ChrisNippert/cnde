@@ -207,6 +207,12 @@ impl App {
 
     pub fn close_menu(&mut self) {
         self.menu = None;
+        // An autohide dock the menu held out lets go after a moment.
+        if let Some(dock) = &mut self.dock {
+            dock.linger();
+        }
+        self.sync_dock();
+        self.sync_dock_later();
     }
 
     /// An app icon's menu: its windows, a new one, pin, quit.

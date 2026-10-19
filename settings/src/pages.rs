@@ -2285,7 +2285,7 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
                 visibility(c.dock.visibility),
                 visibility(d.dock.visibility),
             )
-            .sub("Intellihide and autohide are coming; both act as always for now"),
+            .sub("Intellihide and autohide slide the dock off the edge while a window touches it; point at the edge to bring it back"),
         );
     }
     if c.dock.position != DockPosition::Off {

@@ -113,6 +113,24 @@ impl DockFrost {
             if let Some(height) = height {
                 area.size.h = area.size.h.min(height);
             }
+            // A hidden (autohide) dock sits mostly off the screen: frost
+            // only the part that shows, and nothing for a bare hot strip.
+            if let Some(mode) = output.current_mode() {
+                let scale = output.current_scale().fractional_scale();
+                let size: smithay::utils::Size<i32, smithay::utils::Logical> = output
+                    .current_transform()
+                    .transform_size(mode.size)
+                    .to_f64()
+                    .to_logical(scale)
+                    .to_i32_round();
+                let screen = Rectangle::new((0, 0).into(), size);
+                if namespace == cnde_ipc::dock::NAMESPACE && !screen.contains_rect(area) {
+                    match area.intersection(screen) {
+                        Some(shown) if shown.size.w >= 8 && shown.size.h >= 8 => area = shown,
+                        _ => continue,
+                    }
+                }
+            }
             if let Some(frost) =
                 self.frost(renderer, wallpapers, output, namespace, area, radius, 1.0)
             {

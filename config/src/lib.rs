@@ -549,9 +549,10 @@ pub enum DockVisibility {
     /// Always shown; maximized windows stop at it.
     #[default]
     Always,
-    /// Hides when a window would cover it. (Not yet: behaves as "always".)
+    /// Slides off the edge while a window touches it (as autohide).
     Intellihide,
-    /// Hidden until the pointer touches that edge. (Not yet: as "always".)
+    /// Slides off the edge while a window touches it; the pointer on the
+    /// edge brings it back.
     Autohide,
 }
 
