@@ -43,6 +43,8 @@ pub enum Target {
     AddWallpaper,
     /// A colour row's swatch: the row, and which of `SWATCHES` (row-major).
     Swatch(usize, usize),
+    /// The accent row's "Auto" button: follow the wallpaper.
+    AutoAccent(usize),
     Advanced,
     /// The header's back button, on a sub-page.
     Back,
@@ -910,6 +912,29 @@ fn swatches(
     let current = row.value.as_str().to_ascii_lowercase();
     let x0 = rect.x + t.row_padding;
     let y0 = rect.y + line_h;
+    if row.key == Key::Path("appearance.accent_color") {
+        // Beside the swatches, level with the last line.
+        let w = p.measure("Auto", t.font_size, Weight::Normal) + 24.0;
+        let x = x0 + SWATCHES[0].len() as f32 * (SWATCH + SWATCH_GAP) + 8.0;
+        let y = y0 + (SWATCHES.len() - 1) as f32 * (SWATCH + SWATCH_GAP);
+        let button = Rect::new(x, y, w, SWATCH);
+        let lit = hover(a, ui, Target::AutoAccent(index));
+        p.button(button, lit);
+        if current == "auto" {
+            p.canvas
+                .stroke_rounded_rect(x - 3.5, y - 3.5, w + 7.0, SWATCH + 7.0, 10.0, 2.0, t.window_text);
+        }
+        p.label_v(
+            "Auto",
+            x + 12.0,
+            y + SWATCH / 2.0,
+            w,
+            t.font_size,
+            Weight::Normal,
+            t.window_text,
+        );
+        out.hits.push((button, Target::AutoAccent(index)));
+    }
     for (line, colors) in SWATCHES.iter().enumerate() {
         for (column, hex) in colors.iter().enumerate() {
             let Some((r, g, b, _)) = cnde_config::parse_color(hex) else {
