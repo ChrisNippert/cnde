@@ -20,19 +20,39 @@ pub enum Page {
 }
 
 impl Page {
+    /// In sidebar order: each section's pages run together.
     pub const ALL: [Page; 11] = [
         Page::Appearance,
-        Page::Displays,
-        Page::Wifi,
-        Page::Bluetooth,
-        Page::Mouse,
-        Page::Keyboard,
-        Page::Windows,
         Page::Panel,
         Page::Dock,
+        Page::Windows,
+        Page::Wifi,
+        Page::Bluetooth,
+        Page::Displays,
+        Page::Mouse,
+        Page::Keyboard,
         Page::Power,
         Page::Accessibility,
     ];
+
+    /// The sidebar section this page sits under.
+    pub fn section(self) -> &'static str {
+        match self {
+            Page::Appearance | Page::Panel | Page::Dock | Page::Windows => "Personalize",
+            Page::Wifi | Page::Bluetooth => "Connections",
+            Page::Displays | Page::Mouse | Page::Keyboard | Page::Power => "Devices",
+            Page::Accessibility => "System",
+        }
+    }
+
+    /// The pages the sidebar lists: the top bar and dock pages go when
+    /// another shell stands in for cnde's.
+    pub fn visible(c: &Config) -> Vec<Page> {
+        Page::ALL
+            .into_iter()
+            .filter(|p| !matches!(p, Page::Panel | Page::Dock) || !other_shell(c))
+            .collect()
+    }
 
     pub fn title(self) -> &'static str {
         match self {
@@ -77,6 +97,22 @@ impl Page {
             title == name || title.split_whitespace().next() == Some(name.as_str())
         })
     }
+}
+
+/// Another program (or none) is set to run as the shell, so the top bar and
+/// dock aren't cnde's.
+pub fn other_shell(c: &Config) -> bool {
+    c.autostart.shell != "cnde-shell"
+}
+
+/// Whether the top bar settings apply: the bar is on and cnde's shell runs it.
+fn bar_shown(c: &Config) -> bool {
+    c.panel.enabled && !other_shell(c)
+}
+
+/// Whether the dock settings apply.
+fn dock_shown(c: &Config) -> bool {
+    c.dock.position != cnde_config::DockPosition::Off && !other_shell(c)
 }
 
 /// A value as written to the file. `Unset` removes the key, so the default
@@ -1156,7 +1192,7 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
     };
     let mut groups = vec![
         group(
-            "Style",
+            "Colour & material",
             vec![
                 Row::new(
                     "appearance.color_scheme",
@@ -1190,39 +1226,6 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     cnde_config::Palette::Adwaita => "GNOME's greys and blue",
                 }),
                 Row::new(
-                    "appearance.titlebars",
-                    "Matching title bars",
-                    Control::Switch {
-                        on: s("cnde"),
-                        off: s("app"),
-                    },
-                    s(match c.appearance.titlebars {
-                        cnde_config::Titlebars::Cnde => "cnde",
-                        cnde_config::Titlebars::App => "app",
-                    }),
-                    s(match d.appearance.titlebars {
-                        cnde_config::Titlebars::Cnde => "cnde",
-                        cnde_config::Titlebars::App => "app",
-                    }),
-                )
-                .sub("Draw title bars for apps that would otherwise use their toolkit's plain one"),
-                Row::new(
-                    "appearance.window_buttons",
-                    "Title bar buttons",
-                    Control::Segmented(choices(&[
-                        ("Minimize, Maximize, Close", s("all")),
-                        ("Close", s("close")),
-                    ])),
-                    s(match c.appearance.window_buttons {
-                        cnde_config::WindowButtons::All => "all",
-                        cnde_config::WindowButtons::Close => "close",
-                    }),
-                    s(match d.appearance.window_buttons {
-                        cnde_config::WindowButtons::All => "all",
-                        cnde_config::WindowButtons::Close => "close",
-                    }),
-                ),
-                Row::new(
                     "appearance.corner_radius",
                     "Corner radius",
                     Control::Slider {
@@ -1255,6 +1258,44 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     Value::Bool(d.appearance.adaptive_color),
                 )
                 .sub("The bar, dock, quick settings and sidebars take the colour of the window at the edge, or the wallpaper"),
+            ],
+        ),
+        group(
+            "Title bars",
+            vec![
+                Row::new(
+                    "appearance.titlebars",
+                    "Matching title bars",
+                    Control::Switch {
+                        on: s("cnde"),
+                        off: s("app"),
+                    },
+                    s(match c.appearance.titlebars {
+                        cnde_config::Titlebars::Cnde => "cnde",
+                        cnde_config::Titlebars::App => "app",
+                    }),
+                    s(match d.appearance.titlebars {
+                        cnde_config::Titlebars::Cnde => "cnde",
+                        cnde_config::Titlebars::App => "app",
+                    }),
+                )
+                .sub("Draw title bars for apps that would otherwise use their toolkit's plain one"),
+                Row::new(
+                    "appearance.window_buttons",
+                    "Title bar buttons",
+                    Control::Segmented(choices(&[
+                        ("Minimize, Maximize, Close", s("all")),
+                        ("Close", s("close")),
+                    ])),
+                    s(match c.appearance.window_buttons {
+                        cnde_config::WindowButtons::All => "all",
+                        cnde_config::WindowButtons::Close => "close",
+                    }),
+                    s(match d.appearance.window_buttons {
+                        cnde_config::WindowButtons::All => "all",
+                        cnde_config::WindowButtons::Close => "close",
+                    }),
+                ),
             ],
         ),
         group(
@@ -1300,9 +1341,28 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
         ),
     ];
     groups.insert(1, dark_schedule(c, d));
+    if let Some(look) = groups.iter_mut().find(|g| g.title == "Colour & material") {
+        if bar_shown(c) {
+            look.rows.extend(panel_look(c, d));
+        }
+        if dock_shown(c) {
+            look.rows.extend(dock_look(c, d));
+        }
+    }
+    if other_shell(c) {
+        groups.insert(
+            0,
+            Group {
+                title: String::new(),
+                description:
+                    "Top bar and dock settings are hidden because another shell is set up.".into(),
+                rows: Vec::new(),
+            },
+        );
+    }
     // Custom colours: the two the palette is worked out from.
     if c.appearance.palette == cnde_config::Palette::Custom
-        && let Some(style) = groups.first_mut()
+        && let Some(style) = groups.iter_mut().find(|g| g.title == "Colour & material")
     {
         style.rows.insert(
             2,
@@ -2030,6 +2090,96 @@ fn bar_mode(mode: cnde_config::BarMode) -> Value {
     })
 }
 
+/// The top bar's colour and material rows, shown on Appearance.
+fn panel_look(c: &Config, d: &Config) -> Vec<Row> {
+    let (p, dp) = (&c.panel, &d.panel);
+    vec![
+        Row::new(
+            "panel.frosted",
+            "Top bar frosted",
+            Control::switch(),
+            Value::Bool(p.frosted),
+            Value::Bool(dp.frosted),
+        )
+        .sub("Translucent over the blurred wallpaper; solid while a window touches it"),
+        Row::new(
+            "panel.clear",
+            "Top bar clear while floating",
+            Control::switch(),
+            Value::Bool(p.clear),
+            Value::Bool(dp.clear),
+        )
+        .sub("No background until a window touches it, just text and icons"),
+        Row::new(
+            "panel.rounded",
+            "Top bar rounded corners",
+            Control::switch(),
+            Value::Bool(p.rounded),
+            Value::Bool(dp.rounded),
+        )
+        .sub("Rounded bottom corners and a soft shadow")
+        .advanced(),
+        Row::new(
+            "panel.background",
+            "Top bar background",
+            Control::text("From the style"),
+            s(&p.background),
+            s(&dp.background),
+        )
+        .sub("#rrggbb, or #rrggbbaa to see through it; empty follows the style")
+        .advanced(),
+        Row::new(
+            "panel.foreground",
+            "Top bar text colour",
+            Control::text("From the style"),
+            s(&p.foreground),
+            s(&dp.foreground),
+        )
+        .advanced(),
+    ]
+}
+
+/// The dock's colour and material rows, shown on Appearance.
+fn dock_look(c: &Config, d: &Config) -> Vec<Row> {
+    let mut rows = Vec::new();
+    let background = |v: cnde_config::DockBackground| {
+        s(match v {
+            cnde_config::DockBackground::Solid => "solid",
+            cnde_config::DockBackground::Frosted => "frosted",
+        })
+    };
+    rows.push(
+        Row::new(
+            "dock.background",
+            "Dock background",
+            Control::Segmented(choices(&[("Solid", s("solid")), ("Frosted", s("frosted"))])),
+            background(c.dock.background),
+            background(d.dock.background),
+        )
+        .sub("Frosted shows the wallpaper through, blurred"),
+    );
+    let adaptive = |v: cnde_config::DockAdaptive| {
+        s(match v {
+            cnde_config::DockAdaptive::Bar => "bar",
+            cnde_config::DockAdaptive::Darker => "darker",
+        })
+    };
+    rows.push(
+        Row::new(
+            "dock.adaptive_color",
+            "Dock colour",
+            Control::Segmented(choices(&[
+                ("Same as bar", s("bar")),
+                ("Darker", s("darker")),
+            ])),
+            adaptive(c.dock.adaptive_color),
+            adaptive(d.dock.adaptive_color),
+        )
+        .sub("With adaptive colour on (Appearance)"),
+    );
+    rows
+}
+
 fn panel(c: &Config, d: &Config) -> Vec<Group> {
     let (p, dp) = (&c.panel, &d.panel);
     let mut clocks: Vec<Choice> = CLOCKS
@@ -2046,7 +2196,7 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
         });
     }
     let px = |v: f64| format!("{v:.0} px");
-    vec![
+    let mut groups = vec![
         group(
             "Top Bar",
             vec![
@@ -2157,48 +2307,6 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .sub("Auto floats clear of the edge until a window touches it"),
                 Row::new(
-                    "panel.frosted",
-                    "Frosted",
-                    Control::switch(),
-                    Value::Bool(p.frosted),
-                    Value::Bool(dp.frosted),
-                )
-                .sub("Translucent over the blurred wallpaper; solid while a window touches it"),
-                Row::new(
-                    "panel.clear",
-                    "Clear while floating",
-                    Control::switch(),
-                    Value::Bool(p.clear),
-                    Value::Bool(dp.clear),
-                )
-                .sub("No background until a window touches it, just text and icons"),
-                Row::new(
-                    "panel.rounded",
-                    "Rounded corners",
-                    Control::switch(),
-                    Value::Bool(p.rounded),
-                    Value::Bool(dp.rounded),
-                )
-                .sub("Rounded bottom corners and a soft shadow")
-                .advanced(),
-                Row::new(
-                    "panel.background",
-                    "Background colour",
-                    Control::text("From the style"),
-                    s(&p.background),
-                    s(&dp.background),
-                )
-                .sub("#rrggbb, or #rrggbbaa to see through it; empty follows the style")
-                .advanced(),
-                Row::new(
-                    "panel.foreground",
-                    "Text colour",
-                    Control::text("From the style"),
-                    s(&p.foreground),
-                    s(&dp.foreground),
-                )
-                .advanced(),
-                Row::new(
                     "panel.workspace_dot_size",
                     "Workspace dot size",
                     Control::Slider {
@@ -2242,7 +2350,13 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                 .advanced(),
             ],
         ),
-    ]
+    ];
+    // Off, the switch is all there is.
+    if !p.enabled {
+        groups.truncate(1);
+        groups[0].rows.truncate(1);
+    }
+    groups
 }
 
 fn dock(c: &Config, d: &Config) -> Vec<Group> {
@@ -2294,43 +2408,6 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
                 visibility(d.dock.visibility),
             )
             .sub("Intellihide and autohide slide the dock off the edge while a window touches it; point at the edge to bring it back"),
-        );
-    }
-    if c.dock.position != DockPosition::Off {
-        let background = |v: cnde_config::DockBackground| {
-            s(match v {
-                cnde_config::DockBackground::Solid => "solid",
-                cnde_config::DockBackground::Frosted => "frosted",
-            })
-        };
-        rows.push(
-            Row::new(
-                "dock.background",
-                "Background",
-                Control::Segmented(choices(&[("Solid", s("solid")), ("Frosted", s("frosted"))])),
-                background(c.dock.background),
-                background(d.dock.background),
-            )
-            .sub("Frosted shows the wallpaper through, blurred"),
-        );
-        let adaptive = |v: cnde_config::DockAdaptive| {
-            s(match v {
-                cnde_config::DockAdaptive::Bar => "bar",
-                cnde_config::DockAdaptive::Darker => "darker",
-            })
-        };
-        rows.push(
-            Row::new(
-                "dock.adaptive_color",
-                "Dock colour",
-                Control::Segmented(choices(&[
-                    ("Same as bar", s("bar")),
-                    ("Darker", s("darker")),
-                ])),
-                adaptive(c.dock.adaptive_color),
-                adaptive(d.dock.adaptive_color),
-            )
-            .sub("With adaptive colour on (Appearance)"),
         );
     }
     if on_edge {
@@ -2917,6 +2994,46 @@ mod tests {
             row.key.write(&mut file, &config, &row.value);
             assert!(file.config().is_ok(), "{}", row.title);
         }
+    }
+
+    #[test]
+    fn other_shell_hides_bar_and_dock() {
+        let mut config = Config::default();
+        assert!(Page::visible(&config).contains(&Page::Panel));
+        assert!(Page::visible(&config).contains(&Page::Dock));
+        config.autostart.shell = "waybar".into();
+        let pages = Page::visible(&config);
+        assert!(!pages.contains(&Page::Panel) && !pages.contains(&Page::Dock));
+        assert!(!bar_shown(&config) && !dock_shown(&config));
+        config.autostart.shell = String::new();
+        assert!(!Page::visible(&config).contains(&Page::Dock));
+    }
+
+    #[test]
+    fn disabled_bar_and_dock_keep_only_their_switch() {
+        let mut config = Config::default();
+        config.panel.enabled = false;
+        config.dock.position = cnde_config::DockPosition::Off;
+        let d = Config::default();
+        let bar = panel(&config, &d);
+        assert_eq!(bar.len(), 1);
+        assert_eq!(bar[0].rows.len(), 1);
+        assert_eq!(dock(&config, &d)[0].rows.len(), 1);
+        let keys: Vec<_> = appearance(&config, &d)
+            .into_iter()
+            .flat_map(|g| g.rows)
+            .collect();
+        assert!(
+            keys.iter()
+                .all(|r| r.title != "Top bar frosted" && r.title != "Dock background")
+        );
+        let on = appearance(&Config::default(), &d);
+        let titles: Vec<_> = on
+            .iter()
+            .flat_map(|g| &g.rows)
+            .map(|r| r.title.as_str())
+            .collect();
+        assert!(titles.contains(&"Top bar frosted") && titles.contains(&"Dock colour"));
     }
 
     #[test]

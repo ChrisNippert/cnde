@@ -389,9 +389,17 @@ fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h:
         t.window_text
     };
     let mut y = hh + 4.0;
-    for page in Page::ALL {
+    let mut section = "";
+    for page in Page::visible(&ui.config) {
         if y + t.sidebar_row_height > h {
             break;
+        }
+        if page.section() != section {
+            section = page.section();
+            // Quiet, like a group title on a page.
+            y += if y > hh + 4.0 { 8.0 } else { 0.0 };
+            p.label(section, 20.0, y + 4.0, 11.0, Weight::Bold, t.window_dim);
+            y += 22.0;
         }
         let rect = Rect::new(10.0, y, sw - 21.0, t.sidebar_row_height);
         let selected = a.get(
@@ -1393,7 +1401,7 @@ mod tests {
         for page in Page::ALL {
             let mut ui = ui(page);
             let painted = render(&ui, &format!("{page:?}"));
-            assert!(painted.hit((20.0, 70.0)).is_some(), "{page:?}: sidebar");
+            assert!(painted.hit((20.0, 90.0)).is_some(), "{page:?}: sidebar");
             ui.advanced.insert(page);
             render(&ui, &format!("{page:?}-advanced"));
         }
