@@ -213,7 +213,7 @@ impl DockFrost {
         // past them (a little missing in a corner doesn't show).
         let theme = cnde_ui::Theme::for_screen(
             &config.appearance,
-            screen_colour(config, wallpapers, output, behind.bar),
+            screen_colour(config, wallpapers, output),
         );
         let popup = theme.qs_background;
         let radius = theme.qs_radius.max(theme.menu_radius) as f64;
@@ -526,12 +526,11 @@ pub fn window_frost<'a>(
     wallpapers: &'a Wallpapers,
     output: &'a Output,
     config: &cnde_config::Config,
-    bar: Option<[u8; 3]>,
     now: Instant,
 ) -> Option<WindowFrost<'a>> {
     let theme = cnde_ui::Theme::for_screen(
         &config.appearance,
-        screen_colour(config, wallpapers, output, bar),
+        screen_colour(config, wallpapers, output),
     );
     (config.appearance.material == cnde_config::Material::Frosted).then_some(WindowFrost {
         frost,
@@ -544,17 +543,16 @@ pub fn window_frost<'a>(
 }
 
 /// The colour the adaptive palette takes on `output`, as cnde's apps and
-/// shell see it (the edges event): the bar's, else the wallpaper's.
+/// shell see it (the edges event): the wallpaper's.
 fn screen_colour(
     config: &cnde_config::Config,
     wallpapers: &Wallpapers,
     output: &Output,
-    bar: Option<[u8; 3]>,
 ) -> Option<cnde_ui::Color> {
     if !config.appearance.adaptive() {
         return None;
     }
-    let [r, g, b] = bar.or_else(|| wallpapers.tint(&output.name()))?;
+    let [r, g, b] = wallpapers.tint(&output.name())?;
     Some(cnde_ui::Color::rgb(r, g, b))
 }
 

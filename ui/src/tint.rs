@@ -23,10 +23,11 @@ pub fn darker(color: Color) -> Color {
     Color::from_hsl(h, s, l * 0.6).with_alpha(color.a)
 }
 
-/// The colour the adaptive palette is worked out from: the window
-/// against the top edge, else the wallpaper.
-pub fn screen(top: Option<[u8; 3]>, wallpaper: Option<[u8; 3]>) -> Option<Color> {
-    top.or(wallpaper).map(|[r, g, b]| Color::rgb(r, g, b))
+/// The colour the adaptive palette is worked out from: the wallpaper's.
+/// (Not the window in front: the theme would change with every window;
+/// the bars match those themselves.)
+pub fn screen(wallpaper: Option<[u8; 3]>) -> Option<Color> {
+    wallpaper.map(|[r, g, b]| Color::rgb(r, g, b))
 }
 
 /// The bar's colour: exactly the window against the top edge, opaque.
@@ -203,8 +204,7 @@ mod tests {
             })
         );
         assert_eq!(bar_choice(None), None);
-        assert_eq!(screen(None, Some([1, 2, 3])), Some(Color::rgb(1, 2, 3)));
-        assert_eq!(screen(Some([9, 9, 9]), Some([1, 2, 3])), Some(Color::rgb(9, 9, 9)));
+        assert_eq!(screen(Some([1, 2, 3])), Some(Color::rgb(1, 2, 3)));
     }
 
     #[test]

@@ -271,7 +271,6 @@ impl State {
                         &self.wallpapers,
                         &backend.output,
                         &self.config,
-                        bar_tint,
                         now,
                     ),
                     &backend.output,

@@ -934,7 +934,6 @@ impl State {
                     &self.wallpapers,
                     &output,
                     &self.config,
-                    bar_tint,
                     now,
                 ),
                 &output,

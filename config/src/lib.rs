@@ -270,9 +270,8 @@ pub enum Palette {
     Adwaita,
     /// Worked out from `base_color` and `accent_color`.
     Custom,
-    /// Worked out like `Custom` from the colour on screen: the window
-    /// against the top edge, else the wallpaper. The bar and dock match a
-    /// window against them exactly.
+    /// Worked out like `Custom` from the wallpaper's colour. The bar and
+    /// dock match a window against them exactly.
     Adaptive,
 }
 

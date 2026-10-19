@@ -1235,7 +1235,7 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     cnde_config::Palette::Cnde => "Plum and pink when dark, blush and rose when light",
                     cnde_config::Palette::Adwaita => "GNOME's greys and blue",
                     cnde_config::Palette::Adaptive => {
-                        "From the top window, or the wallpaper"
+                        "From the wallpaper; the bars match windows"
                     }
                 }),
                 Row::new(

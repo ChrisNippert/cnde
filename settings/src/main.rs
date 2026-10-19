@@ -1422,8 +1422,8 @@ fn theme_for(config: &Config, screen: Option<cnde_ui::Color>) -> Theme {
     Theme::for_screen(&config.appearance, screen)
 }
 
-/// Follow the compositor's edges event for the adaptive palette's colour:
-/// the window against a monitor's top, else the wallpaper. Read on a
+/// Follow the compositor's edges event for the adaptive palette's colour,
+/// the wallpaper's. Read on a
 /// thread; nothing without cnde's socket.
 fn watch_screen(events: channel::Sender<Option<cnde_ui::Color>>) {
     use std::io::BufRead;
@@ -1437,10 +1437,8 @@ fn watch_screen(events: channel::Sender<Option<cnde_ui::Color>>) {
         let reader = std::io::BufReader::new(stream);
         for line in reader.split(b'\n').map_while(Result::ok) {
             if let Some(cnde_ipc::Event::Edges { outputs }) = cnde_ipc::decode(&line) {
-                let screen = cnde_ui::tint::screen(
-                    outputs.iter().find_map(|e| e.top_tint),
-                    outputs.iter().find_map(|e| e.wallpaper_tint),
-                );
+                let screen =
+                    cnde_ui::tint::screen(outputs.iter().find_map(|e| e.wallpaper_tint));
                 if events.send(screen).is_err() {
                     return;
                 }

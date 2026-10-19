@@ -941,15 +941,12 @@ impl App {
         self.draw_calendar();
     }
 
-    /// The colour for the adaptive palette, from the main monitor first:
-    /// the window against its top, else its wallpaper.
+    /// The colour for the adaptive palette: the main monitor's wallpaper
+    /// (else another's).
     fn screen_colour(&self) -> Option<cnde_ui::Color> {
         let main = self.main_output().and_then(|o| self.edges_of(&o).cloned());
         let all = || main.iter().chain(&self.edges);
-        cnde_ui::tint::screen(
-            all().find_map(|e| e.top_tint),
-            all().find_map(|e| e.wallpaper_tint),
-        )
+        cnde_ui::tint::screen(all().find_map(|e| e.wallpaper_tint))
     }
 
     /// What the compositor last said touches `output`'s edges.

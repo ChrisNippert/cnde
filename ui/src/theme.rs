@@ -460,8 +460,10 @@ impl Theme {
 
     fn colours_for(appearance: &cnde_config::Appearance, screen: Option<Color>) -> Self {
         let dark = appearance.color_scheme == cnde_config::ColorScheme::Dark;
+        let accent = cnde_config::parse_color(&appearance.accent_color)
+            .map_or(Color::rgb(0xf4, 0xa7, 0xc6), |(r, g, b, _)| Color::rgb(r, g, b));
         if appearance.adaptive() {
-            return Self::adaptive(dark, screen);
+            return Self::adaptive(dark, screen, accent);
         }
         match (appearance.palette, dark) {
             (cnde_config::Palette::Adwaita, dark) => Self::for_dark(dark),
@@ -469,7 +471,7 @@ impl Theme {
             (cnde_config::Palette::Quiet, false) => Self::quiet_light(),
             (cnde_config::Palette::Cnde, true) => Self::dusk(),
             (cnde_config::Palette::Cnde, false) => Self::blossom(),
-            (cnde_config::Palette::Adaptive, dark) => Self::adaptive(dark, screen),
+            (cnde_config::Palette::Adaptive, dark) => Self::adaptive(dark, screen, accent),
             (cnde_config::Palette::Custom, dark) => {
                 let parse = |text: &str, fallback: Color| {
                     cnde_config::parse_color(text)
@@ -484,9 +486,9 @@ impl Theme {
 
     /// The adaptive palette: [`Theme::custom`] from `screen`'s hue, the
     /// lightness still dark or light whatever the screen's is; the accent
-    /// a clear shade of the same hue (amber when it's grey). Quiet until
-    /// there's a colour.
-    pub fn adaptive(dark: bool, screen: Option<Color>) -> Self {
+    /// a clear shade of the same hue, or `accent` when it's grey. Quiet
+    /// until there's a colour.
+    pub fn adaptive(dark: bool, screen: Option<Color>, accent: Color) -> Self {
         let Some(screen) = screen else {
             return if dark { Self::quiet_dark() } else { Self::quiet_light() };
         };
@@ -494,7 +496,7 @@ impl Theme {
         let accent = if s > 0.15 {
             Color::from_hsl(h, 0.6, if dark { 0.72 } else { 0.45 })
         } else {
-            Color::rgb(0xe3, 0xa9, 0x5e)
+            accent
         };
         Self::custom(dark, screen, accent)
     }
@@ -794,11 +796,13 @@ mod tests {
     #[test]
     fn adaptive_keeps_the_style_and_takes_the_hue() {
         let light_blue = Color::rgb(0xb0, 0xd0, 0xf0);
-        let dark = Theme::adaptive(true, Some(light_blue));
+        let dark = Theme::adaptive(true, Some(light_blue), light_blue);
         assert!(dark.window_background.luminance() < 0.1, "dark stays dark");
         let (h, _, _) = dark.window_background.hsl();
         assert!((h - light_blue.hsl().0).abs() < 2.0);
-        let light = Theme::adaptive(false, Some(Color::rgb(0x10, 0x20, 0x40)));
+        let light = Theme::adaptive(false, Some(Color::rgb(0x10, 0x20, 0x40)), light_blue);
+        let grey = Theme::adaptive(true, Some(Color::rgb(0x30, 0x30, 0x30)), light_blue);
+        assert_eq!(grey.accent, light_blue, "grey keeps the chosen accent");
         assert!(light.window_background.luminance() > 0.8, "light stays light");
         let appearance = cnde_config::Appearance {
             adaptive_color: true,
