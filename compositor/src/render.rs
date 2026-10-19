@@ -184,6 +184,8 @@ pub fn output_elements(
     over_windows: Vec<OutputElement>,
     decorations: &mut crate::decorations::Decorations,
     popups: &mut PopupAnims,
+    // Frost under cnde's own floating windows; None for solid.
+    mut window_frost: Option<crate::frost::WindowFrost<'_>>,
     output: &Output,
     now: Instant,
 ) -> Vec<OutputElement> {
@@ -219,6 +221,7 @@ pub fn output_elements(
         layers.push(window_elements(
             renderer,
             decorations,
+            window_frost.as_mut(),
             &placed.window,
             placed.rect,
             placed.zoom,
@@ -345,6 +348,7 @@ fn layer_elements(
 fn window_elements(
     renderer: &mut GlesRenderer,
     decorations: &mut crate::decorations::Decorations,
+    frost: Option<&mut crate::frost::WindowFrost<'_>>,
     win: &Window,
     // Where the window geometry is laid out (space coordinates).
     live: Rectangle<f64, Logical>,
@@ -405,6 +409,16 @@ fn window_elements(
             if let Some(element) =
                 decorations.element(renderer, win, state, rect, width, scale, frame.alpha)
             {
+                elements.push(element);
+            }
+        }
+        // Last, so under it all: the blurred wallpaper its see-through
+        // parts show.
+        if let Some(frost) = frost
+            && crate::frost::WindowFrost::wants(win)
+        {
+            let key = format!("{:?}", win.toplevel().map(|t| t.wl_surface().id()));
+            if let Some(element) = frost.element(renderer, &key, rect, frame.alpha) {
                 elements.push(element);
             }
         }

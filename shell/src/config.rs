@@ -46,9 +46,9 @@ pub fn theme_from(config: &Config) -> Theme {
     if panel.frosted && panel.background.is_empty() {
         theme.panel_background = theme.panel_background.with_alpha(0.45);
     }
-    // Its popups (quick settings, the calendar, menus) get frost behind
-    // them too; tinted more, since text sits on all of them.
-    if panel.frosted {
+    // The shell's popups (quick settings, the calendar, menus) get frost
+    // behind them; tinted more than the bar, since text sits on all of them.
+    if config.appearance.material == cnde_config::Material::Frosted {
         theme.qs_background = theme.qs_background.with_alpha(0.74);
     }
     theme.panel_foreground = color(&panel.foreground, theme.panel_foreground);

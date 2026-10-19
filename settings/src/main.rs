@@ -195,6 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or_default();
     let theme = theme_for(&config);
+    let frosted = config.appearance.material == cnde_config::Material::Frosted;
     cnde_ui::anim::set_speed(config.animations.speed as f32);
     let mut icons = Icons::new();
     icons.set_theme(&config.appearance.icon_theme);
@@ -284,6 +285,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             edit: None,
             error: None,
             rounded: true,
+            frosted,
             dragging: None,
             wifi: None,
             wifi_join: None,
@@ -768,6 +770,7 @@ impl App {
         if config.appearance != self.ui.config.appearance {
             self.res.theme = theme_for(&config);
             self.res.icons.set_theme(&config.appearance.icon_theme);
+            self.ui.frosted = config.appearance.material == cnde_config::Material::Frosted;
         }
         self.ui.config = config;
         self.redraw();

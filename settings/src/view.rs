@@ -84,6 +84,9 @@ pub struct Edit {
 }
 
 /// Everything that decides what the window looks like.
+/// How opaque a frosted sidebar's tint is over the compositor's frost.
+const FROSTED_SIDEBAR: f32 = 0.6;
+
 pub struct Ui {
     pub config: Config,
     pub displays: Vec<Display>,
@@ -100,6 +103,9 @@ pub struct Ui {
     pub error: Option<String>,
     /// Square corners when maximized or tiled.
     pub rounded: bool,
+    /// The sidebar shows the compositor's frost through it (only while
+    /// rounded: snapped or maximized it's solid, as the compositor knows).
+    pub frosted: bool,
     /// The slider being dragged (it follows the pointer, unanimated).
     pub dragging: Option<Key>,
     /// The Wi-Fi worker's last report (once the page has been opened).
@@ -168,7 +174,6 @@ pub struct Res {
     pub anim: Anim,
 }
 
-const CORNER: f32 = 14.0;
 const MAX_COLUMN: f32 = 680.0;
 const GROUP_GAP: f32 = 16.0;
 /// Content padding either side of the column.
@@ -195,13 +200,28 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         icons: &mut res.icons,
         theme: t,
     };
-    let radius = if ui.rounded { CORNER } else { 0.0 };
+    let radius = if ui.rounded { t.window_radius } else { 0.0 };
     let sw = t.sidebar_width;
     let hh = t.window_header_height;
 
     p.canvas.clear(Color::rgba(0, 0, 0, 0.0));
-    p.canvas
-        .rounded_rect(0.0, 0.0, w, h, radius, t.window_background);
+    if ui.rounded && ui.frosted {
+        // Only the content is solid; the sidebar, drawn over nothing,
+        // lets the frost behind the window show.
+        // Rounded on the right only: the left edge meets the sidebar.
+        p.canvas.rounded_rect_clipped(
+            sw - radius,
+            0.0,
+            w - sw + radius,
+            h,
+            radius,
+            t.window_background,
+            (sw, 0.0, w - sw, h),
+        );
+    } else {
+        p.canvas
+            .rounded_rect(0.0, 0.0, w, h, radius, t.window_background);
+    }
 
     // The page first: it scrolls under the header bar drawn after it.
     let content = Rect::new(sw, hh, w - sw, h - hh);
@@ -339,11 +359,16 @@ fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h:
     let sw = t.sidebar_width;
     let hh = t.window_header_height;
     // Full height, square on the content side, with a rule down its edge.
-    let radius = if ui.rounded { CORNER } else { 0.0 };
+    let radius = if ui.rounded { t.window_radius } else { 0.0 };
+    let fill = if ui.rounded && ui.frosted {
+        t.window_sidebar.with_alpha(FROSTED_SIDEBAR)
+    } else {
+        t.window_sidebar
+    };
+    // Rounded on the left only, in one piece: overlapping see-through
+    // fills would show their seams.
     p.canvas
-        .rounded_rect(0.0, 0.0, sw, h, radius, t.window_sidebar);
-    p.canvas
-        .rounded_rect(sw / 2.0, 0.0, sw / 2.0, h, 0.0, t.window_sidebar);
+        .rounded_rect_clipped(0.0, 0.0, sw + radius, h, radius, fill, (0.0, 0.0, sw, h));
     p.canvas
         .rounded_rect(sw - 1.0, 0.0, 1.0, h, 0.0, t.card_separator);
     out.hits.push((Rect::new(0.0, 0.0, sw, hh), Target::Header));
@@ -1260,6 +1285,7 @@ mod tests {
             edit: None,
             error: None,
             rounded: true,
+            frosted: false,
             dragging: None,
             wifi: None,
             wifi_join: None,

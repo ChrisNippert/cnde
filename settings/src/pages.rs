@@ -1236,6 +1236,17 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     Value::Int(d.appearance.corner_radius as i64),
                 )
                 .sub("Windows; the dock, top bar and menus round in step"),
+                Row::new(
+                    "appearance.material",
+                    "Material",
+                    Control::Segmented(choices(&[
+                        ("Frosted", s("frosted")),
+                        ("Solid", s("solid")),
+                    ])),
+                    material(c.appearance.material),
+                    material(d.appearance.material),
+                )
+                .sub("Menus, quick settings and window sidebars; solid when maximized"),
             ],
         ),
         group(
@@ -1986,6 +1997,13 @@ const CLOCKS: &[(&str, &str)] = &[
     ("Fri 14:30", "%a %H:%M"),
     ("Fri 2:30 PM", "%a %-I:%M %p"),
 ];
+
+fn material(material: cnde_config::Material) -> Value {
+    s(match material {
+        cnde_config::Material::Frosted => "frosted",
+        cnde_config::Material::Solid => "solid",
+    })
+}
 
 /// The top bar's and dock's placements.
 fn bar_modes() -> Vec<Choice> {

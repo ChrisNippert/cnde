@@ -45,6 +45,7 @@
 # palette = "quiet"        # "quiet" (warm greys, amber), "cnde" (Dusk/Blossom), "adwaita" (GNOME's) or "custom"
 # window_buttons = "all"   # "all" (minimize, maximize, close) or "close"
 # titlebars = "cnde"       # "cnde" draws title bars for apps that allow it; "app" leaves them to the app
+# material = "frosted"     # "frosted" or "solid": the shell's popups and cnde's own windows (solid when snapped or maximized)
 # corner_radius = 10       # window corners in px (0-48); the dock, bar and menus scale with it
 
 [dark_mode]

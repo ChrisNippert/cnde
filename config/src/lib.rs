@@ -206,6 +206,18 @@ pub struct Appearance {
     /// Window corners, logical px. Everything else rounded (dock, bar,
     /// menus, cards) scales with it: 0 squares them all.
     pub corner_radius: u32,
+    /// The shell's popups and cnde's own windows: see-through over the
+    /// blurred wallpaper, or solid. Snapped or maximized windows are
+    /// always solid.
+    pub material: Material,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Material {
+    #[default]
+    Frosted,
+    Solid,
 }
 
 impl Appearance {
@@ -231,6 +243,7 @@ impl Default for Appearance {
             base_color: "#2b1a40".into(),
             accent_color: "#f4a7c6".into(),
             corner_radius: Self::CORNER_RADIUS,
+            material: Material::Frosted,
         }
     }
 }

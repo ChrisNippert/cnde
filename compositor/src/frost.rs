@@ -56,7 +56,7 @@ impl DockFrost {
         popups: &crate::popup_anim::PopupAnims,
         now: std::time::Instant,
     ) -> Vec<OutputElement> {
-        let mut elements = if config.panel.frosted {
+        let mut elements = if config.appearance.material == cnde_config::Material::Frosted {
             self.popup_elements(renderer, wallpapers, output, config, popups, now)
         } else {
             Vec::new()
@@ -250,6 +250,76 @@ impl DockFrost {
         let id = self.ids.entry(key).or_insert_with(Id::new).clone();
         Some(Frost { inner, id })
     }
+}
+
+/// Frost under cnde's own windows (Settings), for `render::output_elements`.
+pub struct WindowFrost<'a> {
+    pub frost: &'a mut DockFrost,
+    pub wallpapers: &'a Wallpapers,
+    pub output: &'a Output,
+    /// Their corners (the theme's window radius).
+    pub radius: f64,
+}
+
+impl WindowFrost<'_> {
+    /// The blurred wallpaper under `rect` (output-local), faded to `alpha`.
+    pub fn element(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        key: &str,
+        rect: Rectangle<f64, smithay::utils::Logical>,
+        alpha: f32,
+    ) -> Option<OutputElement> {
+        self.frost
+            .frost(
+                renderer,
+                self.wallpapers,
+                self.output,
+                &format!("window/{key}"),
+                rect.to_i32_round(),
+                self.radius,
+                alpha,
+            )
+            .map(OutputElement::Frost)
+    }
+
+    /// Whether `window` gets frost: one of cnde's own, floating free
+    /// (snapped, tiled, maximized or fullscreen it's solid; the app sees
+    /// the same states and paints itself to match).
+    pub fn wants(window: &smithay::desktop::Window) -> bool {
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+        if !crate::capture::title_and_app_id(window).1.starts_with("cnde-") {
+            return false;
+        }
+        window.toplevel().is_some_and(|toplevel| {
+            let states = toplevel.current_state().states;
+            ![
+                State::Maximized,
+                State::Fullscreen,
+                State::TiledLeft,
+                State::TiledRight,
+                State::TiledTop,
+                State::TiledBottom,
+            ]
+            .into_iter()
+            .any(|s| states.contains(s))
+        })
+    }
+}
+
+/// The window frost the config asks for, if any.
+pub fn window_frost<'a>(
+    frost: &'a mut DockFrost,
+    wallpapers: &'a Wallpapers,
+    output: &'a Output,
+    config: &cnde_config::Config,
+) -> Option<WindowFrost<'a>> {
+    (config.appearance.material == cnde_config::Material::Frosted).then(|| WindowFrost {
+        frost,
+        wallpapers,
+        output,
+        radius: cnde_ui::Theme::for_appearance(&config.appearance).window_radius as f64,
+    })
 }
 
 /// `output`'s place and size, logical.

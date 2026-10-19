@@ -261,6 +261,12 @@ impl State {
                     over_windows,
                     &mut self.decorations,
                     &mut self.popup_anims,
+                    crate::frost::window_frost(
+                        &mut self.dock_frost,
+                        &self.wallpapers,
+                        &backend.output,
+                        &self.config,
+                    ),
                     &backend.output,
                     now,
                 )
