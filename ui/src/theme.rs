@@ -402,22 +402,28 @@ impl Theme {
         Self::colours_for(appearance).rounded(appearance.roundness())
     }
 
-    /// The bar and dock in `tint` (a maximized window's colour, with
-    /// `appearance.adaptive_color`), `amount` of the way, with ink that
-    /// reads on it.
-    pub fn matched(&self, tint: Color, amount: f32) -> Self {
+    /// The bar, dock and popups in `tint` (a window's or the wallpaper's
+    /// colour, with `appearance.adaptive_color`), `amount` of the way, with
+    /// ink that reads on it. `solid` (0-1) is how far backgrounds go
+    /// opaque; at 0 they take the hue and keep their own alpha, so frost
+    /// stays frosted. The ink follows the tint itself: translucent
+    /// surfaces sit over a wallpaper that's mostly that same colour.
+    pub fn matched(&self, tint: Color, amount: f32, solid: f32) -> Self {
         let ink = tint.ink();
-        let background = tint.with_alpha(1.0);
+        let background = |c: Color| c.mix(tint.with_alpha(c.a + (1.0 - c.a) * solid), amount);
         let fg = |c: Color| c.mix(ink.with_alpha(c.a), amount);
         let wash = |c: Color, a: f32| c.mix(ink.with_alpha(a), amount);
         Self {
-            panel_background: self.panel_background.mix(background, amount),
-            search_background: self.search_background.mix(background, amount),
+            panel_background: background(self.panel_background),
+            search_background: background(self.search_background),
+            qs_background: background(self.qs_background),
             panel_foreground: fg(self.panel_foreground),
             workspace_active: fg(self.workspace_active),
             workspace_dot: fg(self.workspace_dot),
             popup_text: fg(self.popup_text),
             qs_dim: wash(self.qs_dim, 0.6),
+            qs_tile: wash(self.qs_tile, self.qs_tile.a),
+            qs_toggle_off: wash(self.qs_toggle_off, self.qs_toggle_off.a),
             panel_button_hover: wash(self.panel_button_hover, 0.12),
             panel_button_active: wash(self.panel_button_active, 0.2),
             search_selected: wash(self.search_selected, 0.12),

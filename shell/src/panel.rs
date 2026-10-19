@@ -54,8 +54,8 @@ pub struct Draw<'a> {
     pub clear: bool,
     /// The wallpaper behind the bar is light: a clear bar's text goes dark.
     pub backdrop_light: bool,
-    /// A maximized window's colour, for the bar to take.
-    pub tint: Option<Color>,
+    /// The colour for the bar to take (a window's, else the wallpaper's).
+    pub tint: Option<cnde_ui::Tint>,
 }
 
 /// Editing the bar in place (from its right-click menu).
@@ -114,9 +114,10 @@ pub struct Panel {
     anim: Animator<(Button, bool)>,
     /// Fading to solid (1) when a window's against the bar, and back.
     solid_fade: Animator<()>,
-    /// Taking a window's colour (1), and the colour last taken.
-    tint_fade: Animator<()>,
-    tint: Option<Color>,
+    /// Easing towards the colour it's taking.
+    tint_fade: cnde_ui::TintFade,
+    /// What it's wearing now; quick settings, the calendar and menus follow.
+    pub shown: Option<cnde_ui::Shown>,
     /// How far it floats off the edge: 0 attached, 1 floating.
     float: Animator<()>,
     /// The layer margin last asked for: `FLOAT_GAP` times how far it floats.
@@ -166,8 +167,8 @@ impl Panel {
             done_region: None,
             anim: Animator::new(),
             solid_fade: Animator::new(),
-            tint_fade: Animator::new(),
-            tint: None,
+            tint_fade: cnde_ui::TintFade::new(),
+            shown: None,
             float: Animator::new(),
             margin: 0,
             mode: BarMode::Attached,
@@ -365,7 +366,6 @@ impl Panel {
         self.dirty = false;
         self.anim.begin();
         self.solid_fade.begin();
-        self.tint_fade.begin();
         self.float.begin();
         let floats = match mode {
             BarMode::Attached => false,
@@ -381,19 +381,14 @@ impl Panel {
         let solid = self
             .solid_fade
             .get((), if solid { 1.0 } else { 0.0 }, MEDIUM);
-        let matching = self
-            .tint_fade
-            .get((), if tint.is_some() { 1.0 } else { 0.0 }, MEDIUM);
-        if tint.is_some() {
-            self.tint = tint;
-        }
+        self.shown = self.tint_fade.update(tint);
         let matched;
-        let theme = match self.tint {
-            Some(tint) if matching > 0.0 => {
-                matched = theme.matched(tint, matching);
+        let theme = match &self.shown {
+            Some(shown) => {
+                matched = shown.apply(theme);
                 &matched
             }
-            _ => theme,
+            None => theme,
         };
         let scale = self.scale;
         let (w, h) = (

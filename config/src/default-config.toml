@@ -140,6 +140,7 @@
 # align = "center"         # "start" (left/top), "center", "end" (right/bottom); stretched, moves the icons
 # float_align = "center"   # while floating as a pill: same choices as align; unset, same as align
 # reserve = true           # on an edge: maximized windows stop at it; false floats it over them
+# adaptive_color = "bar"   # with appearance.adaptive_color: "bar" (the bar's colour) or "darker" (a darker shade of the window at the bottom edge, or the wallpaper)
 # locked = false           # true: no dragging icons or the dock, and no edit mode
 # system_monitor = "gnome-system-monitor"  # "System Monitor" in the dock's menu runs this; "" hides it
 

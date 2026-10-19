@@ -473,6 +473,8 @@ pub struct Dock {
     pub align: DockAlign,
     /// Where the floating pill sits along its edge; unset, `align`.
     pub float_align: Option<DockAlign>,
+    /// With `appearance.adaptive_color`: the bar's colour, or a darker shade.
+    pub adaptive_color: DockAdaptive,
     /// On a screen edge: maximized windows stop at it. Off, it floats over
     /// them.
     pub reserve: bool,
@@ -501,6 +503,7 @@ impl Default for Dock {
             mode: BarMode::Auto,
             align: DockAlign::Center,
             float_align: None,
+            adaptive_color: DockAdaptive::Bar,
             reserve: true,
             locked: false,
             system_monitor: "gnome-system-monitor".into(),
@@ -526,6 +529,16 @@ pub enum DockAlign {
     Center,
     /// Right (or bottom, on a side edge).
     End,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DockAdaptive {
+    /// Whatever colour the bar takes.
+    #[default]
+    Bar,
+    /// A darker shade of the window at the bottom edge, or the wallpaper.
+    Darker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

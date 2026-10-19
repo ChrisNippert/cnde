@@ -2313,6 +2313,25 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
             )
             .sub("Frosted shows the wallpaper through, blurred"),
         );
+        let adaptive = |v: cnde_config::DockAdaptive| {
+            s(match v {
+                cnde_config::DockAdaptive::Bar => "bar",
+                cnde_config::DockAdaptive::Darker => "darker",
+            })
+        };
+        rows.push(
+            Row::new(
+                "dock.adaptive_color",
+                "Dock colour",
+                Control::Segmented(choices(&[
+                    ("Same as bar", s("bar")),
+                    ("Darker", s("darker")),
+                ])),
+                adaptive(c.dock.adaptive_color),
+                adaptive(d.dock.adaptive_color),
+            )
+            .sub("With adaptive colour on (Appearance)"),
+        );
     }
     if on_edge {
         rows.push(
