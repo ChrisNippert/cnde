@@ -577,7 +577,13 @@ pub fn shell_popups(
             let PopupKind::Xdg(xdg) = &popup else {
                 continue;
             };
-            let rect = Rectangle::new(parent.loc + offset, popup.geometry().size);
+            // The client's window geometry, if it set one (cnde's shell
+            // doesn't), else the size it was positioned at.
+            let mut size = popup.geometry().size;
+            if size.is_empty() {
+                size = xdg.with_pending_state(|state| state.geometry.size);
+            }
+            let rect = Rectangle::new(parent.loc + offset, size);
             popups.push((xdg.wl_surface().clone(), rect));
         }
     }

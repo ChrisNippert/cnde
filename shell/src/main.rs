@@ -538,6 +538,11 @@ impl App {
     fn open_screenshot_ui(&mut self, windows: Vec<cnde_ipc::ScreenshotWindow>) {
         self.quick_settings = None;
         self.calendar = None;
+        // A menu's grab would keep the keys (Ctrl+C, Enter) from the tool.
+        // The screen is already frozen with it in.
+        if self.menu.is_some() {
+            self.close_menu();
+        }
         let main = self.main_output();
         let monitors = self
             .outputs
