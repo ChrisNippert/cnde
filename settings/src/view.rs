@@ -170,7 +170,15 @@ pub struct Res {
 
 const CORNER: f32 = 14.0;
 const MAX_COLUMN: f32 = 680.0;
-const GROUP_GAP: f32 = 20.0;
+const GROUP_GAP: f32 = 16.0;
+/// Content padding either side of the column.
+const SIDE_PAD: f32 = 24.0;
+
+/// Whether groups sit on a filled card; Quiet's are transparent, so a
+/// group is just a title and its rows.
+fn boxed(t: &Theme) -> bool {
+    t.card_background.a > 0.01
+}
 const SLIDER_WIDTH: f32 = 200.0;
 const ENTRY_WIDTH: f32 = 240.0;
 
@@ -228,11 +236,11 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         .push((Rect::new(sw, 0.0, w - sw, hh), Target::Header));
     // The page's title on the left, the window buttons on the right. A
     // sub-page's title has a back button before it.
-    let mut title_x = sw + 14.0;
+    let mut title_x = sw + SIDE_PAD;
     let title = ui.sub_page().unwrap_or(ui.page.title());
     if ui.sub_page().is_some() {
         let size = 28.0;
-        let back = Rect::new(sw + 10.0, (hh - size) / 2.0, size, size);
+        let back = Rect::new(sw + 16.0, (hh - size) / 2.0, size, size);
         let fill = t
             .button_background
             .mix(t.button_hover, hover(a, ui, Target::Back));
@@ -246,14 +254,14 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
             t.window_text,
         );
         out.hits.push((back, Target::Back));
-        title_x = back.right() + 10.0;
+        title_x = back.right() + 8.0;
     }
     p.label_v(
         title,
         title_x,
-        hh / 2.0 + 2.0,
+        hh / 2.0,
         w - title_x - 140.0,
-        t.window_title_size + 4.0,
+        t.window_title_size,
         Weight::Bold,
         t.window_text,
     );
@@ -297,10 +305,8 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         );
         out.hits.push((button, target));
     }
-    if ui.scroll > 0.5 {
-        p.canvas
-            .rounded_rect(sw, hh - 1.0, w - sw, 1.0, 0.0, t.card_separator);
-    }
+    p.canvas
+        .rounded_rect(sw, hh - 1.0, w - sw, 1.0, 0.0, t.card_separator);
 
     sidebar(ui, a, &mut p, &mut out, h);
 
@@ -328,63 +334,57 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     out
 }
 
-/// The sidebar floats as a card inset from the window's edges, its
-/// highlight inside it.
-const SIDEBAR_INSET: f32 = 6.0;
-
 fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h: f32) {
     let t = p.theme;
     let sw = t.sidebar_width;
     let hh = t.window_header_height;
-    let inset = SIDEBAR_INSET;
-    p.canvas.rounded_rect(
-        inset,
-        inset,
-        sw - 2.0 * inset,
-        h - 2.0 * inset,
-        CORNER - inset / 2.0,
-        t.window_sidebar,
-    );
+    // Full height, square on the content side, with a rule down its edge.
+    let radius = if ui.rounded { CORNER } else { 0.0 };
+    p.canvas
+        .rounded_rect(0.0, 0.0, sw, h, radius, t.window_sidebar);
+    p.canvas
+        .rounded_rect(sw / 2.0, 0.0, sw / 2.0, h, 0.0, t.window_sidebar);
+    p.canvas
+        .rounded_rect(sw - 1.0, 0.0, 1.0, h, 0.0, t.card_separator);
     out.hits.push((Rect::new(0.0, 0.0, sw, hh), Target::Header));
-    let title = "Settings";
     p.label_v(
-        title,
-        18.0,
+        "Settings",
+        SIDE_PAD - 4.0,
         hh / 2.0,
         sw,
         t.window_title_size,
         Weight::Bold,
         t.window_text,
     );
-    let mut y = hh + 6.0;
+    // A pill filled with `sidebar_selected`; when that is the accent the
+    // text on it is `on_accent`.
+    let on_pill = if t.sidebar_selected == t.accent {
+        t.on_accent
+    } else {
+        t.window_text
+    };
+    let mut y = hh + 4.0;
     for page in Page::ALL {
         if y + t.sidebar_row_height > h {
             break;
         }
-        let rect = Rect::new(
-            inset + 6.0,
-            y,
-            sw - 2.0 * (inset + 6.0),
-            t.sidebar_row_height,
-        );
+        let rect = Rect::new(10.0, y, sw - 21.0, t.sidebar_row_height);
         let selected = a.get(
             AnimKey::Selected(page),
             if ui.page == page { 1.0 } else { 0.0 },
             SHORT,
         );
         let hovered = hover(a, ui, Target::Page(page)) * (1.0 - selected);
-        // The current page: tinted with the accent, its icon in the accent.
-        let chosen = t.accent.with_alpha(0.22);
-        for (color, amount) in [(t.hover, hovered), (chosen, selected)] {
+        for (color, amount) in [(t.hover, hovered), (t.sidebar_selected, selected)] {
             if amount > 0.0 {
                 let fill = color.with_alpha(color.a * amount);
                 p.canvas
-                    .rounded_rect(rect.x, rect.y, rect.w, rect.h, 10.0, fill);
+                    .rounded_rect(rect.x, rect.y, rect.w, rect.h, t.button_radius, fill);
             }
         }
         let cy = rect.y + rect.h / 2.0;
-        let icon_color = t.window_text.mix(t.accent, selected);
-        p.icon(page.icon(), rect.x + 20.0, cy, 16.0, icon_color);
+        let ink = t.window_text.mix(on_pill, selected);
+        p.icon(page.icon(), rect.x + 20.0, cy, 16.0, ink);
         p.label_v(
             page.title(),
             rect.x + 40.0,
@@ -392,7 +392,7 @@ fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h:
             rect.w - 48.0,
             t.font_size,
             Weight::Normal,
-            t.window_text,
+            ink,
         );
         out.hits.push((rect, Target::Page(page)));
         y += t.sidebar_row_height + 2.0;
@@ -423,9 +423,9 @@ fn page(
     );
     let show_advanced = ui.advanced.contains(&ui.page);
     let has_advanced = groups.iter().flat_map(|g| &g.rows).any(|r| r.advanced);
-    let col_w = (area.w - 48.0).min(MAX_COLUMN);
+    let col_w = (area.w - 2.0 * SIDE_PAD).min(MAX_COLUMN);
     let x = area.x + (area.w - col_w) / 2.0;
-    let top = area.y + 16.0;
+    let top = area.y + 12.0;
     let mut y = top - ui.scroll + offset;
 
     for group in groups {
@@ -439,10 +439,10 @@ fn page(
         }
         if !group.title.is_empty() {
             p.label(
-                &group.title.to_uppercase(),
+                &group.title,
                 x + t.row_padding,
                 y + 2.0,
-                t.subtitle_size - 1.5,
+                12.0,
                 Weight::Bold,
                 t.window_dim,
             );
@@ -451,7 +451,7 @@ fn page(
         if !group.description.is_empty() {
             p.label_v(
                 &group.description,
-                x + 4.0,
+                x + t.row_padding,
                 y + 8.0,
                 col_w,
                 t.subtitle_size,
@@ -466,8 +466,10 @@ fn page(
         }
         let heights: Vec<f32> = rows.iter().map(|r| row_height(ui, r, t, col_w)).collect();
         let card_h: f32 = heights.iter().sum();
-        p.canvas
-            .rounded_rect(x, y, col_w, card_h, t.card_radius, t.card_background);
+        if boxed(t) {
+            p.canvas
+                .rounded_rect(x, y, col_w, card_h, t.card_radius, t.card_background);
+        }
         let mut ry = y;
         let count = rows.len();
         for (i, (row, rh)) in rows.into_iter().zip(heights).enumerate() {
@@ -496,12 +498,18 @@ fn page(
     if has_advanced {
         let rect = Rect::new(x, y, col_w, t.row_height);
         let hovered = hover(a, ui, Target::Advanced);
-        p.canvas
-            .rounded_rect(x, y, col_w, rect.h, t.card_radius, t.card_background);
+        let radius = if boxed(t) {
+            t.card_radius
+        } else {
+            t.button_radius
+        };
+        if boxed(t) {
+            p.canvas
+                .rounded_rect(x, y, col_w, rect.h, radius, t.card_background);
+        }
         if hovered > 0.0 {
             let fill = t.hover.with_alpha(t.hover.a * hovered);
-            p.canvas
-                .rounded_rect(x, y, col_w, rect.h, t.card_radius, fill);
+            p.canvas.rounded_rect(x, y, col_w, rect.h, radius, fill);
         }
         p.label_v(
             "Advanced settings",
@@ -595,7 +603,11 @@ fn paint_row(
     } else {
         0.0
     };
-    if row_hover > 0.0 {
+    if row_hover > 0.0 && !boxed(t) {
+        let Rect { x, y, w, h } = rect;
+        let fill = t.hover.with_alpha(t.hover.a * row_hover);
+        p.canvas.rounded_rect(x, y, w, h, t.button_radius, fill);
+    } else if row_hover > 0.0 {
         // Opaque, so squaring off the corners inside the card can overdraw.
         let color = over(
             over(t.window_background, t.card_background),
@@ -1283,6 +1295,71 @@ mod tests {
                 .unwrap();
         }
         painted
+    }
+
+    /// `CNDE_PREVIEW=out.png CNDE_PREVIEW_PAGE=wifi|appearance|power|displays
+    /// CNDE_PREVIEW_THEME=quiet|quiet-light|light` renders a page to a PNG.
+    #[test]
+    #[ignore]
+    fn preview() {
+        let Some(path) = std::env::var_os("CNDE_PREVIEW") else {
+            return;
+        };
+        let name = std::env::var("CNDE_PREVIEW_PAGE").unwrap_or_default();
+        let page = Page::ALL
+            .into_iter()
+            .find(|p| format!("{p:?}").eq_ignore_ascii_case(&name))
+            .unwrap_or(Page::Appearance);
+        let mut ui = ui(page);
+        ui.hover = Some(Target::Page(Page::Bluetooth));
+        if page == Page::Wifi {
+            use crate::wifi::{Backend, Network, Security, State};
+            let network = |ssid: &str, signal, security, known, connected| Network {
+                ssid: ssid.into(),
+                signal,
+                security,
+                known,
+                connected,
+                in_range: signal > 0,
+                autoconnect: known,
+            };
+            ui.wifi = Some(State {
+                backend: Backend::NetworkManager,
+                has_device: true,
+                enabled: true,
+                networks: vec![
+                    network("Home", 82, Security::PskSae, true, true),
+                    network("Cafe Guest", 55, Security::Open, false, false),
+                    network("Neighbour 5G", 30, Security::Sae, false, false),
+                ],
+                connecting: None,
+                error: None,
+                details: None,
+            });
+        }
+        if let Ok(v) = std::env::var("CNDE_PREVIEW_SCROLL") {
+            ui.scroll = v.parse().unwrap_or(0.0);
+        }
+        let (palette, scheme) = match std::env::var("CNDE_PREVIEW_THEME").as_deref() {
+            Ok("quiet-light") => (cnde_config::Palette::Quiet, cnde_config::ColorScheme::Light),
+            Ok("light") => (
+                cnde_config::Palette::Adwaita,
+                cnde_config::ColorScheme::Light,
+            ),
+            Ok("adwaita") => (
+                cnde_config::Palette::Adwaita,
+                cnde_config::ColorScheme::Dark,
+            ),
+            Ok("dusk") => (cnde_config::Palette::Cnde, cnde_config::ColorScheme::Dark),
+            _ => (cnde_config::Palette::Quiet, cnde_config::ColorScheme::Dark),
+        };
+        ui.config.appearance.palette = palette;
+        ui.config.appearance.color_scheme = scheme;
+        let dir = std::path::Path::new(&path).parent().unwrap().to_path_buf();
+        let stem = std::path::Path::new(&path).file_stem().unwrap().to_owned();
+        // render() saves into CNDE_SNAPSHOTS.
+        unsafe { std::env::set_var("CNDE_SNAPSHOTS", &dir) };
+        render(&ui, stem.to_str().unwrap());
     }
 
     #[test]
