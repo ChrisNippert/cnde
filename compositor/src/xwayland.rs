@@ -312,3 +312,20 @@ impl State {
         }
     }
 }
+
+/// Whether `surface` belongs to an X11 window (it comes through satellite).
+pub fn is_x11(
+    dh: &smithay::reexports::wayland_server::DisplayHandle,
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> bool {
+    use smithay::reexports::wayland_server::Resource;
+    let Ok(client) = dh.get_client(surface.id()) else {
+        return false;
+    };
+    let Ok(creds) = client.get_credentials(dh) else {
+        return false;
+    };
+    // The kernel cuts names to 15 bytes: "xwayland-satell".
+    std::fs::read_to_string(format!("/proc/{}/comm", creds.pid))
+        .is_ok_and(|name| name.trim_end().starts_with("xwayland-sat"))
+}

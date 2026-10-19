@@ -247,6 +247,14 @@ impl State {
         {
             return;
         }
+        // Only X11 windows: that's where games do "borderless fullscreen".
+        // A Wayland app drawing its own title bar can open monitor-sized
+        // and must stay a window.
+        if !window.toplevel().is_some_and(|t| {
+            crate::xwayland::is_x11(&self.display_handle, t.wl_surface())
+        }) {
+            return;
+        }
         let Some(output) = self.output_for(window) else {
             return;
         };
