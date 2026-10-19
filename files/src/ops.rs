@@ -332,6 +332,7 @@ fn on_path(name: &str) -> bool {
 /// is installed.
 pub(crate) fn terminal_argv() -> Option<Vec<String>> {
     let mut candidates: Vec<Vec<String>> = Vec::new();
+    candidates.extend(configured_terminal());
     if let Ok(term) = std::env::var("TERMINAL") {
         candidates.push(term.split_whitespace().map(String::from).collect());
     }
@@ -339,6 +340,20 @@ pub(crate) fn terminal_argv() -> Option<Vec<String>> {
     candidates
         .into_iter()
         .find(|a| a.first().is_some_and(|c| on_path(c)))
+}
+
+/// The command of the terminal chosen in Settings (`apps.terminal`).
+fn configured_terminal() -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(cnde_config::default_path()?).ok()?;
+    let id = cnde_config::Config::parse(&text).ok()?.apps.terminal;
+    let env = cnde_apps::Env::from_env();
+    let index = cnde_apps::Index::build(env);
+    let app = index.apps.iter().find(|a| a.id == id)?;
+    let argv: Vec<String> = cnde_apps::split_exec(&app.exec)
+        .into_iter()
+        .filter(|w| !w.starts_with('%'))
+        .collect();
+    (!argv.is_empty()).then_some(argv)
 }
 
 /// `command` run inside the terminal `term`.

@@ -181,3 +181,10 @@
 # window buttons (and Ctrl+scroll, Ctrl+plus/minus) changes them.
 # grid_icon_size = 48        # 48 to 192
 # list_icon_size = 18        # 16 to 48
+
+[apps]
+# Programs without a MIME type. Settings > Default Apps changes these (and
+# the file associations in ~/.config/mimeapps.list).
+# The terminal for Super+Enter, "Open in Terminal" and terminal apps, as a
+# desktop file ID. "" looks for $TERMINAL, then common terminals.
+# terminal = "foot.desktop"

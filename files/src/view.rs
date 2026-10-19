@@ -1722,6 +1722,7 @@ mod tests {
                 exec: name.into(),
                 icon: None,
                 mimes: vec![],
+                categories: vec![],
                 terminal: false,
                 no_display: false,
                 path: PathBuf::new(),

@@ -32,10 +32,15 @@ pub struct ClientEnv {
     pub x11_display: Option<String>,
 }
 
-pub fn spawn_terminal(env: &ClientEnv) {
+/// `terminal` is `apps.terminal` (a desktop file ID, or "") and goes first.
+pub fn spawn_terminal(env: &ClientEnv, terminal: &str) {
     let env = env.clone();
+    let terminal = terminal.to_string();
     thread::spawn(move || {
         let mut candidates: Vec<Vec<String>> = Vec::new();
+        if let Some(exec) = desktop_exec_by_id(&terminal) {
+            candidates.push(exec);
+        }
         if let Ok(term) = std::env::var("TERMINAL") {
             candidates.push(split_command_line(&term));
         }
@@ -176,6 +181,18 @@ fn default_browser_exec() -> Option<Vec<String>> {
         .find(|p| p.is_file())?;
     let contents = std::fs::read_to_string(path).ok()?;
     parse_desktop_exec(&contents)
+}
+
+/// The command of the desktop file `id` (`foot.desktop`), if installed.
+fn desktop_exec_by_id(id: &str) -> Option<Vec<String>> {
+    if id.is_empty() {
+        return None;
+    }
+    let path = application_dirs()
+        .into_iter()
+        .map(|dir| dir.join(id))
+        .find(|p| p.is_file())?;
+    parse_desktop_exec(&std::fs::read_to_string(path).ok()?)
 }
 
 fn application_dirs() -> Vec<PathBuf> {

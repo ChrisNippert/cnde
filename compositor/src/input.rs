@@ -318,7 +318,7 @@ impl State {
         match action {
             Action::Lock => self.lock_screen(),
             Action::Quit => self.loop_signal.stop(),
-            Action::SpawnTerminal => spawn::spawn_terminal(&self.client_env()),
+            Action::SpawnTerminal => spawn::spawn_terminal(&self.client_env(), &self.config.apps.terminal),
             Action::SpawnBrowser => spawn::spawn_browser(&self.client_env()),
             Action::CloseWindow => self.close_focused(),
             // On a tiling workspace the arrows move focus between tiles.

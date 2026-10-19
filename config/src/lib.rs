@@ -49,6 +49,8 @@ pub struct Config {
     pub notifications: Notifications,
     /// The file manager.
     pub files: Files,
+    /// Which program does what.
+    pub apps: Apps,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -376,6 +378,16 @@ impl Default for Animations {
     fn default() -> Self {
         Self { speed: 1.0 }
     }
+}
+
+/// Default programs that have no MIME type of their own. (The rest are in
+/// `mimeapps.list`.)
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Apps {
+    /// The terminal emulator, as a desktop file ID (`foot.desktop`); ""
+    /// looks for one (`$TERMINAL`, then common ones).
+    pub terminal: String,
 }
 
 /// The file manager's icon sizes, in logical pixels.
@@ -869,6 +881,12 @@ impl Config {
                 "keyboard repeat values can't be negative".into(),
             ));
         }
+        let term = &self.apps.terminal;
+        if !term.is_empty() && (!term.ends_with(".desktop") || term.contains('/')) {
+            return Err(Error::Invalid(format!(
+                "apps.terminal must be a desktop file ID like \"foot.desktop\", got \"{term}\""
+            )));
+        }
         let panel = &self.panel;
         for (name, color) in [
             ("panel.background", &panel.background),
@@ -970,6 +988,15 @@ mod tests {
         assert_eq!((c.files.grid_icon_size, c.files.list_icon_size), (128, 32));
         assert!(Config::parse("[files]\ngrid_icon_size = 400\n").is_err());
         assert!(Config::parse("[files]\nlist_icon_size = 8\n").is_err());
+    }
+
+    #[test]
+    fn apps_terminal_is_validated() {
+        let c = Config::parse("[apps]\nterminal = \"foot.desktop\"\n").unwrap();
+        assert_eq!(c.apps.terminal, "foot.desktop");
+        assert_eq!(Config::default().apps.terminal, "");
+        assert!(Config::parse("[apps]\nterminal = \"foot\"\n").is_err());
+        assert!(Config::parse("[apps]\nterminal = \"/usr/bin/foot.desktop\"\n").is_err());
     }
 
     #[test]

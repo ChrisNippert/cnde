@@ -24,6 +24,8 @@ pub struct App {
     pub exec: String,
     pub icon: Option<String>,
     pub mimes: Vec<String>,
+    /// The `Categories`, e.g. `TerminalEmulator`.
+    pub categories: Vec<String>,
     pub terminal: bool,
     pub no_display: bool,
     pub path: PathBuf,
@@ -66,6 +68,15 @@ pub fn parse_desktop(text: &str, id: &str, path: &Path) -> Option<App> {
             .map(|i| i.to_string()),
         mimes: kv
             .get("MimeType")
+            .map(|m| {
+                m.split(';')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        categories: kv
+            .get("Categories")
             .map(|m| {
                 m.split(';')
                     .filter(|s| !s.is_empty())
@@ -244,10 +255,17 @@ pub fn with_default(text: &str, mime: &str, id: &str) -> String {
 /// keeping everything else in the file. Written to a temp file and renamed
 /// (through a symlink, if the list is one).
 pub fn set_default(env: &Env, mime: &str, id: &str) -> io::Result<()> {
+    set_defaults(env, &[mime], id)
+}
+
+/// [`set_default`] for several types, in one write.
+pub fn set_defaults(env: &Env, mimes: &[&str], id: &str) -> io::Result<()> {
     let path = env.config_home.join("mimeapps.list");
     let target = fs::canonicalize(&path).unwrap_or(path);
     let old = fs::read_to_string(&target).unwrap_or_default();
-    let new = with_default(&old, mime, id);
+    let new = mimes
+        .iter()
+        .fold(old, |text, mime| with_default(&text, mime, id));
     if let Some(dir) = target.parent() {
         fs::create_dir_all(dir)?;
     }
@@ -522,6 +540,7 @@ mod tests {
             name: name.into(),
             exec: exec.into(),
             icon: Some("ico".into()),
+            categories: vec![],
             mimes: mimes.iter().map(|m| m.to_string()).collect(),
             terminal: false,
             no_display: false,
@@ -735,6 +754,29 @@ mod tests {
         assert_eq!(l.added["a/b"], ["c.desktop"]);
         // No temp files left behind.
         assert_eq!(fs::read_dir(&env.config_home).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn set_defaults_writes_several_types_at_once() {
+        let root = temp("many");
+        let env = Env {
+            config_home: root.clone(),
+            config_dirs: vec![],
+            data_home: root.join("d"),
+            data_dirs: vec![],
+        };
+        fs::write(
+            root.join("mimeapps.list"),
+            "[Added Associations]\nx/y=a.desktop;\n\n[Default Applications]\nimage/png=old.desktop;\n",
+        )
+        .unwrap();
+        set_defaults(&env, &["image/png", "image/gif"], "new.desktop").unwrap();
+        let text = fs::read_to_string(root.join("mimeapps.list")).unwrap();
+        let lists = parse_mimeapps(&text);
+        assert_eq!(lists.default["image/png"], ["new.desktop", "old.desktop"]);
+        assert_eq!(lists.default["image/gif"], ["new.desktop"]);
+        assert_eq!(lists.added["x/y"], ["a.desktop"]);
         let _ = fs::remove_dir_all(&root);
     }
 
