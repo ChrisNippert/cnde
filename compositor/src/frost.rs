@@ -56,7 +56,8 @@ impl DockFrost {
         let dock_radius = if dock.extend && dock.position != cnde_config::DockPosition::Overview {
             0.0
         } else {
-            cnde_ipc::dock::RADIUS * config.appearance.roundness() as f64
+            // As the dock draws itself (the palette sets the shape).
+            cnde_ui::Theme::for_appearance(&config.appearance).dock_radius as f64
         };
         let mut wanted = Vec::new();
         if dock.background == cnde_config::DockBackground::Frosted {

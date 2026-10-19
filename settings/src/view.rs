@@ -1025,6 +1025,16 @@ fn wallpapers(
     let appearance = &ui.config.appearance;
     let dark = appearance.color_scheme == cnde_config::ColorScheme::Dark;
     let (top, bottom, label_color) = match (appearance.palette, dark) {
+        (cnde_config::Palette::Quiet, true) => (
+            Color::rgb(0x2e, 0x3d, 0x33),
+            Color::rgb(0x6b, 0x4f, 0x2b),
+            Color::rgb(0xff, 0xff, 0xff),
+        ),
+        (cnde_config::Palette::Quiet, false) => (
+            Color::rgb(0xd6, 0xe0, 0xd1),
+            Color::rgb(0xf2, 0xd6, 0xa3),
+            Color::rgb(0x1b, 0x1d, 0x1a),
+        ),
         (cnde_config::Palette::Cnde, true) => (
             Color::rgb(0x2b, 0x1a, 0x40),
             Color::rgb(0x4a, 0x26, 0x48),

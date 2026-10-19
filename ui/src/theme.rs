@@ -316,7 +316,7 @@ impl Theme {
             focus_ring: Color::rgba(0x35, 0x84, 0xe4, 0.6),
             popover_background: Color::rgb(0x38, 0x38, 0x3c),
             popover_radius: 12.0,
-            window_radius: cnde_config::Appearance::CORNER_RADIUS as f32,
+            window_radius: 12.0,
             menu_radius: 14.0,
             // cnde_ipc::dock::RADIUS: the compositor frosts behind it.
             dock_radius: 24.0,
@@ -413,6 +413,8 @@ impl Theme {
         let dark = appearance.color_scheme == cnde_config::ColorScheme::Dark;
         match (appearance.palette, dark) {
             (cnde_config::Palette::Adwaita, dark) => Self::for_dark(dark),
+            (cnde_config::Palette::Quiet, true) => Self::quiet_dark(),
+            (cnde_config::Palette::Quiet, false) => Self::quiet_light(),
             (cnde_config::Palette::Cnde, true) => Self::dusk(),
             (cnde_config::Palette::Cnde, false) => Self::blossom(),
             (cnde_config::Palette::Custom, dark) => {
@@ -514,6 +516,112 @@ impl Theme {
                 on_accent,
                 ..Self::light()
             }
+        }
+    }
+
+    /// Quiet, dark: warm charcoal with a faint sage cast, soft white text
+    /// and an amber accent. No cards: sections are labels and thin rules.
+    pub fn quiet_dark() -> Self {
+        let text = |a: f32| Color::rgba(0xee, 0xf0, 0xec, a);
+        let amber = Color::rgb(0xe3, 0xa9, 0x5e);
+        let on_amber = Color::rgb(0x1a, 0x14, 0x0b);
+        let glass = Color::rgba(0x22, 0x25, 0x23, 0.96);
+        Self {
+            panel_background: Color::rgb(0x1a, 0x1d, 0x1b),
+            panel_foreground: text(1.0),
+            panel_button_hover: text(0.10),
+            panel_button_active: text(0.18),
+            qs_background: glass,
+            qs_tile: text(0.0),
+            qs_toggle_off: text(0.09),
+            qs_toggle_on: amber,
+            qs_slider_track: text(0.09),
+            qs_slider_fill: text(0.92),
+            qs_on_fill: Color::rgb(0x1f, 0x22, 0x20),
+            qs_dim: text(0.6),
+            search_background: glass,
+            search_selected: text(0.09),
+            window_background: Color::rgb(0x1f, 0x22, 0x20),
+            window_sidebar: Color::rgb(0x26, 0x2a, 0x27),
+            window_text: text(1.0),
+            window_dim: text(0.6),
+            sidebar_selected: amber,
+            hover: text(0.06),
+            card_background: text(0.0),
+            card_separator: text(0.08),
+            switch_off: text(0.16),
+            button_background: text(0.08),
+            button_hover: text(0.13),
+            entry_background: text(0.07),
+            focus_ring: amber.with_alpha(0.6),
+            popover_background: Color::rgb(0x2a, 0x2e, 0x2b),
+            error: Color::rgb(0xff, 0x8a, 0x7a),
+            accent: amber,
+            popup_text: text(1.0),
+            on_accent: on_amber,
+            ..Self::dark().quiet_shapes()
+        }
+    }
+
+    /// Quiet, light: warm off-white, near-black ink, a deeper amber.
+    pub fn quiet_light() -> Self {
+        let ink = |a: f32| Color::rgba(0x1b, 0x1d, 0x1a, a);
+        let amber = Color::rgb(0xb5, 0x6f, 0x1c);
+        let paper = Color::rgba(0xf7, 0xf7, 0xf4, 0.97);
+        Self {
+            panel_background: Color::rgb(0xf4, 0xf5, 0xf1),
+            panel_foreground: ink(1.0),
+            panel_button_hover: ink(0.07),
+            panel_button_active: ink(0.12),
+            qs_background: paper,
+            qs_tile: ink(0.0),
+            qs_toggle_off: ink(0.06),
+            qs_toggle_on: amber,
+            qs_slider_track: ink(0.08),
+            qs_slider_fill: amber,
+            qs_on_fill: Color::rgb(0xff, 0xff, 0xff),
+            qs_dim: ink(0.58),
+            search_background: paper,
+            search_selected: ink(0.07),
+            popup_text: ink(1.0),
+            window_background: Color::rgb(0xfb, 0xfb, 0xf9),
+            window_sidebar: Color::rgb(0xef, 0xf1, 0xec),
+            window_text: ink(1.0),
+            window_dim: ink(0.58),
+            sidebar_selected: amber,
+            hover: ink(0.045),
+            card_background: ink(0.0),
+            card_separator: ink(0.08),
+            switch_off: ink(0.14),
+            button_background: ink(0.06),
+            button_hover: ink(0.10),
+            entry_background: ink(0.05),
+            focus_ring: amber.with_alpha(0.6),
+            popover_background: Color::rgb(0xff, 0xff, 0xfd),
+            error: Color::rgb(0xb4, 0x23, 0x18),
+            accent: amber,
+            on_accent: Color::rgb(0xff, 0xff, 0xff),
+            ..Self::light().quiet_shapes()
+        }
+    }
+
+    /// Quiet's sizes and corners (at the default roundness): tighter than
+    /// Adwaita's, so the larger corner setting still reads as calm.
+    fn quiet_shapes(self) -> Self {
+        Self {
+            panel_radius: 0.0,
+            panel_shadow: 0,
+            qs_radius: 18.0,
+            qs_tile_radius: 14.0,
+            qs_padding: 14.0,
+            search_results_radius: 18.0,
+            search_row_radius: 10.0,
+            card_radius: 10.0,
+            button_radius: 8.0,
+            popover_radius: 12.0,
+            menu_radius: 12.0,
+            dock_radius: 16.0,
+            ..self
         }
     }
 

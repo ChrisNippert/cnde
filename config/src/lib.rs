@@ -210,11 +210,13 @@ pub struct Appearance {
 
 impl Appearance {
     /// The default corner radius.
-    pub const CORNER_RADIUS: u32 = 12;
+    pub const CORNER_RADIUS: u32 = 10;
+    /// The radius the built-in shapes are drawn for.
+    const DESIGN_RADIUS: f32 = 12.0;
 
-    /// How much rounder than the default: multiply a built-in radius by it.
+    /// How much rounder than designed: multiply a built-in radius by it.
     pub fn roundness(&self) -> f32 {
-        self.corner_radius as f32 / Self::CORNER_RADIUS as f32
+        self.corner_radius as f32 / Self::DESIGN_RADIUS
     }
 }
 
@@ -236,9 +238,11 @@ impl Default for Appearance {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Palette {
+    /// Warm charcoal or off-white with an amber accent; no cards.
+    #[default]
+    Quiet,
     /// Dusk (deep plum, pastel pink) when dark, Blossom (blush, rose)
     /// when light.
-    #[default]
     Cnde,
     /// libadwaita's greys and blue.
     Adwaita,

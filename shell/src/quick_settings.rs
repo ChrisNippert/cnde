@@ -1568,7 +1568,13 @@ mod tests {
         let Some(path) = std::env::var_os("CNDE_QS_PREVIEW") else {
             return;
         };
-        let theme = Theme::dark();
+        // CNDE_QS_THEME=quiet / quiet-light / light picks the palette.
+        let theme = match std::env::var("CNDE_QS_THEME").as_deref() {
+            Ok("quiet") => Theme::quiet_dark(),
+            Ok("quiet-light") => Theme::quiet_light(),
+            Ok("light") => Theme::light(),
+            _ => Theme::dark(),
+        };
         let status = Status {
             battery: Some(crate::status::Battery {
                 percent: 87.0,

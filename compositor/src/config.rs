@@ -226,6 +226,7 @@ fn publish_window_buttons(buttons: cnde_config::WindowButtons) {
 /// GTK apps (GNOME 47 and later) take their accent from this.
 fn publish_accent(appearance: &cnde_config::Appearance) {
     let value = match appearance.palette {
+        cnde_config::Palette::Quiet => "orange",
         cnde_config::Palette::Cnde => "pink",
         cnde_config::Palette::Adwaita => "blue",
         // GNOME's named accent nearest the chosen one.

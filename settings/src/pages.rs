@@ -1141,6 +1141,7 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
     };
     let palette = |v: cnde_config::Palette| {
         s(match v {
+            cnde_config::Palette::Quiet => "quiet",
             cnde_config::Palette::Cnde => "cnde",
             cnde_config::Palette::Adwaita => "adwaita",
             cnde_config::Palette::Custom => "custom",
@@ -1174,7 +1175,8 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     "appearance.palette",
                     "Colours",
                     Control::Segmented(choices(&[
-                        ("cnde", s("cnde")),
+                        ("Quiet", s("quiet")),
+                        ("Dusk", s("cnde")),
                         ("GNOME", s("adwaita")),
                         ("Custom", s("custom")),
                     ])),
@@ -1183,7 +1185,9 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .sub(match c.appearance.palette {
                     cnde_config::Palette::Custom => "Worked out from the two colours below",
-                    _ => "cnde: plum and pink when dark, blush and rose when light",
+                    cnde_config::Palette::Quiet => "Warm greys with an amber accent",
+                    cnde_config::Palette::Cnde => "Plum and pink when dark, blush and rose when light",
+                    cnde_config::Palette::Adwaita => "GNOME's greys and blue",
                 }),
                 Row::new(
                     "appearance.titlebars",
