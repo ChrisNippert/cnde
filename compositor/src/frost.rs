@@ -1,5 +1,5 @@
-//! Frosted glass behind the dock (`dock.background = "frosted"`) and the
-//! top bar (`panel.frosted`): the
+//! Frosted glass behind the dock and the top bar (`appearance.material`,
+//! or `dock.background` and `panel.frosted` for just one): the
 //! blurred wallpaper, clipped to the dock's rounded shape, drawn just under
 //! it. The dock itself paints only a light tint on top.
 //!
@@ -120,11 +120,11 @@ impl DockFrost {
         let dock_radius_full = cnde_ui::Theme::for_appearance(&config.appearance).dock_radius as f64;
         let dock_radius = dock_radius_full;
         let mut wanted = Vec::new();
-        if dock.background == cnde_config::DockBackground::Frosted {
+        if config.dock_frosted() {
             wanted.push((cnde_ipc::dock::NAMESPACE, dock_radius, None));
         }
         // A clear bar shows the wallpaper itself, not frost.
-        if config.panel.frosted && !config.panel.clear {
+        if config.panel_frosted() && !config.panel.clear {
             // Just the bar, not the shadow a rounded one casts below it.
             wanted.push(("cnde-panel", 0.0, Some(config.panel.height as i32)));
         }

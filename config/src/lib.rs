@@ -382,7 +382,8 @@ pub struct Panel {
     /// Rounded bottom corners and a soft shadow; off, a flat strip.
     pub rounded: bool,
     /// Translucent over the blurred wallpaper (until a window touches it).
-    pub frosted: bool,
+    /// Unset follows `appearance.material`.
+    pub frosted: Option<bool>,
     /// Attached to the top edge, floating clear of it, or floating until
     /// a window touches it.
     pub mode: BarMode,
@@ -412,7 +413,7 @@ impl Default for Panel {
             all_monitors: false,
             height: 32,
             rounded: false,
-            frosted: true,
+            frosted: None,
             mode: BarMode::Auto,
             clear: false,
             background: String::new(),
@@ -469,8 +470,8 @@ pub struct Dock {
     pub launcher: LauncherSide,
     /// Space between the app grid button and the nearest icon.
     pub launcher_gap: f32,
-    /// What's behind the icons.
-    pub background: DockBackground,
+    /// What's behind the icons. Unset follows `appearance.material`.
+    pub background: Option<DockBackground>,
     /// On a screen edge, while attached: stretch across the whole edge
     /// instead of being sized to its icons.
     pub extend: bool,
@@ -506,7 +507,7 @@ impl Default for Dock {
             padding: 8.0,
             launcher: LauncherSide::End,
             launcher_gap: 12.0,
-            background: DockBackground::Solid,
+            background: None,
             extend: false,
             mode: BarMode::Auto,
             align: DockAlign::Center,
@@ -722,6 +723,21 @@ pub fn default_path() -> Option<PathBuf> {
 }
 
 impl Config {
+    /// Whether the top bar is frosted: its own setting, else the material.
+    pub fn panel_frosted(&self) -> bool {
+        self.panel
+            .frosted
+            .unwrap_or(self.appearance.material == Material::Frosted)
+    }
+
+    /// Whether the dock is frosted: its own setting, else the material.
+    pub fn dock_frosted(&self) -> bool {
+        match self.dock.background {
+            Some(background) => background == DockBackground::Frosted,
+            None => self.appearance.material == Material::Frosted,
+        }
+    }
+
     pub fn parse(text: &str) -> Result<Self, Error> {
         let config: Config =
             toml::from_str(text).map_err(|err| Error::Parse(PathBuf::from("config"), err))?;

@@ -43,7 +43,7 @@ pub fn theme_from(config: &Config, screen: Option<Color>) -> Theme {
     theme.panel_background = color(&panel.background, theme.panel_background);
     // Frosted: the compositor blurs the wallpaper behind; tint it lightly
     // (a colour set in the config keeps its own transparency).
-    if panel.frosted && panel.background.is_empty() {
+    if config.panel_frosted() && panel.background.is_empty() {
         theme.panel_background = theme.panel_background.with_alpha(0.45);
     }
     // The shell's popups (quick settings, the calendar, menus) get frost

@@ -1262,7 +1262,7 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     material(c.appearance.material),
                     material(d.appearance.material),
                 )
-                .sub("Menus, quick settings and window sidebars; solid when maximized or over a window"),
+                .sub("The top bar, dock, menus and this window; solid over a window"),
             ],
         ),
         group(
@@ -2100,14 +2100,6 @@ fn panel_look(c: &Config, d: &Config) -> Vec<Row> {
     let (p, dp) = (&c.panel, &d.panel);
     vec![
         Row::new(
-            "panel.frosted",
-            "Top bar frosted",
-            Control::switch(),
-            Value::Bool(p.frosted),
-            Value::Bool(dp.frosted),
-        )
-        .sub("Translucent over the blurred wallpaper; solid while a window touches it"),
-        Row::new(
             "panel.clear",
             "Top bar clear while floating",
             Control::switch(),
@@ -2147,22 +2139,6 @@ fn panel_look(c: &Config, d: &Config) -> Vec<Row> {
 /// The dock's colour and material rows, shown on Appearance.
 fn dock_look(c: &Config, d: &Config) -> Vec<Row> {
     let mut rows = Vec::new();
-    let background = |v: cnde_config::DockBackground| {
-        s(match v {
-            cnde_config::DockBackground::Solid => "solid",
-            cnde_config::DockBackground::Frosted => "frosted",
-        })
-    };
-    rows.push(
-        Row::new(
-            "dock.background",
-            "Dock background",
-            Control::Segmented(choices(&[("Solid", s("solid")), ("Frosted", s("frosted"))])),
-            background(c.dock.background),
-            background(d.dock.background),
-        )
-        .sub("Frosted shows the wallpaper through, blurred"),
-    );
     let adaptive = |v: cnde_config::DockAdaptive| {
         s(match v {
             cnde_config::DockAdaptive::Bar => "bar",
@@ -3033,7 +3009,7 @@ mod tests {
             .collect();
         assert!(
             keys.iter()
-                .all(|r| r.title != "Top bar frosted" && r.title != "Dock background")
+                .all(|r| r.title != "Top bar clear while floating" && r.title != "Dock colour")
         );
         let titles = |c: &Config| -> Vec<String> {
             appearance(c, &d)
@@ -3043,7 +3019,7 @@ mod tests {
                 .collect()
         };
         let on = titles(&Config::default());
-        assert!(on.iter().any(|t| t == "Top bar frosted"));
+        assert!(on.iter().any(|t| t == "Top bar clear while floating"));
         // The dock's adaptive colour shows only with that palette.
         assert!(!on.iter().any(|t| t == "Dock colour"));
         let mut adaptive = Config::default();

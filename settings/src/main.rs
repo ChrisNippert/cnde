@@ -777,6 +777,11 @@ impl App {
                     file.remove("appearance.adaptive_color");
                     file.remove("appearance.match_windows");
                 }
+                // One material for everything: drop the old per-piece ones.
+                if *key == pages::Key::Path("appearance.material") {
+                    file.remove("panel.frosted");
+                    file.remove("dock.background");
+                }
             }
             file.save()
         });

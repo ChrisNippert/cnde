@@ -6,7 +6,7 @@
 //! one that isn't launches it, and a middle click always opens a new one.
 //! The window list and focusing go through the compositor (see `ipc`).
 
-use cnde_config::{BarMode, DockAlign, DockBackground, DockPosition};
+use cnde_config::{BarMode, DockAlign, DockPosition};
 use cnde_ipc::WindowInfo;
 use cnde_ui::{Canvas, Color, Icons, Theme};
 use smithay_client_toolkit::{
@@ -1280,11 +1280,6 @@ fn spread(mut layout: Layout, length: f32, vertical: bool, align: DockAlign) -> 
         layout.width = length;
     }
     layout
-}
-
-/// Whether `background` means the compositor frosts behind the dock.
-pub fn frosted(background: DockBackground) -> bool {
-    background == DockBackground::Frosted
 }
 
 /// The × on a pinned icon while editing: its top-right corner.

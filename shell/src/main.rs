@@ -856,7 +856,7 @@ impl App {
             if dock.edit.is_some() != self.dock_editing {
                 dock.edit = self.dock_editing.then(dock::DockEdit::default);
             }
-            dock.frosted = dock::frosted(self.config.dock.background);
+            dock.frosted = self.config.dock_frosted();
             dock.solid = touched;
             dock.tint = tint;
             dock.autohide = self.config.dock.visibility != cnde_config::DockVisibility::Always;
