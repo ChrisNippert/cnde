@@ -63,21 +63,30 @@ impl DockFrost {
         if dock.background == cnde_config::DockBackground::Frosted {
             wanted.push((cnde_ipc::dock::NAMESPACE, dock_radius, None));
         }
-        if config.panel.frosted {
+        // A clear bar shows the wallpaper itself, not frost.
+        if config.panel.frosted && !config.panel.clear {
             // Just the bar, not the shadow a rounded one casts below it.
             wanted.push(("cnde-panel", 0.0, Some(config.panel.height as i32)));
         }
         let mut elements = Vec::new();
-        for (namespace, radius, height) in wanted {
-            let area = {
+        for (namespace, mut radius, height) in wanted {
+            let layer = {
                 let map = layer_map_for_output(output);
                 map.layers()
                     .find(|l| l.namespace() == namespace)
-                    .and_then(|l| map.layer_geometry(l))
+                    .and_then(|l| Some((map.layer_geometry(l)?, l.cached_state().margin.top)))
             };
-            let Some(mut area) = area.filter(|a| !a.is_empty()) else {
+            let Some((mut area, margin)) = layer.filter(|(a, _)| !a.is_empty()) else {
                 continue;
             };
+            if namespace == "cnde-panel" && margin > 0 {
+                // Floating: its corners grow with its margin (see
+                // cnde_ipc::panel::GAP), as the shell draws them.
+                let float = (margin as f64 / cnde_ipc::panel::GAP as f64).min(1.0);
+                radius = cnde_ui::Theme::for_appearance(&config.appearance).panel_float_radius
+                    as f64
+                    * float;
+            }
             if let Some(height) = height {
                 area.size.h = area.size.h.min(height);
             }

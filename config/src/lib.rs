@@ -355,8 +355,14 @@ pub struct Panel {
     pub height: u32,
     /// Rounded bottom corners and a soft shadow; off, a flat strip.
     pub rounded: bool,
-    /// Translucent over the blurred wallpaper.
+    /// Translucent over the blurred wallpaper (until a window touches it).
     pub frosted: bool,
+    /// Attached to the top edge, floating clear of it, or floating until
+    /// a window touches it.
+    pub mode: BarMode,
+    /// While floating with nothing touching it: no background at all,
+    /// just the text and icons over the wallpaper.
+    pub clear: bool,
     /// "#rrggbb" or "#rrggbbaa"; empty follows the light/dark style.
     pub background: String,
     pub foreground: String,
@@ -380,7 +386,9 @@ impl Default for Panel {
             all_monitors: false,
             height: 32,
             rounded: false,
-            frosted: false,
+            frosted: true,
+            mode: BarMode::Auto,
+            clear: false,
             background: String::new(),
             foreground: String::new(),
             font_size: 14.0,
@@ -392,6 +400,19 @@ impl Default for Panel {
             button_padding: 10.0,
         }
     }
+}
+
+/// How the top bar (and the dock) sits against its screen edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BarMode {
+    /// Flush against the edge, full width.
+    Attached,
+    /// Clear of the edges, with rounded corners.
+    Floating,
+    /// Floating, attaching while a window touches it.
+    #[default]
+    Auto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

@@ -1087,6 +1087,8 @@ impl App {
                     .battery
                     .is_some_and(|b| b.is_low(self.config.power.low_battery)),
                 solid,
+                mode: self.config.panel.mode,
+                clear: self.config.panel.clear,
             },
         );
     }

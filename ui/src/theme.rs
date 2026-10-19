@@ -107,6 +107,8 @@ pub struct Theme {
     pub panel_height: u32,
     /// The bar's bottom corners (0: a flat strip, as in GNOME).
     pub panel_radius: f32,
+    /// A floating bar's corners.
+    pub panel_float_radius: f32,
     /// A soft shadow under the bar, logical pixels tall (0: none).
     pub panel_shadow: u32,
 
@@ -233,6 +235,7 @@ impl Theme {
             panel_foreground: Color::rgb(0xff, 0xff, 0xff),
             panel_height: 32,
             panel_radius: 14.0,
+            panel_float_radius: 10.0,
             panel_shadow: 8,
 
             workspace_dot: Color::rgba(0xff, 0xff, 0xff, 0.45),
@@ -393,6 +396,7 @@ impl Theme {
     pub fn rounded(mut self, k: f32) -> Self {
         for r in [
             &mut self.panel_radius,
+            &mut self.panel_float_radius,
             &mut self.qs_radius,
             &mut self.qs_tile_radius,
             &mut self.search_results_radius,

@@ -177,6 +177,14 @@ pub enum Request {
 /// The overview while the app grid shows: workspace thumbnails in a row
 /// under the search box, the grid below them. Shared so the compositor's
 /// thumbnails and the shell's grid fit together.
+/// The top bar, as the compositor needs to know it to frost behind it.
+pub mod panel {
+    /// How far a floating bar sits from the screen's edges, logical px.
+    /// Its layer margin is this times how far it has floated (0 to 1), so
+    /// the compositor can tell the bar's shape from the margin alone.
+    pub const GAP: i32 = 6;
+}
+
 /// The dock, as the compositor needs to know it to frost what's behind it.
 pub mod dock {
     /// The dock's layer-shell namespace.

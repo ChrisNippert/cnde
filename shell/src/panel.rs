@@ -3,8 +3,12 @@
 //! the centre, and the status icons on the right open quick settings.
 
 use chrono::Local;
-use cnde_config::ClockPosition;
-use cnde_ui::{Animator, Canvas, Color, Fonts, Icons, Theme, Weight, anim::SHORT};
+use cnde_config::{BarMode, ClockPosition};
+use cnde_ipc::panel::GAP as FLOAT_GAP;
+use cnde_ui::{
+    Animator, Canvas, Color, Fonts, Icons, Theme, Weight,
+    anim::{MEDIUM, SHORT},
+};
 use smithay_client_toolkit::{
     compositor::{CompositorState, FrameCallbackData},
     reexports::client::{
@@ -45,6 +49,9 @@ pub struct Draw<'a> {
     pub battery_low: bool,
     /// A window is against the bar: no see-through, whatever the style.
     pub solid: bool,
+    pub mode: BarMode,
+    /// No background while floating free.
+    pub clear: bool,
 }
 
 /// Editing the bar in place (from its right-click menu).
@@ -103,6 +110,11 @@ pub struct Panel {
     anim: Animator<(Button, bool)>,
     /// Fading to solid (1) when a window's against the bar, and back.
     solid_fade: Animator<()>,
+    /// How far it floats off the edge: 0 attached, 1 floating.
+    float: Animator<()>,
+    /// The layer margin last asked for: `FLOAT_GAP` times how far it floats.
+    margin: i32,
+    mode: BarMode,
     /// A frame callback is outstanding; draw when it fires.
     frame_pending: bool,
     dirty: bool,
@@ -147,8 +159,31 @@ impl Panel {
             done_region: None,
             anim: Animator::new(),
             solid_fade: Animator::new(),
+            float: Animator::new(),
+            margin: 0,
+            mode: BarMode::Attached,
             frame_pending: false,
             dirty: false,
+        }
+    }
+
+    /// The space kept free for the bar below its margin. Attached or auto,
+    /// margin plus zone is always the bar's height, so maximized windows
+    /// don't move while it floats off or snaps back; floating for good, a
+    /// gap is kept below it too.
+    fn exclusive_zone(&self) -> i32 {
+        match self.mode {
+            BarMode::Floating => self.height as i32 + 2 * FLOAT_GAP - self.margin,
+            BarMode::Attached | BarMode::Auto => self.height as i32 - self.margin,
+        }
+    }
+
+    fn apply_margin(&mut self, margin: i32, mode: BarMode) {
+        if margin != self.margin || mode != self.mode {
+            self.margin = margin;
+            self.mode = mode;
+            self.layer.set_margin(margin, margin, 0, margin);
+            self.layer.set_exclusive_zone(self.exclusive_zone());
         }
     }
 
@@ -160,7 +195,7 @@ impl Panel {
             self.shadow = theme.panel_shadow;
             self.layer
                 .set_size(0, theme.panel_height + theme.panel_shadow);
-            self.layer.set_exclusive_zone(theme.panel_height as i32);
+            self.layer.set_exclusive_zone(self.exclusive_zone());
             self.layer.commit();
         }
     }
@@ -233,7 +268,7 @@ impl Panel {
         if height != self.height {
             self.height = height;
             self.layer.set_size(0, height + self.shadow);
-            self.layer.set_exclusive_zone(height as i32);
+            self.layer.set_exclusive_zone(self.exclusive_zone());
             self.layer.commit();
         }
     }
@@ -306,6 +341,8 @@ impl Panel {
             battery_percent,
             battery_low,
             solid,
+            mode,
+            clear,
         } = ctx;
         if self.width == 0 {
             return; // not configured yet
@@ -317,9 +354,21 @@ impl Panel {
         self.dirty = false;
         self.anim.begin();
         self.solid_fade.begin();
+        self.float.begin();
+        let floats = match mode {
+            BarMode::Attached => false,
+            BarMode::Floating => true,
+            // Off the edge until a window touches it, while it's edited
+            // flush so its edge can be dragged.
+            BarMode::Auto => !solid,
+        } && self.edit.is_none();
+        let float = self.float.get((), if floats { 1.0 } else { 0.0 }, MEDIUM);
+        // Set with this frame's buffer: the compositor cuts the frost to
+        // the same shape in the same commit.
+        self.apply_margin((FLOAT_GAP as f32 * float).round() as i32, mode);
         let solid = self
             .solid_fade
-            .get((), if solid { 1.0 } else { 0.0 }, cnde_ui::anim::MEDIUM);
+            .get((), if solid { 1.0 } else { 0.0 }, MEDIUM);
         let scale = self.scale;
         let (w, h) = (
             self.width as i32 * scale,
@@ -338,8 +387,15 @@ impl Panel {
         let (width, _) = canvas.size();
         let height = self.height as f32;
         canvas.clear(Color::rgba(0, 0, 0, 0.0));
+        let background = {
+            let a = theme.panel_background.a;
+            // Clear: fades out as it floats off, back in when touched.
+            let a = if clear { a * (1.0 - float) } else { a };
+            theme.panel_background.with_alpha(a + (1.0 - a) * solid)
+        };
         // A soft shadow: rounded rects each a little taller and fainter.
-        for i in 1..=self.shadow {
+        let shadow = if float > 0.0 { 0 } else { self.shadow };
+        for i in 1..=shadow {
             let fade = 1.0 - i as f32 / (self.shadow + 1) as f32;
             canvas.rounded_rect(
                 0.0,
@@ -350,19 +406,23 @@ impl Panel {
                 Color::rgba(0, 0, 0, 0.07 * fade),
             );
         }
-        // The bar: square at the top edge, rounded at the bottom (its top
-        // corners are drawn off the surface).
-        canvas.rounded_rect(
-            0.0,
-            -self.radius,
-            width,
-            height + self.radius,
-            self.radius,
-            {
-                let a = theme.panel_background.a;
-                theme.panel_background.with_alpha(a + (1.0 - a) * solid)
-            },
-        );
+        if float > 0.0 {
+            // Floating: rounded all round, the corners growing as it
+            // leaves the edge.
+            let r = theme.panel_float_radius * float;
+            canvas.rounded_rect(0.0, 0.0, width, height, r, background);
+        } else {
+            // The bar: square at the top edge, rounded at the bottom (its
+            // top corners are drawn off the surface).
+            canvas.rounded_rect(
+                0.0,
+                -self.radius,
+                width,
+                height + self.radius,
+                self.radius,
+                background,
+            );
+        }
 
         // Activities: GNOME-style workspace dots, the active ones stretched
         // into pills. The whole cluster is one button.
@@ -576,7 +636,7 @@ impl Panel {
         surface.frame(qh, FrameCallbackData(surface.clone()));
         self.frame_pending = true;
         // A pill still fading: draw again next frame.
-        if self.anim.running() || self.solid_fade.running() {
+        if self.anim.running() || self.solid_fade.running() || self.float.running() {
             self.dirty = true;
         }
         self.layer.commit();
