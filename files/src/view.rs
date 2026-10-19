@@ -16,9 +16,10 @@ use crate::{
     folder::{Folder, Location},
     grid, info,
     model::{self, Drive, SortKey},
+    ops,
     pages::{self, Pages},
     search::{self, Search},
-    ops, transfer,
+    transfer, zoom,
 };
 
 pub const SIDE_W: f32 = 228.0;
@@ -60,6 +61,8 @@ pub enum Target {
     Mode(ViewMode),
     Info,
     Menu,
+    /// The icon size slider in the menu.
+    Zoom,
     Close,
     Minimize,
     Maximize,
@@ -93,6 +96,9 @@ pub struct Ui {
     pub location: Location,
     pub folder: Folder,
     pub mode: ViewMode,
+    /// Icon sizes of the grid and of the list.
+    pub grid_size: f32,
+    pub list_size: f32,
     pub info_panel: bool,
     pub drives: Vec<Drive>,
     pub trash: Option<u64>,
@@ -127,6 +133,8 @@ pub struct Painted {
     /// How many of the last hits are rows of the open context menu; while
     /// there is one, nothing else can be hit.
     pub menu_rows: usize,
+    /// The icon size slider of the open menu.
+    pub slider: Rect,
 }
 
 impl Painted {
@@ -217,8 +225,11 @@ pub fn list_w(ui: &Ui, w: f32) -> f32 {
 /// Items per row and a row's height, in a list area `list_w` wide.
 pub fn cells(ui: &Ui, list_w: f32) -> (usize, f32) {
     match ui.mode {
-        ViewMode::List => (1, ROW_H),
-        ViewMode::Grid => (grid::geo(list_w).cols, grid::TILE_H),
+        ViewMode::List => (1, zoom::row_h(ui.list_size)),
+        ViewMode::Grid => {
+            let g = grid::geo(list_w, ui.grid_size);
+            (g.cols, g.tile_h)
+        }
     }
 }
 
@@ -241,9 +252,10 @@ pub fn max_scroll(ui: &Ui, w: f32, h: f32) -> f32 {
 pub fn pos_at(ui: &Ui, list: Rect, point: (f64, f64)) -> Option<usize> {
     let n = ui.folder.visible.len();
     match ui.mode {
-        ViewMode::Grid => grid::pos_at(list, grid::geo(list.w), ui.scroll, n, point),
+        ViewMode::Grid => grid::pos_at(list, grid::geo(list.w, ui.grid_size), ui.scroll, n, point),
         ViewMode::List => {
-            let pos = ((point.1 as f32 - list.y - 4.0 + ui.scroll) / ROW_H).floor();
+            let row_h = zoom::row_h(ui.list_size);
+            let pos = ((point.1 as f32 - list.y - 4.0 + ui.scroll) / row_h).floor();
             (pos >= 0.0 && (pos as usize) < n).then_some(pos as usize)
         }
     }
@@ -546,7 +558,10 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
             .measure(error, size, Weight::Normal)
             .min(w - SIDE_W - 48.0);
         let bw = tw + 32.0;
-        let (bx, by) = (SIDE_W + (w - SIDE_W - bw) / 2.0, h - 24.0 - 40.0 - transfer::strip_room(ui));
+        let (bx, by) = (
+            SIDE_W + (w - SIDE_W - bw) / 2.0,
+            h - 24.0 - 40.0 - transfer::strip_room(ui),
+        );
         p.canvas
             .rounded_rect(bx, by, bw, 40.0, 20.0, Color::rgba(0x10, 0x10, 0x12, 0.96));
         p.label_v(
@@ -560,6 +575,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         );
     }
     transfer::paint_strip(ui, &mut p, &c, &mut out, w, h);
+    crate::mainmenu::paint(ui, &mut p, &mut out, w, h);
     ops::paint_menu(ui, &mut p, &mut out, w, h);
     out
 }
@@ -581,6 +597,9 @@ fn rows(
     let rx = list.x + LIST_PAD;
     let rw = w - rx - LIST_PAD_RIGHT;
     let cols = columns(rx + 10.0, rw - 20.0);
+    let icon = ui.list_size;
+    let row_h = zoom::row_h(icon);
+    let name_off = zoom::name_offset(icon);
     let name_size = t.font_size - 0.5;
     let small = t.font_size - 1.5;
     cache.sync(folder.version, scale, cols[0].1, name_size);
@@ -589,34 +608,34 @@ fn rows(
         return;
     }
 
-    let first = ((ui.scroll - 4.0) / ROW_H).floor().max(0.0) as usize;
-    let last = (((ui.scroll + list.h) / ROW_H).ceil() as usize + 1).min(folder.visible.len());
+    let first = ((ui.scroll - 4.0) / row_h).floor().max(0.0) as usize;
+    let last = (((ui.scroll + list.h) / row_h).ceil() as usize + 1).min(folder.visible.len());
     let now = cache.now.unwrap_or_else(SystemTime::now);
     for pos in first..last {
         let Some(entry) = folder.entry(pos) else {
             continue;
         };
         let index = folder.visible[pos];
-        let y = list.y + 4.0 + pos as f32 * ROW_H - ui.scroll;
-        if y + ROW_H < list.y - ROW_H || y > h {
+        let y = list.y + 4.0 + pos as f32 * row_h - ui.scroll;
+        if y + row_h < list.y - row_h || y > h {
             continue;
         }
         let selected = folder.is_selected(pos);
         if selected {
-            p.canvas.rounded_rect(rx, y, rw, ROW_H, 8.0, c.sel);
+            p.canvas.rounded_rect(rx, y, rw, row_h, 8.0, c.sel);
         } else if ui.hover_row == Some(pos) {
-            p.canvas.rounded_rect(rx, y, rw, ROW_H, 8.0, t.hover);
+            p.canvas.rounded_rect(rx, y, rw, row_h, 8.0, t.hover);
         }
         if ui.keyboard_focus && folder.cursor == Some(pos) {
             p.canvas
-                .stroke_rounded_rect(rx, y, rw, ROW_H, 8.0, 2.0, t.focus_ring);
+                .stroke_rounded_rect(rx, y, rw, row_h, 8.0, 2.0, t.focus_ring);
         }
         if ui.x.dnd.over == Some(crate::dnd::Over::Row(pos)) {
-            p.canvas.rounded_rect(rx, y, rw, ROW_H, 8.0, c.sel);
+            p.canvas.rounded_rect(rx, y, rw, row_h, 8.0, c.sel);
             p.canvas
-                .stroke_rounded_rect(rx, y, rw, ROW_H, 8.0, 2.0, t.accent);
+                .stroke_rounded_rect(rx, y, rw, row_h, 8.0, 2.0, t.accent);
         }
-        let cy = y + ROW_H / 2.0;
+        let cy = y + row_h / 2.0;
         let ink = c.ink;
         let icon_color = if entry.is_dir { c.fold } else { c.dim };
         let thumb = if entry.is_dir {
@@ -625,10 +644,16 @@ fn rows(
             crate::thumbs::get(&entry.path, entry.modified, crate::thumbs::NORMAL, true)
         };
         if let Some(pm) = thumb {
-            let bx = (cols[0].0, cy - 8.0, 20.0, 16.0);
-            crate::thumbs::draw(p.canvas, &pm, bx, 3.0);
+            let bx = (cols[0].0, cy - (icon - 2.0) / 2.0, icon + 2.0, icon - 2.0);
+            crate::thumbs::draw(p.canvas, &pm, bx, 3.0 + icon / 16.0);
         } else {
-            p.icon(icon_for(entry), cols[0].0 + 10.0, cy, 18.0, icon_color);
+            p.icon(
+                icon_for(entry),
+                cols[0].0 + (icon + 2.0) / 2.0,
+                cy,
+                icon,
+                icon_color,
+            );
         }
 
         let mut draw = |p: &mut Painter<'_, '_>,
@@ -653,16 +678,21 @@ fn rows(
             cache.map.insert(key, layout);
         };
         if ui.x.rename.as_ref().is_some_and(|r| r.name == entry.name) {
-            let rect = Rect::new(cols[0].0 + 20.0, y + 2.0, cols[0].1 - 20.0, ROW_H - 4.0);
+            let rect = Rect::new(
+                cols[0].0 + name_off - 8.0,
+                y + 2.0,
+                cols[0].1 - name_off + 8.0,
+                row_h - 4.0,
+            );
             ops::paint_rename(ui, p, c, rect);
         } else if ui.search.active() {
             search::paint_name(
                 p,
                 &ui.search.query,
                 &entry.name,
-                cols[0].0 + 28.0,
+                cols[0].0 + name_off,
                 cy,
-                cols[0].1 - 28.0,
+                cols[0].1 - name_off,
                 name_size,
                 ink,
                 c.fold,
@@ -672,8 +702,8 @@ fn rows(
                 p,
                 0,
                 &|| entry.name.clone(),
-                cols[0].0 + 28.0,
-                cols[0].1 - 28.0,
+                cols[0].0 + name_off,
+                cols[0].1 - name_off,
                 false,
                 name_size,
                 ink,
@@ -720,7 +750,7 @@ fn rows(
     }
 
     // A thin scroll indicator when there's more than fits.
-    let content = folder.visible.len() as f32 * ROW_H + 8.0;
+    let content = content_height(ui, list.w);
     if content > list.h {
         let track_h = list.h - 8.0;
         let thumb_h = (track_h * list.h / content).max(24.0);
@@ -1403,6 +1433,8 @@ mod tests {
         };
         Ui {
             config: Config::default(),
+            grid_size: 48.0,
+            list_size: 18.0,
             location: Location::Dir(path.to_path_buf()),
             folder,
             mode: ViewMode::List,
@@ -1452,11 +1484,20 @@ mod tests {
         let theme = Theme::for_appearance(&Config::default().appearance);
         let mut res = Res::new(theme, Icons::new());
         let mut pixels = vec![0u8; (w * h * 4) as usize];
-        for (frosted, grid) in [(false, false), (true, false), (false, true)] {
+        for (frosted, grid, size) in [
+            (false, false, 18.0),
+            (true, false, 18.0),
+            (false, true, 48.0),
+            (false, true, 192.0),
+            (false, false, 48.0),
+        ] {
             let mut ui = ui(Path::new("/x"));
             ui.frosted = frosted;
             if grid {
                 ui.mode = ViewMode::Grid;
+                ui.grid_size = size;
+            } else {
+                ui.list_size = size;
             }
             ui.folder.add(synthetic(10_000));
             let frames = 120;
@@ -1464,7 +1505,7 @@ mod tests {
             let mut worst = Duration::ZERO;
             for i in 0..frames {
                 ui.scroll = (i * 17) as f32;
-                ui.hover_row = Some(i % 30 + (ui.scroll / ROW_H) as usize);
+                ui.hover_row = Some(i % 30 + (ui.scroll / zoom::row_h(ui.list_size)) as usize);
                 let started = std::time::Instant::now();
                 let mut canvas = Canvas::new(&mut pixels, w, h, scale).unwrap();
                 paint(&ui, &mut res, &mut canvas);
@@ -1473,9 +1514,9 @@ mod tests {
                 worst = worst.max(took);
             }
             println!(
-                "10k entries{}{}: {:.2} ms a frame, worst {:.2} ms",
+                "10k entries{}{} {size}px: {:.2} ms a frame, worst {:.2} ms",
                 if frosted { " frosted" } else { "" },
-                if grid { " grid" } else { "" },
+                if grid { " grid" } else { " list" },
                 total.as_secs_f64() * 1000.0 / frames as f64,
                 worst.as_secs_f64() * 1000.0
             );
@@ -1500,7 +1541,12 @@ mod tests {
             for e in &mut entries {
                 e.is_dir = false;
                 e.path.set_extension("png");
-                crate::thumbs::put(&e.path, e.modified.unwrap(), crate::thumbs::NORMAL, pm.clone());
+                crate::thumbs::put(
+                    &e.path,
+                    e.modified.unwrap(),
+                    crate::thumbs::NORMAL,
+                    pm.clone(),
+                );
             }
             ui.folder.add(entries);
             let frames = 120;
@@ -1561,7 +1607,8 @@ mod tests {
             }
         }
         ui.folder.add(entries);
-        ui.folder.select_only(if thumbs_dir.is_some() { 1 } else { 5 });
+        ui.folder
+            .select_only(if thumbs_dir.is_some() { 1 } else { 5 });
         ui.hover_row = Some(2);
         ui.folder.cursor = Some(5);
         ui.keyboard_focus = std::env::var_os("CNDE_PREVIEW_FOCUS").is_some();
@@ -1650,6 +1697,20 @@ mod tests {
                 ui.error = Some("Can't copy “x”: Permission denied".into());
             }
         }
+        // CNDE_PREVIEW_ZOOM=<px> sets the icon size of the shown view.
+        if let Some(px) = std::env::var("CNDE_PREVIEW_ZOOM")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+        {
+            match ui.mode {
+                ViewMode::Grid => ui.grid_size = zoom::clamp(ViewMode::Grid, px),
+                ViewMode::List => ui.list_size = zoom::clamp(ViewMode::List, px),
+            }
+        }
+        // CNDE_PREVIEW_MAINMENU=1 opens the ⋮ menu.
+        if std::env::var_os("CNDE_PREVIEW_MAINMENU").is_some() {
+            ui.x.main_menu = Some(crate::mainmenu::MainMenu::default());
+        }
         if std::env::var_os("CNDE_PREVIEW_MENU").is_some() {
             ui.x.menu = Some(ops::Menu {
                 x: 420.0,
@@ -1665,6 +1726,34 @@ mod tests {
             .unwrap()
             .save(path)
             .unwrap();
+    }
+
+    #[test]
+    fn rows_follow_the_icon_size() {
+        let mut ui = ui(Path::new("/x"));
+        ui.folder.add(synthetic(100));
+        let list_w = list_w(&ui, 1000.0);
+        for size in [16.0, 18.0, 32.0, 48.0] {
+            ui.list_size = size;
+            let (cols, row_h) = cells(&ui, list_w);
+            assert_eq!((cols, row_h), (1, zoom::row_h(size)));
+            assert_eq!(content_height(&ui, list_w), 100.0 * row_h + 8.0);
+            // The row under a point is found with the taller rows.
+            let list = list_rect(&ui, 1000.0, 600.0);
+            let y = list.y + 4.0 + row_h * 3.5;
+            assert_eq!(
+                pos_at(&ui, list, ((list.x + 20.0) as f64, y as f64)),
+                Some(3)
+            );
+        }
+        ui.mode = ViewMode::Grid;
+        for size in [48.0, 96.0, 192.0] {
+            ui.grid_size = size;
+            let (cols, row_h) = cells(&ui, list_w);
+            assert_eq!(row_h, grid::tile_h(size));
+            let rows = 100usize.div_ceil(cols) as f32;
+            assert_eq!(content_height(&ui, list_w), rows * row_h + 8.0);
+        }
     }
 
     #[test]

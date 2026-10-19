@@ -6,19 +6,21 @@
 //! window never waits on a slow disk.
 
 mod clipboard;
+mod dbus;
 mod dnd;
 mod folder;
 mod grid;
 mod info;
+mod mainmenu;
 mod model;
+mod ops;
 mod pages;
-mod dbus;
 mod search;
+mod thumbs;
 mod transfer;
 mod undo;
-mod ops;
-mod thumbs;
 mod view;
+mod zoom;
 
 use std::{
     os::{fd::OwnedFd, unix::process::CommandExt},
@@ -335,6 +337,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     start_drives(tx.clone());
 
     let ui = Ui {
+        grid_size: config.files.grid_icon_size as f32,
+        list_size: config.files.list_icon_size as f32,
         config,
         location: Location::Overview,
         folder: Folder::new(),
@@ -435,6 +439,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.exit.stop();
         }
     })?;
+    if app.ui.x.save_timer.take().is_some() {
+        app.save_sizes();
+    }
     if let Some(err) = lost {
         return Err(err.into());
     }
@@ -938,6 +945,10 @@ impl App {
 
     fn set_config(&mut self, config: Config) {
         cnde_ui::anim::set_speed(config.animations.speed as f32);
+        if config.files != self.ui.config.files && self.ui.x.save_timer.is_none() {
+            self.ui.grid_size = config.files.grid_icon_size as f32;
+            self.ui.list_size = config.files.list_icon_size as f32;
+        }
         if config.appearance != self.ui.config.appearance {
             self.res.theme = Theme::for_screen(&config.appearance, self.screen);
             self.res.icons.set_theme(&config.appearance.icon_theme);
@@ -965,7 +976,7 @@ impl App {
 
     /// The list row at a window position, if it's over one.
     fn row_at(&self, (x, y): (f64, f64)) -> Option<usize> {
-        if !self.pointer_inside || self.ui.x.menu.is_some() {
+        if !self.pointer_inside || self.ui.x.menu.is_some() || self.ui.x.main_menu.is_some() {
             return None;
         }
         let list = self.painted.list;
@@ -1011,7 +1022,8 @@ impl App {
             }
             Target::Mode(mode) => self.ui.mode = mode,
             Target::Info => self.ui.info_panel = !self.ui.info_panel,
-            Target::Menu => {}
+            Target::Menu => self.toggle_menu(),
+            Target::Zoom => {}
             Target::Search => {
                 // Searching needs a folder: the Overview and Recent have none.
                 if !matches!(self.ui.location, Location::Dir(_)) {
@@ -1028,9 +1040,9 @@ impl App {
             }
             Target::RecentFolder(i) => {
                 let row = self.ui.pages.recent.as_ref().and_then(|r| r.get(i));
-                if let Some((dir, name)) = row.and_then(|r| {
-                    Some((r.path.parent()?.to_path_buf(), r.name.clone()))
-                }) {
+                if let Some((dir, name)) =
+                    row.and_then(|r| Some((r.path.parent()?.to_path_buf(), r.name.clone())))
+                {
                     self.reveal = Some(name);
                     self.go(Location::Dir(dir));
                 }
@@ -1167,10 +1179,12 @@ impl App {
             Keysym::v | Keysym::V if ctrl => self.paste(),
             Keysym::z | Keysym::Z if ctrl && !shift => self.undo_last(),
             Keysym::a | Keysym::A if ctrl => self.ui.folder.select_all(),
-            Keysym::h | Keysym::H if ctrl => {
-                let show = !self.ui.folder.show_hidden;
-                self.ui.folder.set_hidden(show);
+            Keysym::h | Keysym::H if ctrl => self.toggle_hidden(),
+            Keysym::equal | Keysym::plus | Keysym::KP_Add if ctrl => self.zoom_by(1.0, None),
+            Keysym::minus | Keysym::underscore | Keysym::KP_Subtract if ctrl => {
+                self.zoom_by(-1.0, None)
             }
+            Keysym::_0 | Keysym::KP_0 if ctrl => self.zoom_reset(),
             Keysym::F5 | Keysym::r if matches!(self.ui.location, Location::Dir(_)) => {
                 if let Location::Dir(path) = self.ui.location.clone() {
                     self.open_dir(path);
@@ -1565,6 +1579,9 @@ impl PointerHandler for App {
                     let entered = matches!(event.kind, PointerEventKind::Enter { .. });
                     self.update_cursor(entered);
                     self.drag_motion(event.position);
+                    if self.main_menu_drag(event.position) {
+                        self.redraw();
+                    }
                     let hover = self.painted.hit(event.position);
                     let row = self.row_at(event.position);
                     if hover != self.ui.hover || row != self.ui.hover_row {
@@ -1586,7 +1603,10 @@ impl PointerHandler for App {
                 } => self.press(event.position, serial),
                 PointerEventKind::Release {
                     button: BTN_LEFT, ..
-                } => self.drag_release(),
+                } => {
+                    self.drag_release();
+                    self.main_menu_release();
+                }
                 PointerEventKind::Press {
                     button: BTN_RIGHT, ..
                 } => self.context_click(event.position),
@@ -1605,7 +1625,10 @@ impl PointerHandler for App {
                     } else {
                         vertical.absolute as f32
                     };
-                    if event.position.0 < view::SIDE_W as f64 {
+                    if self.modifiers.ctrl && event.position.0 >= view::SIDE_W as f64 {
+                        // Ctrl+wheel zooms; down is smaller.
+                        self.zoom_by(-delta / WHEEL_STEP, Some(event.position));
+                    } else if event.position.0 < view::SIDE_W as f64 {
                         let max = view::side_max_scroll(&self.ui, self.size.1 as f32);
                         let scroll = (self.ui.side_scroll + delta).clamp(0.0, max);
                         if scroll != self.ui.side_scroll {

@@ -175,3 +175,9 @@
 # ext-session-lock protocol works, e.g. "swaylock" or "gtklock". If it
 # crashes while locked, the screen stays locked and it's started again.
 # command = "cnde-lock"
+
+[files]
+# Icon sizes in the file manager, in logical pixels. The menu next to the
+# window buttons (and Ctrl+scroll, Ctrl+plus/minus) changes them.
+# grid_icon_size = 48        # 48 to 192
+# list_icon_size = 18        # 16 to 48

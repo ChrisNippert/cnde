@@ -28,11 +28,11 @@ use tracing::debug;
 
 use crate::{
     App, Event,
-    transfer::Msg,
-    undo::Action,
     folder::Location,
     info,
     model::{self, Entry},
+    transfer::Msg,
+    undo::Action,
     view::{self, Colors, Painted, Target, Ui},
 };
 
@@ -61,6 +61,10 @@ pub enum Act {
     Copy,
     Cut,
     Paste,
+    NewFolder,
+    SelectAll,
+    Refresh,
+    ToggleHidden,
     /// The × on the progress strip.
     CancelTransfer,
 }
@@ -103,6 +107,9 @@ pub struct Extra {
     pub info: info::InfoState,
     pub rename: Option<Rename>,
     pub menu: Option<Menu>,
+    /// The ⋮ menu in the top bar.
+    pub main_menu: Option<crate::mainmenu::MainMenu>,
+    pub(crate) save_timer: Option<RegistrationToken>,
     /// A new folder to start renaming once the listing has it.
     pub pending_rename: Option<String>,
     pub xfer: crate::transfer::State,
@@ -198,7 +205,10 @@ impl App {
 
     /// The selected entries' paths, in listing order.
     pub(crate) fn selected_paths(&self) -> Vec<PathBuf> {
-        self.selected_entries().into_iter().map(|e| e.path).collect()
+        self.selected_entries()
+            .into_iter()
+            .map(|e| e.path)
+            .collect()
     }
 
     /// What an action applies to: the selection, else the open folder.
@@ -234,6 +244,10 @@ impl App {
             Act::Copy => self.copy_files(false),
             Act::Cut => self.copy_files(true),
             Act::Paste => self.paste(),
+            Act::NewFolder => self.new_folder(),
+            Act::SelectAll => self.ui.folder.select_all(),
+            Act::Refresh => self.reload_folder(),
+            Act::ToggleHidden => self.toggle_hidden(),
             Act::CancelTransfer => self.cancel_transfer(),
         }
         self.redraw();
@@ -242,7 +256,7 @@ impl App {
     /// A press while the menu is open: pick a row, or just close it.
     pub(crate) fn menu_press(&mut self, position: (f64, f64)) -> bool {
         if self.ui.x.menu.is_none() {
-            return false;
+            return self.main_menu_press(position);
         }
         let hit = self.painted.hit(position);
         self.ui.x.menu = None;
@@ -255,6 +269,7 @@ impl App {
 
     /// Right-click: select the row under the pointer and show the menu.
     pub(crate) fn context_click(&mut self, position: (f64, f64)) {
+        self.ui.x.main_menu = None;
         self.ui.x.rename = None;
         let Some(pos) = self.row_at(position) else {
             // Empty space in a folder: a menu to paste into it.
@@ -377,9 +392,8 @@ impl App {
                 };
                 match fs::create_dir(dir.join(&name)) {
                     Ok(()) => {
-                        let _ = tx.send(Event::Xfer(Msg::Record(Action::NewFolder(
-                            dir.join(&name),
-                        ))));
+                        let _ =
+                            tx.send(Event::Xfer(Msg::Record(Action::NewFolder(dir.join(&name)))));
                         let _ = tx.send(Event::Made(name));
                         return;
                     }
@@ -395,8 +409,9 @@ impl App {
 
     /// Keys while a rename or the menu is up. True if it took the key.
     pub(crate) fn pre_key(&mut self, event: &KeyEvent) -> bool {
-        if self.ui.x.menu.is_some() {
+        if self.ui.x.menu.is_some() || self.ui.x.main_menu.is_some() {
             self.ui.x.menu = None;
+            self.ui.x.main_menu = None;
             self.redraw();
             return event.keysym == Keysym::Escape;
         }

@@ -47,6 +47,8 @@ pub struct Config {
     pub power: Power,
     pub sound: Sound,
     pub notifications: Notifications,
+    /// The file manager.
+    pub files: Files,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -373,6 +375,25 @@ pub struct Animations {
 impl Default for Animations {
     fn default() -> Self {
         Self { speed: 1.0 }
+    }
+}
+
+/// The file manager's icon sizes, in logical pixels.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Files {
+    /// Icon size in the grid view, 48 to 192.
+    pub grid_icon_size: u32,
+    /// Icon size in the list view, 16 to 48.
+    pub list_icon_size: u32,
+}
+
+impl Default for Files {
+    fn default() -> Self {
+        Self {
+            grid_icon_size: 48,
+            list_icon_size: 18,
+        }
     }
 }
 
@@ -823,6 +844,18 @@ impl Config {
             48.0,
         )?;
         in_range("tiling.master_ratio", self.tiling.master_ratio, 0.1, 0.9)?;
+        in_range(
+            "files.grid_icon_size",
+            self.files.grid_icon_size as f64,
+            48.0,
+            192.0,
+        )?;
+        in_range(
+            "files.list_icon_size",
+            self.files.list_icon_size as f64,
+            16.0,
+            48.0,
+        )?;
         in_range("tiling.gap", self.tiling.gap as f64, 0.0, 64.0)?;
         in_range("tiling.outer_gap", self.tiling.outer_gap as f64, 0.0, 128.0)?;
         in_range(
@@ -929,6 +962,14 @@ mod tests {
     #[test]
     fn typos_are_errors() {
         assert!(Config::parse("[input.mouse]\nsped = 0.5\n").is_err());
+    }
+
+    #[test]
+    fn files_sizes_are_validated() {
+        let c = Config::parse("[files]\ngrid_icon_size = 128\nlist_icon_size = 32\n").unwrap();
+        assert_eq!((c.files.grid_icon_size, c.files.list_icon_size), (128, 32));
+        assert!(Config::parse("[files]\ngrid_icon_size = 400\n").is_err());
+        assert!(Config::parse("[files]\nlist_icon_size = 8\n").is_err());
     }
 
     #[test]
