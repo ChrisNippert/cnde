@@ -6,9 +6,12 @@
 //! window never waits on a slow disk.
 
 mod folder;
+mod grid;
+mod info;
 mod model;
 mod pages;
 mod search;
+mod ops;
 mod view;
 
 use std::{
@@ -62,8 +65,8 @@ use smithay_client_toolkit::{
         Capability, SeatHandler, SeatState,
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
         pointer::{
-            BTN_LEFT, CursorIcon, PointerEvent, PointerEventKind, PointerHandler, ThemeSpec,
-            ThemedPointer,
+            BTN_LEFT, BTN_RIGHT, CursorIcon, PointerEvent, PointerEventKind, PointerHandler,
+            ThemeSpec, ThemedPointer,
         },
     },
     shell::{
@@ -115,6 +118,16 @@ enum Event {
     Recent(Vec<pages::RecentRow>),
     Error(String),
     Screen(Option<cnde_ui::Color>),
+    /// An info panel scan finished (generation, result).
+    Info(u64, info::Scan),
+    /// The folder was listed again (generation, sequence, entries).
+    Refreshed(u64, u64, Vec<Entry>),
+    /// Something changed on disk: list again.
+    Refresh,
+    /// A new folder was made; rename it.
+    Made(String),
+    /// A rename went through; select the new name.
+    Renamed(String),
 }
 
 struct App {
@@ -313,6 +326,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         keyboard_focus: false,
         pages: Pages::default(),
         search: Search::default(),
+        x: ops::Extra::default(),
     };
     let mut app = App {
         registry: RegistryState::new(&globals),
@@ -517,6 +531,22 @@ impl App {
                 self.redraw();
             }
             Event::Error(message) => self.show_error(message),
+            Event::Info(generation, scan) => self.info_done(generation, scan),
+            Event::Refreshed(generation, seq, entries)
+                if generation == self.generation && seq == self.ui.x.refresh_seq =>
+            {
+                self.apply_refresh(entries);
+            }
+            Event::Refreshed(..) => {}
+            Event::Refresh => self.refresh_dir(),
+            Event::Made(name) => {
+                self.ui.x.pending_rename = Some(name);
+                self.refresh_dir();
+            }
+            Event::Renamed(name) => {
+                self.reveal = Some(name);
+                self.refresh_dir();
+            }
             Event::Screen(screen) => {
                 if screen != self.screen {
                     self.screen = screen;
@@ -562,6 +592,10 @@ impl App {
         folder.query = old.query.clone();
         self.ui.folder = folder;
         self.ui.hover_row = None;
+        self.ui.x.rename = None;
+        self.ui.x.menu = None;
+        self.ui.x.info.key = 0;
+        self.watch_dir(&path);
         let (generation, cancel, tx) = (self.generation, self.cancel.clone(), self.events.clone());
         let spawned = std::thread::Builder::new()
             .name("listing".into())
@@ -599,6 +633,7 @@ impl App {
                 self.generation += 1;
                 self.ui.folder = Folder::new();
                 self.ui.folder.loading = false;
+                self.unwatch();
             }
         }
         self.ui.location = location;
@@ -696,13 +731,13 @@ impl App {
     }
 
     fn list_height(&self) -> f32 {
-        view::list_rect(self.size.0 as f32, self.size.1 as f32).h
+        view::list_rect(&self.ui, self.size.0 as f32, self.size.1 as f32).h
     }
 
     /// Scroll the list by `delta` logical px: eased for a wheel, at once for
     /// a touchpad.
     fn scroll_by(&mut self, delta: f32, smooth: bool) {
-        let max = view::max_scroll(&self.ui, self.size.1 as f32);
+        let max = view::max_scroll(&self.ui, self.size.0 as f32, self.size.1 as f32);
         self.scroll_target = (self.scroll_target + delta).clamp(0.0, max);
         if !smooth {
             self.ui.scroll = self.scroll_target;
@@ -712,12 +747,11 @@ impl App {
 
     /// Scroll so row `pos` shows.
     fn ensure_visible(&mut self, pos: usize) {
-        let (top, bottom) = (
-            pos as f32 * view::ROW_H,
-            (pos + 1) as f32 * view::ROW_H + 8.0,
-        );
+        let (cols, row_h) = self.cells();
+        let row = pos / cols;
+        let (top, bottom) = (row as f32 * row_h, (row + 1) as f32 * row_h + 8.0);
         let h = self.list_height();
-        let max = view::max_scroll(&self.ui, self.size.1 as f32);
+        let max = view::max_scroll(&self.ui, self.size.0 as f32, self.size.1 as f32);
         let mut target = self.scroll_target;
         if top < target {
             target = top;
@@ -735,8 +769,9 @@ impl App {
         }
         self.dirty = false;
         let started = Instant::now();
+        self.sync_info();
         // Smooth scrolling: ease towards the target, one step a frame.
-        let max = view::max_scroll(&self.ui, self.size.1 as f32);
+        let max = view::max_scroll(&self.ui, self.size.0 as f32, self.size.1 as f32);
         self.scroll_target = self.scroll_target.min(max);
         self.ui.scroll = self.ui.scroll.min(max);
         self.ui.side_scroll = self
@@ -859,15 +894,14 @@ impl App {
 
     /// The list row at a window position, if it's over one.
     fn row_at(&self, (x, y): (f64, f64)) -> Option<usize> {
-        if !self.pointer_inside {
+        if !self.pointer_inside || self.ui.x.menu.is_some() {
             return None;
         }
         let list = self.painted.list;
         if !list.contains((x, y)) || self.painted.hit((x, y)).is_some() {
             return None;
         }
-        let pos = ((y as f32 - list.y - 4.0 + self.ui.scroll) / view::ROW_H).floor();
-        (pos >= 0.0 && (pos as usize) < self.ui.folder.visible.len()).then_some(pos as usize)
+        view::pos_at(&self.ui, list, (x, y))
     }
 
     fn toggle_maximized(&mut self) {
@@ -879,6 +913,10 @@ impl App {
     }
 
     fn press(&mut self, position: (f64, f64), serial: u32) {
+        if self.menu_press(position) {
+            return;
+        }
+        self.ui.x.rename = None;
         self.ui.keyboard_focus = false;
         self.ui.search.focused = false;
         if let Some(edge) = self.resize_edge(position)
@@ -961,6 +999,7 @@ impl App {
             Target::Connect => self.show_error("Network locations aren't available yet".into()),
             Target::Trash => self.go(Location::Dir(model::trash_dir())),
             Target::Sort(key) => self.ui.folder.set_sort(key),
+            Target::Act(act) => self.act(act),
         }
         self.redraw();
     }
@@ -1001,7 +1040,12 @@ impl App {
             self.modifiers.alt,
             self.modifiers.shift,
         );
-        let page = (self.list_height() / view::ROW_H).floor().max(1.0) as isize - 1;
+        if self.pre_key(&event) {
+            return;
+        }
+        let (cols, row_h) = self.cells();
+        let up = cols as isize;
+        let page = ((self.list_height() / row_h).floor().max(1.0) as isize - 1) * up;
         let mut moved = None;
         let in_dir = matches!(self.ui.location, Location::Dir(_));
         let keyed = self
@@ -1031,6 +1075,9 @@ impl App {
             }
         }
         match event.keysym {
+            Keysym::Delete => self.trash_selection(),
+            Keysym::F2 => self.start_rename(),
+            Keysym::n | Keysym::N if ctrl && shift => self.new_folder(),
             Keysym::q | Keysym::w if ctrl => {
                 self.exit.stop();
                 return;
@@ -1050,8 +1097,10 @@ impl App {
             Keysym::Up if alt => self.go_parent(),
             Keysym::BackSpace => self.go_parent(),
             Keysym::Escape => self.ui.folder.clear_selection(),
-            Keysym::Up => moved = self.ui.folder.step(-1, shift),
-            Keysym::Down => moved = self.ui.folder.step(1, shift),
+            Keysym::Left if cols > 1 => moved = self.ui.folder.step(-1, shift),
+            Keysym::Right if cols > 1 => moved = self.ui.folder.step(1, shift),
+            Keysym::Up => moved = self.ui.folder.step(-up, shift),
+            Keysym::Down => moved = self.ui.folder.step(up, shift),
             Keysym::Page_Up => moved = self.ui.folder.step(-page, shift),
             Keysym::Page_Down => moved = self.ui.folder.step(page, shift),
             Keysym::Home => moved = self.ui.folder.go_to(0, shift),
@@ -1445,6 +1494,9 @@ impl PointerHandler for App {
                     serial,
                     ..
                 } => self.press(event.position, serial),
+                PointerEventKind::Press {
+                    button: BTN_RIGHT, ..
+                } => self.context_click(event.position),
                 PointerEventKind::Press {
                     button: BTN_SIDE, ..
                 } => self.go_back(),

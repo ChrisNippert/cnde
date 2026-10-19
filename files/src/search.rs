@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn typing_and_editing() {
         let mut s = Search::default();
-        let mut key = |s: &mut Search, k, t| s.key(k, t, false, false, true);
+        let key = |s: &mut Search, k, t| s.key(k, t, false, false, true);
         assert_eq!(
             s.key(Keysym::a, Some("a"), false, false, false),
             Keyed::Ignored
