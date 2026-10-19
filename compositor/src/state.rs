@@ -170,6 +170,10 @@ impl State {
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
         smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(&dh);
+        // Games: raw mouse motion, and the pointer locked or confined to
+        // their window so turning the camera doesn't stop at a screen edge.
+        smithay::wayland::relative_pointer::RelativePointerManagerState::new::<Self>(&dh);
+        smithay::wayland::pointer_constraints::PointerConstraintsState::new::<Self>(&dh);
         let lock = crate::lock::Lock::new(
             smithay::wayland::session_lock::SessionLockManagerState::new::<Self, _>(&dh, |_| true),
         );

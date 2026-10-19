@@ -6,8 +6,13 @@ mod xdg_shell;
 use smithay::{
     backend::allocator::dmabuf::Dmabuf,
     delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
-    delegate_output, delegate_seat, delegate_viewporter, delegate_xdg_decoration,
-    input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
+    delegate_output, delegate_pointer_constraints, delegate_relative_pointer, delegate_seat,
+    delegate_viewporter, delegate_xdg_decoration,
+    input::{
+        Seat, SeatHandler, SeatState,
+        pointer::{CursorImageStatus, PointerHandle},
+    },
+    utils::{Logical, Point},
     reexports::{
         wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
         wayland_server::{Resource, protocol::wl_surface::WlSurface},
@@ -15,6 +20,7 @@ use smithay::{
     wayland::{
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         output::OutputHandler,
+        pointer_constraints::{PointerConstraintsHandler, with_pointer_constraint},
         selection::{
             SelectionHandler,
             data_device::{
@@ -136,6 +142,47 @@ impl smithay::wayland::fractional_scale::FractionalScaleHandler for State {
     }
 }
 delegate_fractional_scale!(State);
+
+impl PointerConstraintsHandler for State {
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+        // Applies at once if the pointer is already over the surface (and
+        // inside its region); otherwise when it gets there (see input.rs).
+        if pointer.current_focus().as_ref() != Some(surface) {
+            return;
+        }
+        let location = pointer.current_location();
+        let origin = self.surface_under(location).filter(|(s, _)| s == surface);
+        with_pointer_constraint(surface, pointer, |constraint| {
+            if let (Some(constraint), Some((_, origin))) = (constraint, origin) {
+                let point = (location - origin).to_i32_round();
+                if constraint.region().is_none_or(|r| r.contains(point)) {
+                    constraint.activate();
+                }
+            }
+        });
+    }
+
+    /// Where a game wants the pointer left when it unlocks it.
+    fn cursor_position_hint(
+        &mut self,
+        surface: &WlSurface,
+        pointer: &PointerHandle<Self>,
+        location: Point<f64, Logical>,
+    ) {
+        let active = with_pointer_constraint(surface, pointer, |c| c.is_some_and(|c| c.is_active()));
+        if !active {
+            return;
+        }
+        if let Some((_, origin)) = self
+            .surface_under(pointer.current_location())
+            .filter(|(s, _)| s == surface)
+        {
+            pointer.set_location(origin + location);
+        }
+    }
+}
+delegate_pointer_constraints!(State);
+delegate_relative_pointer!(State);
 
 pub(crate) fn set_preferred_scale(surface: &WlSurface, output: &smithay::output::Output) {
     let scale = output.current_scale().fractional_scale();

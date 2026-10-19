@@ -19,6 +19,10 @@ use smithay::{
 
 use tracing::debug;
 
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::wayland::compositor::RegionAttributes;
+use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
+
 use crate::{
     grabs::{MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab},
     keybinds::{self, Action, Direction, ModKey},
@@ -64,20 +68,40 @@ impl State {
                     return;
                 };
                 let current = pointer.current_location();
-                let location = self.clamp_to_outputs(current, current + event.delta());
-                self.on_pointer_motion(location, event.time_msec());
+                let under = self.surface_under(current);
+                let constraint = active_constraint(&pointer, current, under.as_ref());
                 // Unaccelerated deltas for games and 3D apps (relative-pointer).
-                let under = self.surface_under(location);
                 pointer.relative_motion(
                     self,
-                    under,
+                    under.clone(),
                     &RelativeMotionEvent {
                         delta: event.delta(),
                         delta_unaccel: event.delta_unaccel(),
                         utime: event.time(),
                     },
                 );
-                pointer.frame(self);
+                let location = self.clamp_to_outputs(current, current + event.delta());
+                let stay = match &constraint {
+                    // Locked: the game turns its camera from the deltas
+                    // alone; the pointer itself doesn't move.
+                    Some(Constraint::Locked) => true,
+                    // Confined: not off the surface, nor out of its region.
+                    Some(Constraint::Confined(region)) => {
+                        let (surface, origin) = under.as_ref().expect("a constraint has a surface");
+                        let new_under = self.surface_under(location);
+                        new_under.as_ref().map(|(s, _)| s) != Some(surface)
+                            || region.as_ref().is_some_and(|r| {
+                                !r.contains((location - *origin).to_i32_round())
+                            })
+                    }
+                    None => false,
+                };
+                if stay {
+                    pointer.frame(self);
+                    return;
+                }
+                self.on_pointer_motion(location, event.time_msec());
+                self.activate_constraint(&pointer, location);
             }
             InputEvent::PointerButton { event, .. } => {
                 self.on_pointer_button(event.button_code(), event.state(), event.time_msec());
@@ -394,6 +418,28 @@ impl State {
             };
             self.on_pointer_button(BTN_LEFT, state, time);
         }
+    }
+
+    /// The pointer arrived over a surface with a constraint waiting (a game
+    /// asked to lock or confine it): apply it, if inside its region.
+    fn activate_constraint(
+        &mut self,
+        pointer: &smithay::input::pointer::PointerHandle<State>,
+        location: Point<f64, Logical>,
+    ) {
+        let Some((surface, origin)) = self.surface_under(location) else {
+            return;
+        };
+        with_pointer_constraint(&surface, pointer, |constraint| {
+            if let Some(constraint) = constraint
+                && !constraint.is_active()
+            {
+                let point = (location - origin).to_i32_round();
+                if constraint.region().is_none_or(|r| r.contains(point)) {
+                    constraint.activate();
+                }
+            }
+        });
     }
 
     fn on_pointer_motion(&mut self, location: Point<f64, Logical>, time: u32) {
@@ -748,4 +794,32 @@ impl State {
         };
         horizontal | vertical
     }
+}
+
+/// What a game asked of the pointer, where it is now.
+enum Constraint {
+    Locked,
+    /// Inside the surface, and this region of it if any.
+    Confined(Option<RegionAttributes>),
+}
+
+/// The active constraint on the surface under the pointer, if the pointer
+/// is inside its region (outside it, the constraint doesn't apply).
+fn active_constraint(
+    pointer: &smithay::input::pointer::PointerHandle<State>,
+    location: Point<f64, Logical>,
+    under: Option<&(WlSurface, Point<f64, Logical>)>,
+) -> Option<Constraint> {
+    let (surface, origin) = under?;
+    with_pointer_constraint(surface, pointer, |constraint| {
+        let constraint = constraint.filter(|c| c.is_active())?;
+        let point = (location - *origin).to_i32_round();
+        if !constraint.region().is_none_or(|r| r.contains(point)) {
+            return None;
+        }
+        Some(match &*constraint {
+            PointerConstraint::Locked(_) => Constraint::Locked,
+            PointerConstraint::Confined(confined) => Constraint::Confined(confined.region().cloned()),
+        })
+    })
 }
