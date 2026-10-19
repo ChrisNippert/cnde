@@ -35,6 +35,9 @@ use crate::{render::OutputElement, tint::Tints, wallpaper::Wallpapers};
 
 /// How long a frost takes to turn solid, or back.
 const FADE: Duration = Duration::from_millis(150);
+/// With adaptive colour, how strongly the wallpaper's colour tints the
+/// frost under a cnde window over nothing.
+const WALLPAPER_TINT: f32 = 0.35;
 
 #[derive(Default)]
 pub struct DockFrost {
@@ -48,8 +51,8 @@ pub struct DockFrost {
     /// Solid backings, by the frost's key, with the colour they were made
     /// with (kept, like `ids`, for damage tracking).
     solids: HashMap<String, (PixelShaderElement, [f32; 4], u32)>,
-    /// Whether each frost is covering a window, and since when.
-    covered: HashMap<String, (bool, Instant)>,
+    /// How solid each backing is heading (from, to, since when).
+    covered: HashMap<String, (f32, f32, Instant)>,
 }
 
 /// What's behind the shell's popups: the windows on the output
@@ -248,9 +251,12 @@ impl DockFrost {
                 (rect.loc.y as f64 * scale).round() as i32,
             ));
             // Over a window: solid, in the bar's colour if it has one.
-            let colour = behind.under(rect).map(|_| match behind.bar {
-                Some(bar) => bar.map(|c| c as f32 / 255.0),
-                None => [theme.qs_background.r, theme.qs_background.g, theme.qs_background.b],
+            let target = behind.under(rect).map(|_| {
+                let colour = match behind.bar {
+                    Some(bar) => bar.map(|c| c as f32 / 255.0),
+                    None => [theme.qs_background.r, theme.qs_background.g, theme.qs_background.b],
+                };
+                (colour, 1.0)
             });
             let (solid, solidity) = self.backing(
                 renderer,
@@ -258,7 +264,7 @@ impl DockFrost {
                 &format!("popup/{key}"),
                 rect,
                 radius,
-                colour,
+                target,
                 progress as f32,
                 now,
             );
@@ -302,12 +308,12 @@ impl DockFrost {
 
     /// Whether a frost is still fading to solid or back.
     pub fn is_animating(&self, now: Instant) -> bool {
-        self.covered.values().any(|(_, since)| now < *since + FADE)
+        self.covered.values().any(|(_, _, since)| now < *since + FADE)
     }
 
-    /// The solid backing for the frost at `namespace` when it covers a
-    /// window (`colour` is that backing's colour, `None` if it covers
-    /// none), and how solid it is now (0: all frost, 1: all solid).
+    /// The backing for the frost at `namespace`: `target` is its colour and
+    /// how solid it should be (1 over a window, `None` for none), and the
+    /// result how solid it is now (0: all frost, 1: all solid).
     #[allow(clippy::too_many_arguments)]
     fn backing(
         &mut self,
@@ -316,21 +322,25 @@ impl DockFrost {
         namespace: &str,
         area: Rectangle<i32, Logical>,
         radius: f64,
-        colour: Option<[f32; 3]>,
+        target: Option<([f32; 3], f32)>,
         alpha: f32,
         now: Instant,
     ) -> (Option<PixelShaderElement>, f32) {
         let key = format!("{}/{namespace}", output.name());
-        let covered = colour.is_some();
-        let (was, since) = self.covered.entry(key.clone()).or_insert((covered, now - FADE));
-        if *was != covered {
-            // Turning back midway starts from where it got to.
-            let done = (now - *since).min(FADE);
-            *was = covered;
-            *since = now - (FADE - done);
+        let (colour, level) = match target {
+            Some((colour, level)) => (Some(colour), level),
+            None => (None, 0.0),
+        };
+        let at = |(from, to, since): (f32, f32, Instant)| {
+            let t = ((now - since).as_secs_f32() / FADE.as_secs_f32()).min(1.0);
+            from + (to - from) * t
+        };
+        let fade = self.covered.entry(key.clone()).or_insert((level, level, now));
+        if fade.1 != level {
+            // Changing course midway starts from where it got to.
+            *fade = (at(*fade), level, now);
         }
-        let t = ((now - *since).as_secs_f32() / FADE.as_secs_f32()).min(1.0);
-        let solidity = if covered { t } else { 1.0 - t };
+        let solidity = at(*fade);
         // Keep the last colour while fading back out.
         let rgb = colour.or_else(|| {
             self.solids
@@ -449,6 +459,8 @@ pub struct WindowFrost<'a> {
     /// Over another window: their sidebars' colour, or that window's.
     pub solid: cnde_ui::Color,
     pub tints: Option<&'a Tints>,
+    /// With adaptive colour, the wallpaper's: a light tint over nothing.
+    pub wallpaper: Option<[f32; 3]>,
     pub now: Instant,
 }
 
@@ -465,14 +477,17 @@ impl WindowFrost<'_> {
     ) -> Vec<OutputElement> {
         let namespace = format!("window/{key}");
         let rect = rect.to_i32_round();
-        let colour = under.map(|w| backing_colour(self.tints, w, self.solid));
+        let target = match under {
+            Some(w) => Some((backing_colour(self.tints, w, self.solid), 1.0)),
+            None => self.wallpaper.map(|c| (c, WALLPAPER_TINT)),
+        };
         let (solid, solidity) = self.frost.backing(
             renderer,
             self.output,
             &namespace,
             rect,
             self.radius,
-            colour,
+            target,
             alpha,
             self.now,
         );
@@ -535,6 +550,9 @@ pub fn window_frost<'a>(
         radius: theme.window_radius as f64,
         solid: theme.window_sidebar,
         tints,
+        wallpaper: tints
+            .and(wallpapers.tint(&output.name()))
+            .map(|c| c.map(|v| v as f32 / 255.0)),
         now,
     })
 }

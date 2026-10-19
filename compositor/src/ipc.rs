@@ -261,6 +261,11 @@ impl State {
                 let mut edges = OutputEdges {
                     output: output.name(),
                     top_light: self.wallpapers.top_light(&output.name()),
+                    // Kept while the overview's open, so nothing flashes.
+                    wallpaper_tint: self
+                        .wallpapers
+                        .tint(&output.name())
+                        .filter(|_| self.config.appearance.adaptive_color),
                     ..Default::default()
                 };
                 let (Some(geo), false) = (self.space.output_geometry(output), open) else {

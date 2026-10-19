@@ -236,7 +236,6 @@ impl Wallpapers {
     }
 
     /// The wallpaper's tint colour on `output`, once it has loaded.
-    #[allow(dead_code)]
     pub fn tint(&self, output: &str) -> Option<[u8; 3]> {
         self.entries.get(output).and_then(|e| e.tint)
     }
