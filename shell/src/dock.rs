@@ -380,10 +380,10 @@ fn slid_margin(gap: i32, thickness: i32, hide: f32) -> i32 {
     (gap as f32 + (hidden - gap) as f32 * hide.clamp(0.0, 1.0)).round() as i32
 }
 
-/// The space kept free along the edge. An autohide dock a window touches
-/// keeps none, shown or not, so windows never move as it slides.
-fn zone_for(reserve: bool, mode: BarMode, autohide_touched: bool, across: i32, gap: i32) -> i32 {
-    match (reserve, autohide_touched, mode) {
+/// The space kept free along the edge. An autohide dock keeps none, shown
+/// or not, so windows never move as it slides.
+fn zone_for(reserve: bool, mode: BarMode, autohide: bool, across: i32, gap: i32) -> i32 {
+    match (reserve, autohide, mode) {
         (false, _, _) | (_, true, _) => 0,
         (true, _, BarMode::Floating) => across + 2 * EDGE_MARGIN - gap,
         (true, _, _) => across - gap,
@@ -635,14 +635,17 @@ impl Dock {
         self.length = length;
         // From what it wants, not where the slide has got to, so nothing
         // resizes frame by frame.
+        // Autohide never keeps space: if giving it up only while a window
+        // touches, the window grows, briefly stops touching, the space comes
+        // back, and round it goes (the slide stalls halfway).
         let zone = zone_for(
             self.reserve,
             self.mode,
-            self.autohiding(),
+            self.autohide,
             across,
             // Margin plus zone stays the thickness, so the gap it floats
             // off by is what the zone gives up.
-            if self.autohiding() { 0 } else { margins.0.max(0) },
+            if self.autohide { 0 } else { margins.0.max(0) },
         );
         if margins != self.margins {
             self.margins = margins;
