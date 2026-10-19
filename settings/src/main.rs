@@ -775,6 +775,7 @@ impl App {
                 // whatever's chosen now.
                 if *key == pages::Key::Path("appearance.palette") {
                     file.remove("appearance.adaptive_color");
+                    file.remove("appearance.match_windows");
                 }
             }
             file.save()
