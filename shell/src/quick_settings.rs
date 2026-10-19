@@ -1029,7 +1029,13 @@ fn paint(
         let ty = rect.y + (rect.h - block) / 2.0;
         let name_color = theme.popup_text.with_alpha(theme.popup_text.a * fade);
         let state_y = (ty + name_text.height + 1.0).round();
-        canvas.text(fonts, &mut name_text, text_x.round(), ty.round(), name_color);
+        canvas.text(
+            fonts,
+            &mut name_text,
+            text_x.round(),
+            ty.round(),
+            name_color,
+        );
         canvas.text(fonts, &mut state_text, text_x.round(), state_y, dim);
     }
 
@@ -1382,6 +1388,10 @@ fn paint_devices(
     line(canvas, header, "bluetooth-active-symbolic", "Devices", None);
     for (rect, device) in list.rows.iter().zip(&bluetooth.devices) {
         canvas.rounded_rect(rect.x, rect.y, rect.w, 1.0, 0.0, theme.card_separator);
+        let connected = match device.battery {
+            Some(percent) => format!("Connected · {percent}%"),
+            None => "Connected".into(),
+        };
         let state = match pending {
             Some((address, true)) if address == device.address => {
                 Some(("Connecting…", theme.qs_dim))
@@ -1389,7 +1399,7 @@ fn paint_devices(
             Some((address, false)) if address == device.address => {
                 Some(("Disconnecting…", theme.qs_dim))
             }
-            _ if device.connected => Some(("Connected", theme.qs_toggle_on)),
+            _ if device.connected => Some((connected.as_str(), theme.qs_toggle_on)),
             _ => None,
         };
         let icon = format!("{}-symbolic", device.icon);
@@ -1577,6 +1587,7 @@ mod tests {
             name: name.into(),
             icon: String::new(),
             connected: false,
+            battery: None,
         };
         status.bluetooth = Some(crate::status::Bluetooth {
             powered: false,
@@ -1644,12 +1655,14 @@ mod tests {
                         name: "Earbuds".into(),
                         icon: "audio-headphones".into(),
                         connected: true,
+                        battery: Some(82),
                     },
                     crate::status::BluetoothDevice {
                         address: "00:00:00:00:00:02".into(),
                         name: "Trackball".into(),
                         icon: "input-mouse".into(),
                         connected: false,
+                        battery: None,
                     },
                 ],
             }),
