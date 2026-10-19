@@ -17,7 +17,7 @@ tracing-subscriber.workspace = true
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "xkbcommon"] }
 # inotify for following hand edits of the config.
 rustix = { version = "1", features = ["fs"] }
-
-[dev-dependencies]
-# Preview PNGs.
-image = { version = "0.25", default-features = false, features = ["png"] }
+# Thumbnails and the preview PNGs.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+# org.freedesktop.FileManager1.
+zbus = "5"

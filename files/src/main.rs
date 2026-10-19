@@ -10,8 +10,10 @@ mod grid;
 mod info;
 mod model;
 mod pages;
+mod dbus;
 mod search;
 mod ops;
+mod thumbs;
 mod view;
 
 use std::{
@@ -128,6 +130,10 @@ enum Event {
     Made(String),
     /// A rename went through; select the new name.
     Renamed(String),
+    /// A thumbnail arrived.
+    Thumbs,
+    /// Another program asked us to show something (D-Bus).
+    Open(dbus::Open),
 }
 
 struct App {
@@ -156,6 +162,8 @@ struct App {
     forward: Vec<Location>,
     /// A name to select once the listing has it (the folder we came from).
     reveal: Option<String>,
+    /// More names to select along with `reveal`.
+    reveal_more: Vec<String>,
     scroll_target: f32,
     scrolling: bool,
     last_paint: Instant,
@@ -243,7 +251,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
-    let start = start_path().map_or(Location::Overview, Location::Dir);
+    let start_dir = start_path();
+    // One window: a running cnde-files takes the folder instead.
+    if std::env::var_os("CNDE_FILES_NEW").is_none() && dbus::forward(start_dir.as_deref()) {
+        return Ok(());
+    }
+    let start = start_dir.map_or(Location::Overview, Location::Dir);
 
     let conn = Connection::connect_to_env()?;
     let (globals, queue) = registry_queue_init(&conn)?;
@@ -297,6 +310,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })?;
     watch_screen(tx.clone());
+    dbus::serve(tx.clone());
+    {
+        let tx = std::sync::Mutex::new(tx.clone());
+        thumbs::start(move || {
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(Event::Thumbs);
+            }
+        });
+    }
     start_places(tx.clone(), home.clone());
     start_drives(tx.clone());
 
@@ -350,6 +372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         back: Vec::new(),
         forward: Vec::new(),
         reveal: None,
+        reveal_more: Vec::new(),
         scroll_target: 0.0,
         scrolling: false,
         last_paint: Instant::now(),
@@ -539,6 +562,8 @@ impl App {
             }
             Event::Refreshed(..) => {}
             Event::Refresh => self.refresh_dir(),
+            Event::Thumbs => self.redraw(),
+            Event::Open(open) => self.open_request(open),
             Event::Made(name) => {
                 self.ui.x.pending_rename = Some(name);
                 self.refresh_dir();
@@ -575,7 +600,24 @@ impl App {
             self.reveal = None;
             self.ui.folder.select_only(pos);
             self.ensure_visible(pos);
+            for name in std::mem::take(&mut self.reveal_more) {
+                self.ui.folder.selected.insert(name);
+            }
         }
+    }
+
+    /// Show a folder asked for from outside, with things selected.
+    fn open_request(&mut self, open: dbus::Open) {
+        self.ui.info_panel |= open.props;
+        let same = self.ui.location == Location::Dir(open.dir.clone());
+        self.go(Location::Dir(open.dir));
+        let mut names = open.select.into_iter();
+        self.reveal = names.next();
+        self.reveal_more = names.collect();
+        if same {
+            self.reveal_pending();
+        }
+        self.redraw();
     }
 
     /// Start listing `path` on a thread; whatever was loading stops.

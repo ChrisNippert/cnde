@@ -5,7 +5,7 @@
 use cnde_ui::{Fonts, Painter, Rect, TextLayout, Weight};
 
 use crate::{
-    model,
+    model, thumbs,
     view::{self, Colors, Painted, TextCache, Ui},
 };
 
@@ -14,6 +14,9 @@ pub const TILE_H: f32 = 122.0;
 const PAD: f32 = 16.0;
 const ICON: f32 = 48.0;
 const TOP: f32 = 10.0;
+/// The box a thumbnail fits in, a bit bigger than an icon.
+const THUMB_W: f32 = 68.0;
+const THUMB_H: f32 = 56.0;
 
 /// How the tiles lie in a list area `list_w` wide.
 #[derive(Clone, Copy, Debug)]
@@ -143,7 +146,17 @@ pub fn paint(
         }
         let cx = x + g.tile_w / 2.0;
         let color = if entry.is_dir { c.fold } else { c.dim };
-        p.icon(view::icon_for(entry), cx, y + TOP + ICON / 2.0, ICON, color);
+        let thumb = if entry.is_dir {
+            None
+        } else {
+            thumbs::get(&entry.path, entry.modified, thumbs::NORMAL, false)
+        };
+        if let Some(pm) = thumb {
+            let bx = (cx - THUMB_W / 2.0, y + TOP - 4.0, THUMB_W, THUMB_H);
+            thumbs::draw(p.canvas, &pm, bx, 6.0);
+        } else {
+            p.icon(view::icon_for(entry), cx, y + TOP + ICON / 2.0, ICON, color);
+        }
 
         let name_y = y + TOP + ICON + 6.0;
         let max_w = g.tile_w - 12.0;

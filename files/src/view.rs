@@ -613,7 +613,17 @@ fn rows(
         let cy = y + ROW_H / 2.0;
         let ink = c.ink;
         let icon_color = if entry.is_dir { c.fold } else { c.dim };
-        p.icon(icon_for(entry), cols[0].0 + 10.0, cy, 18.0, icon_color);
+        let thumb = if entry.is_dir {
+            None
+        } else {
+            crate::thumbs::get(&entry.path, entry.modified, crate::thumbs::NORMAL, true)
+        };
+        if let Some(pm) = thumb {
+            let bx = (cols[0].0, cy - 8.0, 20.0, 16.0);
+            crate::thumbs::draw(p.canvas, &pm, bx, 3.0);
+        } else {
+            p.icon(icon_for(entry), cols[0].0 + 10.0, cy, 18.0, icon_color);
+        }
 
         let mut draw = |p: &mut Painter<'_, '_>,
                         col: u8,
@@ -1466,6 +1476,44 @@ mod tests {
         }
     }
 
+    /// The same with a thumbnail on every entry (list and grid).
+    #[test]
+    #[ignore]
+    fn scroll_bench_thumbs() {
+        let (w, h, scale) = (2560u32, 1440u32, 1.25);
+        let theme = Theme::for_appearance(&Config::default().appearance);
+        let mut res = Res::new(theme, Icons::new());
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        let pm = std::sync::Arc::new(cnde_ui::tiny_skia::Pixmap::new(128, 96).unwrap());
+        for grid in [false, true] {
+            let mut ui = ui(Path::new("/x"));
+            if grid {
+                ui.mode = ViewMode::Grid;
+            }
+            let mut entries = synthetic(10_000);
+            for e in &mut entries {
+                e.is_dir = false;
+                e.path.set_extension("png");
+                crate::thumbs::put(&e.path, e.modified.unwrap(), crate::thumbs::NORMAL, pm.clone());
+            }
+            ui.folder.add(entries);
+            let frames = 120;
+            let mut total = Duration::ZERO;
+            for i in 0..frames {
+                ui.scroll = (i * 17) as f32;
+                let started = std::time::Instant::now();
+                let mut canvas = Canvas::new(&mut pixels, w, h, scale).unwrap();
+                paint(&ui, &mut res, &mut canvas);
+                total += started.elapsed();
+            }
+            println!(
+                "10k thumbnails{}: {:.2} ms a frame",
+                if grid { " grid" } else { " list" },
+                total.as_secs_f64() * 1000.0 / frames as f64
+            );
+        }
+    }
+
     /// `CNDE_PREVIEW=out.png CNDE_PREVIEW_THEME=quiet|quiet-light|light|adwaita`
     /// renders the window on the repo's root folder to a PNG.
     #[test]
@@ -1486,18 +1534,28 @@ mod tests {
             ),
             _ => (cnde_config::Palette::Quiet, cnde_config::ColorScheme::Dark),
         };
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .canonicalize()
-            .unwrap();
+        // CNDE_PREVIEW_THUMBS=<dir of images> shows that folder, with thumbnails.
+        let thumbs_dir = std::env::var_os("CNDE_PREVIEW_THUMBS").map(PathBuf::from);
+        let root = thumbs_dir.clone().unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .canonicalize()
+                .unwrap()
+        });
         let mut ui = ui(&root);
         ui.config.appearance.palette = palette;
         ui.config.appearance.color_scheme = scheme;
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let mut entries = Vec::new();
         model::list_dir(&root, &cancel, |b| entries.extend(b)).unwrap();
+        if thumbs_dir.is_some() {
+            for e in entries.iter().filter(|e| !e.is_dir) {
+                crate::thumbs::prime(&e.path, crate::thumbs::NORMAL);
+                crate::thumbs::prime(&e.path, crate::thumbs::LARGE);
+            }
+        }
         ui.folder.add(entries);
-        ui.folder.select_only(5);
+        ui.folder.select_only(if thumbs_dir.is_some() { 1 } else { 5 });
         ui.hover_row = Some(2);
         ui.folder.cursor = Some(5);
         ui.keyboard_focus = std::env::var_os("CNDE_PREVIEW_FOCUS").is_some();

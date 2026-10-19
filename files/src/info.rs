@@ -297,8 +297,20 @@ pub fn paint(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, w:
     };
     let _ = dir;
     let mut y = top + PAD;
-    p.icon(icon, x0 + PANEL_W / 2.0, y + 44.0, 72.0, icon_color);
-    y += 104.0;
+    let preview = match &subject {
+        Subject::One(e) if !e.is_dir => {
+            crate::thumbs::get(&e.path, e.modified, crate::thumbs::LARGE, false)
+        }
+        _ => None,
+    };
+    if let Some(pm) = preview {
+        let bx = (x0 + (PANEL_W - 200.0) / 2.0, y, 200.0, 150.0);
+        crate::thumbs::draw(p.canvas, &pm, bx, 8.0);
+        y += 150.0 + 16.0;
+    } else {
+        p.icon(icon, x0 + PANEL_W / 2.0, y + 44.0, 72.0, icon_color);
+        y += 104.0;
+    }
     let nw = p.measure(&name, 16.0, Weight::Bold).min(inner);
     p.label_v(
         &name,
