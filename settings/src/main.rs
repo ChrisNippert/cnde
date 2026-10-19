@@ -150,6 +150,8 @@ struct App {
     picked: Option<channel::Sender<Result<Option<wallpapers::Thumb>, String>>>,
     /// The colour on screen, for the adaptive palette (from the compositor).
     screen: Option<cnde_ui::Color>,
+    /// Monitors the compositor says can't do variable refresh.
+    no_vrr: HashSet<String>,
 }
 
 /// Why the Wayland connection is dead, if it is. After a protocol error, or
@@ -267,9 +269,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     event_loop
         .handle()
         .insert_source(screen_rx, |event, _, app: &mut App| {
-            if let channel::Event::Msg(screen) = event
-                && screen != app.screen
-            {
+            let channel::Event::Msg((screen, no_vrr)) = event else {
+                return;
+            };
+            if no_vrr != app.no_vrr {
+                app.no_vrr = no_vrr;
+                app.update_displays();
+            }
+            if screen != app.screen {
                 app.screen = screen;
                 if app.ui.config.appearance.adaptive() {
                     app.res.theme = theme_for(&app.ui.config, screen);
@@ -348,6 +355,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         power_mode: None,
         picked: Some(picked_tx),
         screen: None,
+        no_vrr: HashSet::new(),
     };
     WaylandSource::new(conn.clone(), queue).insert(event_loop.handle())?;
     watch_config(&mut app);
@@ -882,6 +890,7 @@ impl App {
                     y,
                     w,
                     h,
+                    vrr_capable: !self.no_vrr.contains(&info.name.clone().unwrap_or_default()),
                     modes: info.modes.iter().map(triple).collect(),
                     current: current.map(triple),
                     preferred: info.modes.iter().find(|m| m.preferred).map(triple),
@@ -1423,9 +1432,10 @@ fn theme_for(config: &Config, screen: Option<cnde_ui::Color>) -> Theme {
 }
 
 /// Follow the compositor's edges event for the adaptive palette's colour,
+/// and which monitors can't do variable refresh.
 /// the wallpaper's. Read on a
 /// thread; nothing without cnde's socket.
-fn watch_screen(events: channel::Sender<Option<cnde_ui::Color>>) {
+fn watch_screen(events: channel::Sender<(Option<cnde_ui::Color>, HashSet<String>)>) {
     use std::io::BufRead;
     let Some(path) = std::env::var_os(cnde_ipc::SOCKET_ENV) else {
         return;
@@ -1439,7 +1449,12 @@ fn watch_screen(events: channel::Sender<Option<cnde_ui::Color>>) {
             if let Some(cnde_ipc::Event::Edges { outputs }) = cnde_ipc::decode(&line) {
                 let screen =
                     cnde_ui::tint::screen(outputs.iter().find_map(|e| e.wallpaper_tint));
-                if events.send(screen).is_err() {
+                let no_vrr = outputs
+                    .iter()
+                    .filter(|e| e.vrr_capable == Some(false))
+                    .map(|e| e.output.clone())
+                    .collect();
+                if events.send((screen, no_vrr)).is_err() {
                     return;
                 }
             }
