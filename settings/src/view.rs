@@ -619,6 +619,7 @@ fn paint_row(
     last: bool,
 ) {
     let t = p.theme;
+    let hits_start = out.hits.len();
     if let Control::Wallpapers = row.control {
         wallpapers(ui, a, p, out, row, rect);
         return;
@@ -880,6 +881,17 @@ fn paint_row(
     }
     if let Control::Color { .. } = row.control {
         swatches(ui, a, p, out, row, index, rect, line_h);
+    }
+    if row.disabled {
+        // Nothing in it takes clicks; fade it into the background.
+        out.hits.truncate(hits_start);
+        let base = if boxed(t) {
+            over(t.window_background, t.card_background)
+        } else {
+            t.window_background
+        };
+        let Rect { x, y, w, h } = rect;
+        p.canvas.rounded_rect(x, y, w, h, 0.0, base.with_alpha(0.55));
     }
 }
 
@@ -1268,6 +1280,7 @@ mod tests {
                     y: 0,
                     w: 2560,
                     h: 1440,
+                    vrr_capable: true,
                     modes: vec![(3840, 2160, 60_000), (2560, 1440, 59_951)],
                     current: Some((3840, 2160, 60_000)),
                     preferred: Some((3840, 2160, 60_000)),
@@ -1279,6 +1292,7 @@ mod tests {
                     y: 200,
                     w: 1920,
                     h: 1080,
+                    vrr_capable: false,
                     modes: vec![(1920, 1080, 165_000), (1920, 1080, 60_000)],
                     current: Some((1920, 1080, 165_000)),
                     preferred: Some((1920, 1080, 60_000)),

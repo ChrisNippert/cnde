@@ -757,6 +757,14 @@ impl State {
         }
     }
 
+    /// Whether `output`'s monitor advertises variable refresh (its
+    /// connector's `vrr_capable`); `None` off the udev backend.
+    pub fn udev_vrr_capable(&mut self, output: &Output) -> Option<bool> {
+        let gpu = self.udev()?.gpu.as_ref()?;
+        let surface = gpu.surfaces.values().find(|s| s.output == *output)?;
+        Some(surface.vrr != VrrSupport::NotSupported)
+    }
+
     /// Idle: turn the monitors off (DPMS). Drawing stops until input; the
     /// next frame turns them back on. A monitor with a frame in flight is
     /// blanked when it lands.

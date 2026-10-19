@@ -14,6 +14,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Line tables only: readable backtraces (stall watchdog, panics) without full debuginfo.
 [profile.release]
 debug = "line-tables-only"
+lto = "fat"
+codegen-units = 1
 
 [profile.dev]
 # Smithay and the renderer are painfully slow unoptimized; keep our own code debuggable.

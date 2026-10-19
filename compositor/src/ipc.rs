@@ -254,10 +254,13 @@ impl State {
             return;
         }
         let open = self.overview.is_open() || self.lock.is_locked();
+        let outputs: Vec<_> = self.space.outputs().cloned().collect();
+        let vrr: Vec<_> = outputs.iter().map(|o| self.udev_vrr_capable(o)).collect();
         let edges: Vec<OutputEdges> = self
             .space
             .outputs()
-            .map(|output| {
+            .zip(vrr)
+            .map(|(output, vrr_capable)| {
                 let mut edges = OutputEdges {
                     output: output.name(),
                     top_light: self.wallpapers.top_light(&output.name()),
@@ -266,6 +269,7 @@ impl State {
                         .wallpapers
                         .tint(&output.name())
                         .filter(|_| self.config.appearance.adaptive()),
+                    vrr_capable,
                     ..Default::default()
                 };
                 let (Some(geo), false) = (self.space.output_geometry(output), open) else {

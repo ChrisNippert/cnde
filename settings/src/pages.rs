@@ -413,6 +413,8 @@ pub struct Row {
     pub default: Value,
     /// Hidden until "Advanced settings" is on.
     pub advanced: bool,
+    /// Greyed out and not clickable (the subtitle says why).
+    pub disabled: bool,
 }
 
 impl Row {
@@ -425,6 +427,7 @@ impl Row {
             value,
             default,
             advanced: false,
+            disabled: false,
         }
     }
 
@@ -475,6 +478,8 @@ pub struct Display {
     pub y: i32,
     pub w: i32,
     pub h: i32,
+    /// Whether the monitor can do variable refresh.
+    pub vrr_capable: bool,
     /// What it offers: width, height, refresh in mHz.
     pub modes: Vec<(i32, i32, i32)>,
     pub current: Option<(i32, i32, i32)>,
@@ -564,6 +569,7 @@ fn mode_rows(display: &Display, config: Option<cnde_config::ModeConfig>) -> Vec<
             value: resolution,
             default: Value::Unset,
             advanced: false,
+            disabled: false,
         },
         Row {
             key: Key::OutputMode {
@@ -576,6 +582,7 @@ fn mode_rows(display: &Display, config: Option<cnde_config::ModeConfig>) -> Vec<
             value: refresh,
             default: fastest,
             advanced: false,
+            disabled: false,
         },
     ]
 }
@@ -626,6 +633,7 @@ fn wifi_row(key: WifiKey, title: &str, control: Control, value: Value) -> Row {
         default: value.clone(),
         value,
         advanced: false,
+        disabled: false,
     }
 }
 
@@ -1519,6 +1527,7 @@ fn displays_page(c: &Config, displays: &[Display], brightness: Option<u32>) -> V
                 value: Value::Int(percent as i64),
                 default: Value::Int(percent as i64),
                 advanced: false,
+                disabled: false,
             }],
         ));
     }
@@ -1534,6 +1543,7 @@ fn displays_page(c: &Config, displays: &[Display], brightness: Option<u32>) -> V
                 value: Value::Unset,
                 default: Value::Unset,
                 advanced: false,
+                disabled: false,
             }],
         });
         let mut mains = vec![Choice {
@@ -1559,6 +1569,7 @@ fn displays_page(c: &Config, displays: &[Display], brightness: Option<u32>) -> V
                 value: main,
                 default: Value::Unset,
                 advanced: false,
+                disabled: false,
             }],
         ));
     }
@@ -1615,6 +1626,7 @@ fn displays_page(c: &Config, displays: &[Display], brightness: Option<u32>) -> V
                     value,
                     default: Value::Unset,
                     advanced: true,
+                    disabled: false,
                 }
             };
             let mut rows = mode_rows(display, output.and_then(|o| o.mode));
@@ -1626,6 +1638,7 @@ fn displays_page(c: &Config, displays: &[Display], brightness: Option<u32>) -> V
                 value: scale,
                 default: Value::Unset,
                 advanced: false,
+                disabled: false,
             });
             let vrr = match output.map(|o| o.vrr) {
                 Some(cnde_config::Vrr::On) => s("on"),
@@ -1635,7 +1648,11 @@ fn displays_page(c: &Config, displays: &[Display], brightness: Option<u32>) -> V
             rows.push(Row {
                 key: output_key("vrr"),
                 title: "Variable refresh rate".into(),
-                subtitle: "FreeSync: smoother games on monitors that support it".into(),
+                subtitle: if display.vrr_capable {
+                    "FreeSync: smoother games on monitors that support it".into()
+                } else {
+                    "Not supported by this monitor".into()
+                },
                 control: Control::Dropdown(choices(&[
                     ("Off", Value::Unset),
                     ("Fullscreen only", s("fullscreen")),
@@ -1644,6 +1661,7 @@ fn displays_page(c: &Config, displays: &[Display], brightness: Option<u32>) -> V
                 value: vrr,
                 default: Value::Unset,
                 advanced: false,
+                disabled: !display.vrr_capable,
             });
             rows.push(coordinate('x'));
             rows.push(coordinate('y'));
@@ -2877,6 +2895,7 @@ mod tests {
             y: 0,
             w: 1920,
             h: 1080,
+            vrr_capable: true,
             modes: vec![
                 (1920, 1080, 165_000),
                 (1920, 1080, 59_940),

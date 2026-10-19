@@ -83,6 +83,10 @@ pub struct OutputEdges {
     /// window is against an edge (bars keep their own translucency).
     #[serde(default)]
     pub wallpaper_tint: Option<[u8; 3]>,
+    /// Whether the monitor can do variable refresh (`None`: can't tell, as
+    /// in a nested window).
+    #[serde(default)]
+    pub vrr_capable: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
