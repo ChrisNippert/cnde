@@ -138,6 +138,9 @@ pub struct NightLight {
     intro: Intro,
     /// The temperature it's on at, or `None` when off.
     target: Option<u32>,
+    /// It has been set since startup: the first setting is on at once,
+    /// not a 3 s warm shift after logging in.
+    started: bool,
     /// What's on screen: fading from `from` towards the target's colour.
     from: [f32; 3],
     fade: Option<(Instant, [f32; 3])>,
@@ -157,13 +160,14 @@ impl NightLight {
     /// Turn on at `temperature` kelvin, or off with `None`. Whether that's
     /// a change (needing frames to fade).
     pub fn set(&mut self, target: Option<u32>) -> bool {
+        let first = !std::mem::replace(&mut self.started, true);
         if self.target == target {
             return false;
         }
         let now = Instant::now();
-        self.from = self.current(now);
+        self.from = self.temperature_color(now);
         self.target = target;
-        self.fade = Some((now, Self::color_of(target)));
+        self.fade = (!first).then(|| (now, Self::color_of(target)));
         true
     }
 
@@ -499,6 +503,15 @@ mod tests {
         assert!(light.set_dim(1.0, Duration::ZERO));
         assert_eq!(light.current(Instant::now()), WHITE);
         assert!(!light.set_dim(1.0, Duration::ZERO));
+    }
+
+    #[test]
+    fn first_setting_is_at_once_then_fades() {
+        let mut light = NightLight::default();
+        assert!(light.set(Some(4400)));
+        assert!(light.fade.is_none(), "on at once at startup");
+        assert!(light.set(None));
+        assert!(light.fade.is_some(), "later changes fade");
     }
 
     #[test]
