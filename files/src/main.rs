@@ -7,11 +7,13 @@
 
 mod folder;
 mod model;
+mod pages;
+mod search;
 mod view;
 
 use std::{
     os::{fd::OwnedFd, unix::process::CommandExt},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, Stdio},
     sync::{
         Arc,
@@ -78,6 +80,8 @@ use tracing::{debug, info, warn};
 use crate::{
     folder::{Folder, Location},
     model::Entry,
+    pages::Pages,
+    search::{Keyed, Search},
     view::{Painted, Place, Res, Target, Ui, ViewMode},
 };
 
@@ -108,6 +112,7 @@ enum Event {
     Drives(Vec<model::Drive>),
     Trash(u64),
     Places(Vec<Place>),
+    Recent(Vec<pages::RecentRow>),
     Error(String),
     Screen(Option<cnde_ui::Color>),
 }
@@ -181,10 +186,9 @@ fn connection_lost(conn: &Connection) -> Option<String> {
 
 /// The folder to open from the command line: a path or a file:// URI,
 /// made absolute (a file opens its folder).
-fn start_path(home: &Path) -> PathBuf {
-    let Some(arg) = std::env::args().nth(1) else {
-        return home.to_path_buf();
-    };
+/// The folder named on the command line; none shows the Overview.
+fn start_path() -> Option<PathBuf> {
+    let arg = std::env::args().nth(1)?;
     let arg = match arg.strip_prefix("file://") {
         Some(rest) => percent_decode(rest),
         None => arg,
@@ -198,7 +202,7 @@ fn start_path(home: &Path) -> PathBuf {
     if path.is_file() {
         path.pop();
     }
-    path
+    Some(path)
 }
 
 fn percent_decode(s: &str) -> String {
@@ -226,7 +230,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
-    let start = start_path(&home);
+    let start = start_path().map_or(Location::Overview, Location::Dir);
 
     let conn = Connection::connect_to_env()?;
     let (globals, queue) = registry_queue_init(&conn)?;
@@ -285,7 +289,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui = Ui {
         config,
-        location: Location::Dir(start.clone()),
+        location: Location::Overview,
         folder: Folder::new(),
         mode: ViewMode::List,
         info_panel: false,
@@ -307,6 +311,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rounded: true,
         frosted,
         keyboard_focus: false,
+        pages: Pages::default(),
+        search: Search::default(),
     };
     let mut app = App {
         registry: RegistryState::new(&globals),
@@ -358,7 +364,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     WaylandSource::new(conn.clone(), queue).insert(event_loop.handle())?;
     watch_config(&mut app);
-    app.open_dir(start);
+    app.show(start);
 
     let mut lost = None;
     event_loop.run(None, &mut app, |app| {
@@ -502,6 +508,10 @@ impl App {
                 self.ui.trash = Some(size);
                 self.redraw();
             }
+            Event::Recent(rows) => {
+                self.ui.pages.recent = Some(rows);
+                self.redraw();
+            }
             Event::Places(places) => {
                 self.ui.places = places;
                 self.redraw();
@@ -549,6 +559,7 @@ impl App {
         folder.sort = old.sort;
         folder.descending = old.descending;
         folder.show_hidden = old.show_hidden;
+        folder.query = old.query.clone();
         self.ui.folder = folder;
         self.ui.hover_row = None;
         let (generation, cancel, tx) = (self.generation, self.cancel.clone(), self.events.clone());
@@ -566,8 +577,21 @@ impl App {
         }
     }
 
+    /// Read the recent files on a thread, for the Overview and Recent pages.
+    fn load_recent(&mut self) {
+        let (tx, home) = (self.events.clone(), self.ui.home.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(Event::Recent(pages::load_recent(&home)));
+        });
+    }
+
     /// Show `location`, without touching the history.
     fn show(&mut self, location: Location) {
+        self.ui.search.clear();
+        self.ui.folder.query.clear();
+        if matches!(location, Location::Overview | Location::Recent) {
+            self.load_recent();
+        }
         match &location {
             Location::Dir(path) => self.open_dir(path.clone()),
             _ => {
@@ -625,8 +649,13 @@ impl App {
         let Some(entry) = self.ui.folder.entry(pos) else {
             return;
         };
-        let path = entry.path.clone();
-        if entry.is_dir {
+        let (path, is_dir) = (entry.path.clone(), entry.is_dir);
+        self.open_path(path, is_dir);
+    }
+
+    /// Folders navigate, files go to xdg-open.
+    fn open_path(&mut self, path: PathBuf, is_dir: bool) {
+        if is_dir {
             self.go(Location::Dir(path));
         } else {
             let tx = self.events.clone();
@@ -699,6 +728,7 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        self.ui.pages.width = self.size.0 as f32;
         if !self.configured || self.frame_pending {
             self.dirty = true;
             return;
@@ -850,6 +880,7 @@ impl App {
 
     fn press(&mut self, position: (f64, f64), serial: u32) {
         self.ui.keyboard_focus = false;
+        self.ui.search.focused = false;
         if let Some(edge) = self.resize_edge(position)
             && let Some(seat) = &self.seat_handle
         {
@@ -870,7 +901,30 @@ impl App {
             }
             Target::Mode(mode) => self.ui.mode = mode,
             Target::Info => self.ui.info_panel = !self.ui.info_panel,
-            Target::Menu | Target::Search => {}
+            Target::Menu => {}
+            Target::Search => {
+                // Searching needs a folder: the Overview and Recent have none.
+                if !matches!(self.ui.location, Location::Dir(_)) {
+                    self.go(Location::Dir(self.ui.home.clone()));
+                }
+                self.ui.search.focused = true;
+                self.ui.search.cursor = self.ui.search.query.chars().count();
+            }
+            Target::RecentFile(i) => {
+                let row = self.ui.pages.recent.as_ref().and_then(|r| r.get(i));
+                if let Some((path, is_dir)) = row.map(|r| (r.path.clone(), r.is_dir)) {
+                    self.open_path(path, is_dir);
+                }
+            }
+            Target::RecentFolder(i) => {
+                let row = self.ui.pages.recent.as_ref().and_then(|r| r.get(i));
+                if let Some((dir, name)) = row.and_then(|r| {
+                    Some((r.path.parent()?.to_path_buf(), r.name.clone()))
+                }) {
+                    self.reveal = Some(name);
+                    self.go(Location::Dir(dir));
+                }
+            }
             Target::Close => self.exit.stop(),
             Target::Minimize => self.window.set_minimized(),
             Target::Maximize => self.toggle_maximized(),
@@ -949,6 +1003,33 @@ impl App {
         );
         let page = (self.list_height() / view::ROW_H).floor().max(1.0) as isize - 1;
         let mut moved = None;
+        let in_dir = matches!(self.ui.location, Location::Dir(_));
+        let keyed = self
+            .ui
+            .search
+            .key(event.keysym, event.utf8.as_deref(), ctrl, alt, in_dir);
+        match keyed {
+            Keyed::Ignored => {}
+            Keyed::Handled => {
+                self.redraw();
+                return;
+            }
+            Keyed::Changed => {
+                self.ui.folder.set_query(&self.ui.search.query);
+                self.ui.keyboard_focus = true;
+                self.ui.scroll = 0.0;
+                self.scroll_target = 0.0;
+                self.redraw();
+                return;
+            }
+            Keyed::Open => {
+                if let Some(pos) = self.ui.folder.cursor {
+                    self.open_row(pos);
+                }
+                self.redraw();
+                return;
+            }
+        }
         match event.keysym {
             Keysym::q | Keysym::w if ctrl => {
                 self.exit.stop();

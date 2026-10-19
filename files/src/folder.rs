@@ -25,6 +25,8 @@ pub struct Folder {
     pub sort: SortKey,
     pub descending: bool,
     pub show_hidden: bool,
+    /// The search narrowing `visible`; empty shows everything.
+    pub query: String,
     pub selected: HashSet<String>,
     /// The row keyboard moves act from, as a position in `visible`.
     pub cursor: Option<usize>,
@@ -43,6 +45,7 @@ impl Folder {
             sort: SortKey::Name,
             descending: false,
             show_hidden: false,
+            query: String::new(),
             selected: HashSet::new(),
             cursor: None,
             anchor: None,
@@ -74,6 +77,16 @@ impl Folder {
         self.rebuild();
     }
 
+    /// Narrow the rows to the fuzzy matches of `query` (empty: all), with
+    /// the best match selected.
+    pub fn set_query(&mut self, query: &str) {
+        self.query = query.to_string();
+        self.rebuild();
+        if !self.query.is_empty() && !self.visible.is_empty() {
+            self.select_only(0);
+        }
+    }
+
     fn resort(&mut self) {
         model::sort(&mut self.entries, self.sort, self.descending);
         self.rebuild();
@@ -97,6 +110,7 @@ impl Folder {
             .filter(|(_, e)| show || !e.hidden)
             .map(|(i, _)| i)
             .collect();
+        crate::search::filter(&self.entries, &mut self.visible, &self.query);
         let find = |name: Option<String>| {
             let name = name?;
             self.visible

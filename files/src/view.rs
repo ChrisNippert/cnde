@@ -15,6 +15,8 @@ use cnde_ui::{Canvas, Color, Fonts, Icons, Painter, Rect, TextLayout, Theme, Wei
 use crate::{
     folder::{Folder, Location},
     model::{self, Drive, SortKey},
+    pages::{self, Pages},
+    search::{self, Search},
 };
 
 pub const SIDE_W: f32 = 228.0;
@@ -27,8 +29,8 @@ const LIST_PAD: f32 = 12.0;
 const LIST_PAD_RIGHT: f32 = 16.0;
 const COL_GAP: f32 = 10.0;
 /// A drive nearly full turns amber.
-const WARN: Color = Color::rgb(0xe5, 0xa5, 0x0a);
-const WARN_AT: f32 = 0.85;
+pub const WARN: Color = Color::rgb(0xe5, 0xa5, 0x0a);
+pub const WARN_AT: f32 = 0.85;
 /// How opaque a frosted sidebar's tint is over the compositor's frost.
 const FROSTED_SIDEBAR: f32 = 0.6;
 /// More drives than this get one compact line each.
@@ -64,6 +66,9 @@ pub enum Target {
     Search,
     Overview,
     Recent,
+    /// A row of the recent list: the file, or the folder it is in.
+    RecentFile(usize),
+    RecentFolder(usize),
     Place(usize),
     Drive(usize),
     Eject(usize),
@@ -103,6 +108,8 @@ pub struct Ui {
     pub frosted: bool,
     /// The keyboard moved the cursor last: show it.
     pub keyboard_focus: bool,
+    pub pages: Pages,
+    pub search: Search,
 }
 
 /// The result of a paint, for hit-testing.
@@ -175,6 +182,9 @@ pub fn list_rect(w: f32, h: f32) -> Rect {
 /// How far the list can scroll in a window `h` tall.
 pub fn max_scroll(ui: &Ui, h: f32) -> f32 {
     let list = list_rect(SIDE_W + 1.0, h);
+    if !matches!(ui.location, Location::Dir(_)) {
+        return (pages::content_height(ui) - list.h).max(0.0);
+    }
     (ui.folder.visible.len() as f32 * ROW_H + 8.0 - list.h).max(0.0)
 }
 
@@ -203,6 +213,7 @@ pub fn title_of(ui: &Ui) -> String {
     match &ui.location {
         Location::Overview => "Overview".into(),
         Location::Recent => "Recent".into(),
+        Location::Dir(_) if ui.search.active() => format!("Search \"{}\"", ui.search.query),
         Location::Dir(path) => {
             if *path == ui.home {
                 "Home".into()
@@ -223,10 +234,17 @@ pub fn drive_of<'a>(drives: &'a [Drive], path: &Path) -> Option<&'a Drive> {
 }
 
 fn subtitle_of(ui: &Ui) -> String {
-    let Location::Dir(path) = &ui.location else {
-        return String::new();
+    let path = match &ui.location {
+        Location::Overview => return pages::overview_subtitle(ui),
+        Location::Recent => return pages::recent_subtitle(ui),
+        Location::Dir(path) => path,
     };
     let n = ui.folder.visible.len();
+    if ui.search.active() {
+        let all = ui.folder.entries.iter();
+        let total = all.filter(|e| ui.folder.show_hidden || !e.hidden).count();
+        return format!("{n} of {total} items");
+    }
     let mut s = if ui.folder.loading && n == 0 {
         "Loading…".to_string()
     } else {
@@ -263,11 +281,14 @@ pub fn crumbs(path: &Path, home: &Path) -> Vec<(String, PathBuf)> {
 }
 
 fn icon_for(entry: &model::Entry) -> &'static str {
-    if entry.is_dir {
+    icon_for_name(&entry.name, entry.is_dir)
+}
+
+pub fn icon_for_name(name: &str, is_dir: bool) -> &'static str {
+    if is_dir {
         return "folder-symbolic";
     }
-    let ext = entry
-        .name
+    let ext = name
         .rsplit_once('.')
         .map(|(_, e)| e.to_ascii_lowercase())
         .unwrap_or_default();
@@ -349,16 +370,16 @@ fn fit(
     best.unwrap_or_else(|| fonts.layout("…", size, weight, scale))
 }
 
-struct Colors {
-    ink: Color,
-    dim: Color,
-    hair: Color,
-    on: Color,
-    sel: Color,
-    fold: Color,
-    seg: Color,
-    seg_on: Color,
-    track: Color,
+pub(crate) struct Colors {
+    pub(crate) ink: Color,
+    pub(crate) dim: Color,
+    pub(crate) hair: Color,
+    pub(crate) on: Color,
+    pub(crate) sel: Color,
+    pub(crate) fold: Color,
+    pub(crate) seg: Color,
+    pub(crate) seg_on: Color,
+    pub(crate) track: Color,
 }
 
 impl Colors {
@@ -426,17 +447,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     if matches!(ui.location, Location::Dir(_)) {
         rows(ui, &mut p, &mut res.text, &c, &mut out, w, h, scale);
     } else {
-        let msg = "Coming soon";
-        let tw = p.measure(msg, t.font_size, Weight::Normal);
-        p.label_v(
-            msg,
-            list.x + (list.w - tw) / 2.0,
-            list.y + 80.0,
-            list.w,
-            t.font_size,
-            Weight::Normal,
-            c.dim,
-        );
+        pages::paint(ui, &mut p, &c, &mut out, w, h);
     }
 
     // Everything above the rows is solid, so rows scroll under it.
@@ -505,7 +516,9 @@ fn rows(
     }
     if folder.visible.is_empty() {
         if !folder.loading {
-            let msg = if folder.entries.is_empty() {
+            let msg = if ui.search.active() {
+                "No matches"
+            } else if folder.entries.is_empty() {
                 "This folder is empty"
             } else {
                 "Only hidden files here (Ctrl+H shows them)"
@@ -563,16 +576,30 @@ fn rows(
             p.canvas.text(p.fonts, &mut layout, tx, ty, color);
             cache.map.insert(key, layout);
         };
-        draw(
-            p,
-            0,
-            &|| entry.name.clone(),
-            cols[0].0 + 28.0,
-            cols[0].1 - 28.0,
-            false,
-            name_size,
-            ink,
-        );
+        if ui.search.active() {
+            search::paint_name(
+                p,
+                &ui.search.query,
+                &entry.name,
+                cols[0].0 + 28.0,
+                cy,
+                cols[0].1 - 28.0,
+                name_size,
+                ink,
+                c.fold,
+            );
+        } else {
+            draw(
+                p,
+                0,
+                &|| entry.name.clone(),
+                cols[0].0 + 28.0,
+                cols[0].1 - 28.0,
+                false,
+                name_size,
+                ink,
+            );
+        }
         draw(
             p,
             1,
@@ -904,19 +931,8 @@ fn sidebar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, h: f
     out.hits
         .push((Rect::new(0.0, 0.0, SIDE_W, 12.0), Target::Header));
 
-    // Search (just the look for now).
     let sr = Rect::new(10.0, 12.0, SIDE_W - 20.0, 32.0);
-    p.canvas.rounded_rect(sr.x, sr.y, sr.w, sr.h, 8.0, c.seg);
-    p.icon("edit-find-symbolic", sr.x + 18.0, sr.y + 16.0, 16.0, c.dim);
-    p.label_v(
-        "Search",
-        sr.x + 36.0,
-        sr.y + 16.0,
-        sr.w - 44.0,
-        t.font_size,
-        Weight::Normal,
-        c.dim,
-    );
+    search::paint_field(p, &ui.search, sr, c.seg, c.dim);
     out.hits.push((sr, Target::Search));
 
     let (top, bottom) = side_band(h);
@@ -1312,6 +1328,8 @@ mod tests {
             rounded: true,
             frosted: false,
             keyboard_focus: false,
+            pages: Pages::default(),
+            search: Search::default(),
         }
     }
 
@@ -1402,6 +1420,45 @@ mod tests {
             }
             ui.drives = d;
         }
+        // CNDE_PREVIEW_PAGE=overview|recent|search shows that page instead.
+        let page = std::env::var("CNDE_PREVIEW_PAGE").unwrap_or_default();
+        if page == "overview" || page == "recent" {
+            ui.location = if page == "recent" {
+                Location::Recent
+            } else {
+                Location::Overview
+            };
+            ui.hover = Some(Target::RecentFile(1));
+            ui.pages.recent = Some(
+                [
+                    ("notes.md", "~/Documents"),
+                    ("cnde-files design.html", "~/Downloads"),
+                    ("photo-0412.jpg", "~/Pictures/Trip"),
+                    ("compositor", "~/Sync/programming/cnde"),
+                    ("report.pdf", "~/Documents/Work"),
+                    ("song.flac", "~/Music"),
+                ]
+                .iter()
+                .cycle()
+                .take(if page == "recent" { 30 } else { 8 })
+                .enumerate()
+                .map(|(i, (name, folder))| pages::RecentRow {
+                    path: PathBuf::from("/home/me").join(name),
+                    name: name.to_string(),
+                    folder: folder.to_string(),
+                    when: SystemTime::now() - Duration::from_secs(900 * (i as u64 + 1).pow(2)),
+                    is_dir: *name == "compositor",
+                })
+                .collect(),
+            );
+        } else if page == "search" {
+            ui.search.query = "co".into();
+            ui.search.cursor = 2;
+            ui.search.focused = true;
+            ui.folder.set_query("co");
+            ui.keyboard_focus = true;
+        }
+        ui.pages.width = 1100.0;
         let theme = Theme::for_appearance(&ui.config.appearance);
         let mut res = Res::new(theme, Icons::new());
         let (w, h) = (1100u32, 680u32);

@@ -253,6 +253,60 @@ impl<'a> Canvas<'a> {
         );
     }
 
+    /// A ring of `width` around (`cx`, `cy`): a full `track` circle with a
+    /// `color` arc over it, from the top clockwise, covering `fraction` (0-1).
+    #[allow(clippy::too_many_arguments)]
+    pub fn ring(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        width: f32,
+        fraction: f32,
+        track: Color,
+        color: Color,
+    ) {
+        let s = self.scale;
+        let stroke = Stroke {
+            width: width * s,
+            line_cap: tiny_skia::LineCap::Round,
+            ..Stroke::default()
+        };
+        let mut paint = Paint {
+            anti_alias: true,
+            ..Paint::default()
+        };
+        let circle = PathBuilder::from_circle(cx * s, cy * s, radius * s);
+        let fraction = fraction.clamp(0.0, 1.0);
+        let mut arc = PathBuilder::new();
+        if fraction < 0.999 && fraction > 0.0 {
+            let steps = ((fraction * 96.0).ceil() as usize).max(2);
+            for i in 0..=steps {
+                let turn = fraction * i as f32 / steps as f32;
+                let a = std::f32::consts::TAU * turn - std::f32::consts::FRAC_PI_2;
+                let (x, y) = ((cx + radius * a.cos()) * s, (cy + radius * a.sin()) * s);
+                if i == 0 {
+                    arc.move_to(x, y);
+                } else {
+                    arc.line_to(x, y);
+                }
+            }
+        }
+        paint.set_color(skia_color(track));
+        if let Some(path) = &circle {
+            self.pixmap
+                .stroke_path(path, &paint, &stroke, Transform::identity(), None);
+        }
+        paint.set_color(skia_color(color));
+        let path = if fraction >= 0.999 { circle } else { arc.finish() };
+        if fraction > 0.0
+            && let Some(path) = path
+        {
+            self.pixmap
+                .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        }
+    }
+
     /// An iOS-style fat slider: a fully rounded track, filled from the left
     /// to `value` (0-1). The fill is clipped to the track, so it keeps the
     /// rounded left end and has a straight right edge.
