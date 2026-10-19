@@ -92,7 +92,7 @@ pub struct State {
     pub closing: Vec<ClosingWindow>,
     pub wallpapers: crate::wallpaper::Wallpapers,
     pub dock_frost: crate::frost::DockFrost,
-    /// Window colours for `appearance.match_windows`.
+    /// Window colours for `appearance.adaptive_color`.
     pub tints: crate::tint::Tints,
     /// A timer is set to sample a window `tints` held back.
     pub tint_wake: bool,

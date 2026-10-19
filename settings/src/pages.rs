@@ -1248,13 +1248,13 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .sub("Menus, quick settings and window sidebars; solid when maximized or over a window"),
                 Row::new(
-                    "appearance.match_windows",
-                    "Match windows",
+                    "appearance.adaptive_color",
+                    "Adaptive colour",
                     Control::switch(),
-                    Value::Bool(c.appearance.match_windows),
-                    Value::Bool(d.appearance.match_windows),
+                    Value::Bool(c.appearance.adaptive_color),
+                    Value::Bool(d.appearance.adaptive_color),
                 )
-                .sub("The bar and dock take a maximized window's colour; menus and sidebars over a window, a tint of it"),
+                .sub("The bar, dock, quick settings and sidebars take the colour of the window at the edge, or the wallpaper"),
             ],
         ),
         group(

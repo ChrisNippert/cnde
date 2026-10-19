@@ -1,5 +1,5 @@
 //! The colours of windows, for cnde's UI to match
-//! (`appearance.match_windows`): a maximized window in front tints the bar
+//! (`appearance.adaptive_color`): a maximized window in front tints the bar
 //! and dock, and a window under one of cnde's own windows or popups tints
 //! its solid backing.
 //!
@@ -141,7 +141,7 @@ impl Tints {
 impl crate::state::State {
     /// Sample the windows cnde's UI matches, when it does.
     pub fn update_tints(&mut self) {
-        if !self.config.appearance.match_windows {
+        if !self.config.appearance.adaptive_color {
             self.tints.clear();
             return;
         }

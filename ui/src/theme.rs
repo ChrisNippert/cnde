@@ -403,7 +403,7 @@ impl Theme {
     }
 
     /// The bar and dock in `tint` (a maximized window's colour, with
-    /// `appearance.match_windows`), `amount` of the way, with ink that
+    /// `appearance.adaptive_color`), `amount` of the way, with ink that
     /// reads on it.
     pub fn matched(&self, tint: Color, amount: f32) -> Self {
         let ink = tint.ink();

@@ -210,9 +210,10 @@ pub struct Appearance {
     /// blurred wallpaper, or solid. Snapped or maximized windows are
     /// always solid.
     pub material: Material,
-    /// The bar and dock take the colour of a maximized window in front,
-    /// and solid popups and cnde's windows a tint of the window under them.
-    pub match_windows: bool,
+    /// The bar, dock, quick settings and cnde's windows take their colour
+    /// from the windows against the screen's edges, or the wallpaper.
+    #[serde(alias = "match_windows")]
+    pub adaptive_color: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -247,7 +248,7 @@ impl Default for Appearance {
             accent_color: "#f4a7c6".into(),
             corner_radius: Self::CORNER_RADIUS,
             material: Material::Frosted,
-            match_windows: false,
+            adaptive_color: false,
         }
     }
 }

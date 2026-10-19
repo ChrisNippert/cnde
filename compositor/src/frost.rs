@@ -7,7 +7,7 @@
 //! edge has no windows behind it anyway (they stop at its reserved space).
 //! A popup or one of cnde's windows over another window would show the
 //! wallpaper through it, so there the frost fades to a solid backing (a
-//! tint of that window's colour with `appearance.match_windows`).
+//! tint of that window's colour with `appearance.adaptive_color`).
 
 use std::{
     collections::HashMap,

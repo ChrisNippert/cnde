@@ -882,7 +882,7 @@ impl State {
                 &crate::frost::Behind::new(
                     &self.space,
                     &output,
-                    self.config.appearance.match_windows.then_some(&self.tints),
+                    self.config.appearance.adaptive_color.then_some(&self.tints),
                 ),
                 now,
             );
@@ -930,7 +930,7 @@ impl State {
                     &self.wallpapers,
                     &output,
                     &self.config,
-                    self.config.appearance.match_windows.then_some(&self.tints),
+                    self.config.appearance.adaptive_color.then_some(&self.tints),
                     now,
                 ),
                 &output,

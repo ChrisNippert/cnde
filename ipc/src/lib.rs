@@ -70,7 +70,7 @@ pub struct OutputEdges {
     /// The wallpaper along the top is light: a clear bar needs dark text.
     #[serde(default)]
     pub top_light: bool,
-    /// A maximized window is in front (and `appearance.match_windows` is
+    /// A maximized window is in front (and `appearance.adaptive_color` is
     /// on): its colour along its top and bottom edges, for the bar and
     /// dock to take.
     #[serde(default)]
