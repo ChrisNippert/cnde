@@ -495,15 +495,17 @@ impl State {
     /// Whether `window` takes part in its workspace's layout, if that tiles.
     /// Dialogs and fixed-size windows float above the tiles.
     pub fn tileable(window: &Window) -> bool {
+        let (placement, minimized) = with_state(window, |s| (s.placement, s.minimized));
+        placement == Placement::Floating && !minimized && Self::could_tile(window)
+    }
+
+    /// Whether `window` would tile if it floated: not kept floating, not a
+    /// dialog, not fixed-size.
+    fn could_tile(window: &Window) -> bool {
         let Some(toplevel) = window.toplevel() else {
             return false;
         };
-        let (placement, minimized, keep_floating) =
-            with_state(window, |s| (s.placement, s.minimized, s.keep_floating));
-        if placement != Placement::Floating || minimized || keep_floating {
-            return false;
-        }
-        if toplevel.parent().is_some() {
+        if with_state(window, |s| s.keep_floating) || toplevel.parent().is_some() {
             return false;
         }
         let (min, max) = compositor::with_states(toplevel.wl_surface(), |states| {
@@ -795,12 +797,17 @@ impl State {
         });
         let mut cascade = 0;
         for window in windows {
+            // Maximized or snapped, it joins the tiles too, and floats where
+            // it did before that when tiling stops.
+            let restored = match now {
+                WindowLayout::Tiling => self.unplace_to_tile(&window),
+                WindowLayout::Floating => None,
+            };
             if !Self::tileable(&window) {
                 continue;
             }
-            let rect = self
-                .space
-                .element_geometry(&window)
+            let rect = restored
+                .or_else(|| self.space.element_geometry(&window))
                 .zip(origin)
                 .map(|(geo, origin)| Rectangle::new(geo.loc - origin, geo.size));
             match now {
@@ -852,6 +859,27 @@ impl State {
             }
         }
         self.relayout_workspace(index, true);
+    }
+
+    /// Take a maximized or snapped `window` (that could tile) back to
+    /// floating, unsent: the relayout that follows sizes it into its tile.
+    /// Returns where it floated before, in space coordinates.
+    fn unplace_to_tile(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
+        let (placement, minimized) = with_state(window, |s| (s.placement, s.minimized));
+        let snapped_or_maximized = matches!(
+            placement,
+            Placement::Maximized | Placement::SnappedLeft | Placement::SnappedRight
+        );
+        if !snapped_or_maximized || minimized || !Self::could_tile(window) {
+            return None;
+        }
+        window.toplevel()?.with_pending_state(|s| {
+            s.states.unset(XdgState::Maximized);
+        });
+        with_state(window, |s| {
+            s.placement = Placement::Floating;
+            s.restore
+        })
     }
 
     /// `tiling` in the config changed (from `old`): workspaces that follow
