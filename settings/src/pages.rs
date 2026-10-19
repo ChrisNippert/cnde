@@ -1987,6 +1987,23 @@ const CLOCKS: &[(&str, &str)] = &[
     ("Fri 2:30 PM", "%a %-I:%M %p"),
 ];
 
+/// The top bar's and dock's placements.
+fn bar_modes() -> Vec<Choice> {
+    choices(&[
+        ("Attached", s("attached")),
+        ("Floating", s("floating")),
+        ("Auto", s("auto")),
+    ])
+}
+
+fn bar_mode(mode: cnde_config::BarMode) -> Value {
+    s(match mode {
+        cnde_config::BarMode::Attached => "attached",
+        cnde_config::BarMode::Floating => "floating",
+        cnde_config::BarMode::Auto => "auto",
+    })
+}
+
 fn panel(c: &Config, d: &Config) -> Vec<Group> {
     let (p, dp) = (&c.panel, &d.panel);
     let mut clocks: Vec<Choice> = CLOCKS
@@ -2106,13 +2123,29 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .advanced(),
                 Row::new(
+                    "panel.mode",
+                    "Placement",
+                    Control::Segmented(bar_modes()),
+                    bar_mode(p.mode),
+                    bar_mode(dp.mode),
+                )
+                .sub("Auto floats clear of the edge until a window touches it"),
+                Row::new(
                     "panel.frosted",
                     "Frosted",
                     Control::switch(),
                     Value::Bool(p.frosted),
                     Value::Bool(dp.frosted),
                 )
-                .sub("Translucent over the blurred wallpaper"),
+                .sub("Translucent over the blurred wallpaper; solid while a window touches it"),
+                Row::new(
+                    "panel.clear",
+                    "Clear while floating",
+                    Control::switch(),
+                    Value::Bool(p.clear),
+                    Value::Bool(dp.clear),
+                )
+                .sub("No background until a window touches it, just text and icons"),
                 Row::new(
                     "panel.rounded",
                     "Rounded corners",
@@ -2258,13 +2291,23 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
     if on_edge {
         rows.push(
             Row::new(
+                "dock.mode",
+                "Placement",
+                Control::Segmented(bar_modes()),
+                bar_mode(c.dock.mode),
+                bar_mode(d.dock.mode),
+            )
+            .sub("Auto floats clear of the edge until a window touches it"),
+        );
+        rows.push(
+            Row::new(
                 "dock.extend",
                 "Stretch across the edge",
                 Control::switch(),
                 Value::Bool(c.dock.extend),
                 Value::Bool(d.dock.extend),
             )
-            .sub("Instead of sitting in the middle, sized to its icons"),
+            .sub("While attached, instead of being sized to its icons"),
         );
         rows.push(
             Row::new(
