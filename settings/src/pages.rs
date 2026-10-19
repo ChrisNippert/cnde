@@ -2352,9 +2352,10 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
         } else {
             ("Left", "Right")
         };
+        let float_align = |v: Option<cnde_config::DockAlign>| v.map_or(Value::Unset, align);
         let row = Row::new(
             "dock.align",
-            "Alignment",
+            "Alignment when attached",
             Control::Segmented(choices(&[
                 (start, s("start")),
                 ("Center", s("center")),
@@ -2368,6 +2369,21 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
         } else {
             row
         });
+        rows.push(
+            Row::new(
+                "dock.float_align",
+                "Alignment when floating",
+                Control::Segmented(choices(&[
+                    ("Same", Value::Unset),
+                    (start, s("start")),
+                    ("Center", s("center")),
+                    (end, s("end")),
+                ])),
+                float_align(c.dock.float_align),
+                float_align(d.dock.float_align),
+            )
+            .sub("Where the dock sits along its edge while it floats"),
+        );
     }
     if c.dock.position != DockPosition::Off {
         rows.push(Row::new(
