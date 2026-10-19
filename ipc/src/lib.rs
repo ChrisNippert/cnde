@@ -67,6 +67,9 @@ pub struct OutputEdges {
     pub bottom: bool,
     pub left: bool,
     pub right: bool,
+    /// The wallpaper along the top is light: a clear bar needs dark text.
+    #[serde(default)]
+    pub top_light: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

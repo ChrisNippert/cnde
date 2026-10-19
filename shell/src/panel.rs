@@ -52,6 +52,8 @@ pub struct Draw<'a> {
     pub mode: BarMode,
     /// No background while floating free.
     pub clear: bool,
+    /// The wallpaper behind the bar is light: a clear bar's text goes dark.
+    pub backdrop_light: bool,
 }
 
 /// Editing the bar in place (from its right-click menu).
@@ -343,6 +345,7 @@ impl Panel {
             solid,
             mode,
             clear,
+            backdrop_light,
         } = ctx;
         if self.width == 0 {
             return; // not configured yet
@@ -387,6 +390,32 @@ impl Panel {
         let (width, _) = canvas.size();
         let height = self.height as f32;
         canvas.clear(Color::rgba(0, 0, 0, 0.0));
+        // Clear and floating, the text sits on the wallpaper itself: dark
+        // on a light one, light on a dark one, easing back as it fills in.
+        let on_wallpaper = if clear { float * (1.0 - solid) } else { 0.0 };
+        let mut adjusted;
+        let theme = if on_wallpaper > 0.0 {
+            let wanted = if backdrop_light {
+                Color::rgb(0x1b, 0x1d, 0x1a)
+            } else {
+                Color::rgb(0xff, 0xff, 0xff)
+            };
+            adjusted = theme.clone();
+            let fg = theme.panel_foreground.mix(wanted, on_wallpaper);
+            adjusted.panel_foreground = fg;
+            adjusted.workspace_active = fg;
+            adjusted.workspace_dot = fg.with_alpha(fg.a * 0.45);
+            let ink = if backdrop_light { 0x00 } else { 0xff };
+            adjusted.panel_button_hover = theme
+                .panel_button_hover
+                .mix(Color::rgba(ink, ink, ink, 0.12), on_wallpaper);
+            adjusted.panel_button_active = theme
+                .panel_button_active
+                .mix(Color::rgba(ink, ink, ink, 0.2), on_wallpaper);
+            &adjusted
+        } else {
+            theme
+        };
         let background = {
             let a = theme.panel_background.a;
             // Clear: fades out as it floats off, back in when touched.

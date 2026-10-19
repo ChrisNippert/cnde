@@ -260,6 +260,7 @@ impl State {
             .map(|output| {
                 let mut edges = OutputEdges {
                     output: output.name(),
+                    top_light: self.wallpapers.top_light(&output.name()),
                     ..Default::default()
                 };
                 let (Some(geo), false) = (self.space.output_geometry(output), open) else {

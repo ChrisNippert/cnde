@@ -1088,6 +1088,11 @@ impl App {
             .get(index)
             .and_then(|p| self.edges_of(&p.output))
             .is_some_and(|e| e.top);
+        let backdrop_light = self
+            .panels
+            .get(index)
+            .and_then(|p| self.edges_of(&p.output))
+            .is_some_and(|e| e.top_light);
         let Some(panel) = self.panels.get_mut(index) else {
             return;
         };
@@ -1114,6 +1119,7 @@ impl App {
                 solid,
                 mode: self.config.panel.mode,
                 clear: self.config.panel.clear,
+                backdrop_light,
             },
         );
     }

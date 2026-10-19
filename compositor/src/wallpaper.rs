@@ -87,6 +87,21 @@ struct Done {
     blurred_size: Size<i32, Buffer>,
 }
 
+/// Whether the top strip (where the bar sits) of an RGBA image is light:
+/// its average luminance, as text contrast sees it, is past the middle.
+fn top_is_light(pixels: &[u8], size: Size<i32, Buffer>) -> bool {
+    let (w, h) = (size.w.max(0) as usize, size.h.max(0) as usize);
+    // The bar's height and a bit, on a typical monitor.
+    let rows = (h / 16).max(1).min(h);
+    let strip = pixels.get(..w * rows * 4).unwrap_or_default();
+    let (sum, n) = strip.as_chunks::<4>().0.iter().fold((0.0, 0usize), |(sum, n), p| {
+        let lin = |c: u8| (c as f64 / 255.0).powf(2.2);
+        let y = 0.2126 * lin(p[0]) + 0.7152 * lin(p[1]) + 0.0722 * lin(p[2]);
+        (sum + y, n + 1)
+    });
+    n > 0 && sum / n as f64 > 0.3
+}
+
 /// The blurred copy is made this many times smaller; the GPU's filtering
 /// smooths it back up, and it costs 1/16 of the memory.
 const BLUR_DOWNSCALE: u32 = 4;
@@ -101,6 +116,8 @@ struct Entry {
     blurred_size: Size<i32, Buffer>,
     /// Pixels waiting to be uploaded (needs the renderer): sharp, blurred.
     upload: Option<(Vec<u8>, Vec<u8>)>,
+    /// The strip along the top is light (see `top_is_light`).
+    top_light: bool,
 }
 
 pub struct Wallpapers {
@@ -155,6 +172,7 @@ impl Wallpapers {
             blurred: None,
             blurred_size: done.blurred_size,
             upload: None,
+            top_light: false,
         });
         // A newer result may already be here (jobs can finish out of order
         // across a fast config change); keep the newest.
@@ -162,8 +180,15 @@ impl Wallpapers {
             entry.size = done.size;
             entry.generation = done.generation;
             entry.blurred_size = done.blurred_size;
+            entry.top_light = top_is_light(&done.blurred, done.blurred_size);
             entry.upload = Some((done.pixels, done.blurred));
         }
+    }
+
+    /// Whether the wallpaper along `output`'s top is light, so text drawn
+    /// straight on it (a clear bar) should be dark.
+    pub fn top_light(&self, output: &str) -> bool {
+        self.entries.get(output).is_some_and(|e| e.top_light)
     }
 
     /// The background for `output`, or `None` to show the clear color.
@@ -530,6 +555,24 @@ fn gradient(w: u32, h: u32, source: &Source) -> RgbaImage {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn top_strip_brightness() {
+        let size = Size::from((4, 32));
+        let image = |top: u8, rest: u8| -> Vec<u8> {
+            (0..32)
+                .flat_map(|row| {
+                    let v = if row < 2 { top } else { rest };
+                    std::iter::repeat_n([v, v, v, 255], 4).flatten()
+                })
+                .collect()
+        };
+        // Only the top strip counts.
+        assert!(top_is_light(&image(240, 10), size));
+        assert!(!top_is_light(&image(30, 250), size));
+        assert!(!top_is_light(&[], size));
+    }
+
     use super::*;
 
     #[test]
