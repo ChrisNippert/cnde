@@ -445,9 +445,12 @@ pub struct Dock {
     pub launcher_gap: f32,
     /// What's behind the icons.
     pub background: DockBackground,
-    /// On a screen edge: stretch across the whole edge instead of sitting
-    /// in the middle, sized to its icons.
+    /// On a screen edge, while attached: stretch across the whole edge
+    /// instead of being sized to its icons.
     pub extend: bool,
+    /// On a screen edge: attached to it, floating clear of it, or floating
+    /// until a window touches it.
+    pub mode: BarMode,
     /// Where along its edge it sits; stretched, where its icons sit.
     pub align: DockAlign,
     /// On a screen edge: maximized windows stop at it. Off, it floats over
@@ -475,6 +478,7 @@ impl Default for Dock {
             launcher_gap: 12.0,
             background: DockBackground::Solid,
             extend: false,
+            mode: BarMode::Auto,
             align: DockAlign::Center,
             reserve: true,
             locked: false,

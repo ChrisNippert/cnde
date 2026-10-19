@@ -815,6 +815,16 @@ impl App {
             }
             dock.frosted = dock::frosted(self.config.dock.background);
             dock.solid = touched;
+            dock.mode = self.config.dock.mode;
+            dock.edge_length = self
+                .outputs
+                .info(&dock.output)
+                .and_then(|info| info.logical_size)
+                .map_or(0, |(w, h)| match dock.position() {
+                    cnde_config::DockPosition::Left | cnde_config::DockPosition::Right => h,
+                    _ => w,
+                })
+                .max(0) as u32;
             dock.pad = self.config.dock.padding;
             dock.launcher = dock::LauncherPlace {
                 first: self.config.dock.launcher == cnde_config::LauncherSide::Start,

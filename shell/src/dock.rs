@@ -6,7 +6,7 @@
 //! one that isn't launches it, and a middle click always opens a new one.
 //! The window list and focusing go through the compositor (see `ipc`).
 
-use cnde_config::{DockAlign, DockBackground, DockPosition};
+use cnde_config::{BarMode, DockAlign, DockBackground, DockPosition};
 use cnde_ipc::WindowInfo;
 use cnde_ui::{Canvas, Color, Icons, Theme};
 use smithay_client_toolkit::{
@@ -290,8 +290,19 @@ pub struct Dock {
     pub output: WlOutput,
     pub layer: LayerSurface,
     position: DockPosition,
-    /// Stretched across its whole edge (`dock.extend`).
+    /// Stretched across its whole edge while attached (`dock.extend`).
     extend: bool,
+    /// On an edge: attached, floating, or floating until a window touches.
+    pub mode: BarMode,
+    /// The monitor's logical length along the dock's edge.
+    pub edge_length: u32,
+    /// How far it floats off the edge and how far it's stretched along
+    /// it, 0 to 1 each.
+    shape: cnde_ui::Animator<Shape>,
+    /// Margins last asked for: (from the edge, start side, end side).
+    margins: (i32, i32, i32),
+    /// Its current length along the edge, which the margins leave it.
+    length: f32,
     align: DockAlign,
     /// On an edge, maximized windows stop at it (else it floats over them).
     reserve: bool,
@@ -317,6 +328,15 @@ pub struct Dock {
     /// Apps just launched from here (desktop IDs), bouncing until their
     /// window shows up.
     pub launching: Vec<(String, std::time::Instant)>,
+}
+
+/// The two ways an edge dock's shape moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Shape {
+    /// Off the edge (1) or flush against it (0).
+    Float,
+    /// Across the whole edge (1) or sized to its icons (0).
+    Stretch,
 }
 
 /// How long an icon bounces at most when its app is slow to open.
@@ -356,6 +376,14 @@ impl Dock {
         );
         // The overview dock always floats, sized to its icons.
         let extend = extend && position != DockPosition::Overview;
+        // On an edge it spans the edge, and its margins shape it: a pill
+        // floating clear, or flush and stretched end to end (`edge_shape`).
+        let edge_anchor = match position {
+            DockPosition::Left => Some(Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM),
+            DockPosition::Right => Some(Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM),
+            DockPosition::Overview | DockPosition::Off => None,
+            _ => Some(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT),
+        };
         let (anchor, margin) = match position {
             DockPosition::Left => (Anchor::LEFT, EDGE_MARGIN),
             DockPosition::Right => (Anchor::RIGHT, EDGE_MARGIN),
@@ -379,6 +407,7 @@ impl Dock {
             }
             (true, _) => (anchor | Anchor::LEFT | Anchor::RIGHT, 0),
         };
+        let (anchor, margin) = edge_anchor.map_or((anchor, margin), |a| (a, 0));
         layer.set_anchor(anchor);
         layer.set_margin(margin, margin, margin, margin);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
@@ -388,6 +417,11 @@ impl Dock {
             layer,
             position,
             extend,
+            mode: BarMode::Auto,
+            edge_length: 0,
+            shape: cnde_ui::Animator::new(),
+            margins: (0, 0, 0),
+            length: 0.0,
             align,
             reserve,
             frosted: false,
@@ -418,30 +452,107 @@ impl Dock {
         (self.extend, self.align, self.reserve)
     }
 
-    fn layout(&self, icon: f32) -> Layout {
-        let layout = layout(
+    /// The icons at their natural size, before any stretching.
+    fn natural_layout(&self, icon: f32) -> Layout {
+        layout(
             &self.items,
             icon,
             self.pad,
             self.launcher,
             self.vertical(),
             self.edit.is_some(),
-        );
-        let length = if self.vertical() {
-            self.surface_size.1
-        } else {
-            self.surface_size.0
-        };
-        if self.extend {
-            spread(layout, length as f32, self.vertical(), self.align)
+        )
+    }
+
+    fn layout(&self, icon: f32) -> Layout {
+        let layout = self.natural_layout(icon);
+        if self.on_edge() {
+            spread(layout, self.length, self.vertical(), self.align)
         } else {
             layout
         }
     }
 
-    /// Corner radius of the background: square when it meets both ends.
+    fn on_edge(&self) -> bool {
+        !matches!(self.position, DockPosition::Overview | DockPosition::Off)
+    }
+
+    /// Corner radius of the background: squaring off as it meets both
+    /// ends (the compositor's frost uses the same rule).
     fn radius(&self, theme: &Theme) -> f32 {
-        if self.extend { 0.0 } else { theme.dock_radius }
+        if !self.on_edge() {
+            return theme.dock_radius;
+        }
+        let (_, start, end) = self.margins;
+        theme.dock_radius * cnde_ipc::dock::roundness(start + end) as f32
+    }
+
+    /// Where an edge dock is right now, easing towards where its mode and
+    /// the windows touching it want it: its margins (from the edge, start
+    /// side, end side) and its length along the edge.
+    fn edge_shape(&mut self, natural: f32) -> ((i32, i32, i32), f32) {
+        let floats = match self.mode {
+            BarMode::Attached => false,
+            BarMode::Floating => true,
+            BarMode::Auto => !self.solid,
+        };
+        let stretches = !floats && self.extend;
+        let medium = cnde_ui::anim::MEDIUM;
+        let float = self
+            .shape
+            .get(Shape::Float, if floats { 1.0 } else { 0.0 }, medium);
+        let stretch = self
+            .shape
+            .get(Shape::Stretch, if stretches { 1.0 } else { 0.0 }, medium);
+        let full = self.edge_length as f32;
+        if full <= 0.0 {
+            return ((EDGE_MARGIN, 0, 0), natural);
+        }
+        let natural = natural.min(full);
+        let edge = EDGE_MARGIN as f32;
+        let pill_start = match self.align {
+            DockAlign::Center => (full - natural) / 2.0,
+            DockAlign::Start => edge,
+            DockAlign::End => full - natural - edge,
+        }
+        .max(0.0);
+        let length = (natural + (full - natural) * stretch).round();
+        let start = (pill_start * (1.0 - stretch)).round();
+        let end = (full - length - start).max(0.0);
+        let gap = (edge * float).round() as i32;
+        ((gap, start as i32, end as i32), full - start - end)
+    }
+
+    /// Set the margins (and the space kept free) for the shape now.
+    fn apply_edge_shape(&mut self, icon: f32) {
+        let natural = self.natural_layout(icon);
+        let (along, across) = if self.vertical() {
+            (natural.height, natural.width.ceil() as i32)
+        } else {
+            (natural.width, natural.height.ceil() as i32)
+        };
+        let (margins, length) = self.edge_shape(along);
+        self.length = length;
+        if margins == self.margins {
+            return;
+        }
+        self.margins = margins;
+        let (gap, start, end) = margins;
+        match self.position {
+            DockPosition::Left => self.layer.set_margin(start, 0, end, gap),
+            DockPosition::Right => self.layer.set_margin(start, gap, end, 0),
+            _ => self.layer.set_margin(0, end, gap, start),
+        }
+        // Maximized windows stop at the dock, unless it floats over them.
+        // Attached or auto, margin plus zone stays the dock's thickness, so
+        // nothing moves as it floats off or snaps back; floating for good,
+        // there's a gap either side of it.
+        let zone = match (self.reserve, self.mode) {
+            (false, _) => 0,
+            (true, BarMode::Floating) => across + 2 * EDGE_MARGIN - gap,
+            (true, _) => across - gap,
+        };
+        self.layer.set_exclusive_zone(zone);
     }
 
     /// Recompute the size after starting or finishing editing.
@@ -519,25 +630,20 @@ impl Dock {
         if size != self.size {
             self.size = size;
             let thickness = if self.vertical() { size.0 } else { size.1 };
-            match (self.extend, self.vertical()) {
+            match (self.on_edge(), self.vertical()) {
                 (false, _) => self.layer.set_size(size.0, size.1),
                 (true, true) => self.layer.set_size(thickness, 0),
                 (true, false) => self.layer.set_size(0, thickness),
             }
-            if self.position != DockPosition::Overview {
-                // Maximized windows stop at the dock, unless it floats over
-                // them (0: it still keeps clear of the panel).
-                let margin = if self.extend { 0 } else { EDGE_MARGIN };
-                let zone = if self.reserve {
-                    thickness as i32 + margin
-                } else {
-                    0
-                };
-                self.layer.set_exclusive_zone(zone);
-            }
             if !self.configured {
-                self.layer.commit();
+                self.margins = (-1, -1, -1);
             }
+        }
+        if self.on_edge() {
+            self.apply_edge_shape(icon);
+        }
+        if !self.configured {
+            self.layer.commit();
         }
         let cells = self.items.len()
             + 1
@@ -589,9 +695,10 @@ impl Dock {
     /// The dock's own size, logical.
     pub fn size(&self) -> (u32, u32) {
         let layout_size = self.size;
-        match (self.extend, self.vertical()) {
-            (true, true) if self.surface_size.1 > 0 => (layout_size.0, self.surface_size.1),
-            (true, false) if self.surface_size.0 > 0 => (self.surface_size.0, layout_size.1),
+        let length = self.length.round() as u32;
+        match (self.on_edge(), self.vertical()) {
+            (true, true) if length > 0 => (layout_size.0, length),
+            (true, false) if length > 0 => (length, layout_size.1),
             _ => layout_size,
         }
     }
@@ -635,6 +742,12 @@ impl Dock {
             return;
         }
         self.dirty = false;
+        self.shape.begin();
+        if self.on_edge() {
+            // With this frame's buffer, so the compositor's frost and the
+            // drawn dock change shape together.
+            self.apply_edge_shape(icon);
+        }
         let layout = self.layout(icon);
         let scale = self.scale;
         self.solid_fade.begin();
@@ -717,7 +830,7 @@ impl Dock {
             surface.commit();
         }
         // Keep hopping: draw again on the next frame.
-        if !self.launching.is_empty() || self.solid_fade.running() {
+        if !self.launching.is_empty() || self.solid_fade.running() || self.shape.running() {
             self.dirty = true;
         }
     }

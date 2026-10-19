@@ -53,12 +53,9 @@ impl DockFrost {
         config: &cnde_config::Config,
     ) -> Vec<OutputElement> {
         let dock = &config.dock;
-        let dock_radius = if dock.extend && dock.position != cnde_config::DockPosition::Overview {
-            0.0
-        } else {
-            // As the dock draws itself (the palette sets the shape).
-            cnde_ui::Theme::for_appearance(&config.appearance).dock_radius as f64
-        };
+        // As the dock draws itself (the palette sets the shape).
+        let dock_radius_full = cnde_ui::Theme::for_appearance(&config.appearance).dock_radius as f64;
+        let dock_radius = dock_radius_full;
         let mut wanted = Vec::new();
         if dock.background == cnde_config::DockBackground::Frosted {
             wanted.push((cnde_ipc::dock::NAMESPACE, dock_radius, None));
@@ -74,11 +71,29 @@ impl DockFrost {
                 let map = layer_map_for_output(output);
                 map.layers()
                     .find(|l| l.namespace() == namespace)
-                    .and_then(|l| Some((map.layer_geometry(l)?, l.cached_state().margin.top)))
+                    .and_then(|l| {
+                        let m = l.cached_state().margin;
+                        let sides = match dock.position {
+                            cnde_config::DockPosition::Left | cnde_config::DockPosition::Right => {
+                                m.top + m.bottom
+                            }
+                            _ => m.left + m.right,
+                        };
+                        Some((map.layer_geometry(l)?, m.top, sides))
+                    })
             };
-            let Some((mut area, margin)) = layer.filter(|(a, _)| !a.is_empty()) else {
+            let Some((mut area, margin, sides)) = layer.filter(|(a, _, _)| !a.is_empty()) else {
                 continue;
             };
+            if namespace == cnde_ipc::dock::NAMESPACE
+                && !matches!(
+                    dock.position,
+                    cnde_config::DockPosition::Overview | cnde_config::DockPosition::Off
+                )
+            {
+                // An edge dock squares off as its side margins close.
+                radius = dock_radius_full * cnde_ipc::dock::roundness(sides);
+            }
             if namespace == "cnde-panel" && margin > 0 {
                 // Floating: its corners grow with its margin (see
                 // cnde_ipc::panel::GAP), as the shell draws them.

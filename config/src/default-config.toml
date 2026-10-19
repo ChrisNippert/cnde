@@ -133,7 +133,8 @@
 # launcher = "end"         # the app grid button: "start" (before the icons) or "end"
 # launcher_gap = 12        # space between it and the icons
 # background = "solid"     # "solid" or "frosted" (translucent over the blurred wallpaper)
-# extend = false           # on an edge: stretch across the whole edge
+# extend = false           # on an edge, while attached: stretch across the whole edge
+# mode = "auto"            # on an edge: "attached", "floating", or "auto" (floats until a window touches it)
 # align = "center"         # "start" (left/top), "center", "end" (right/bottom); stretched, moves the icons
 # reserve = true           # on an edge: maximized windows stop at it; false floats it over them
 # locked = false           # true: no dragging icons or the dock, and no edit mode

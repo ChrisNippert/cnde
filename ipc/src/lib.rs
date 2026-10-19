@@ -191,6 +191,15 @@ pub mod dock {
     pub const NAMESPACE: &str = "cnde-dock";
     /// Corner radius of a dock that doesn't stretch across its edge.
     pub const RADIUS: f64 = 24.0;
+    /// An edge dock's corners square off as its side margins close below
+    /// this (logical px, both sides together), so it meets the screen's
+    /// ends square; the compositor's frost follows the same rule.
+    pub const SQUARE_WITHIN: i32 = 16;
+
+    /// How rounded an edge dock is, 0 to 1, from its side margins.
+    pub fn roundness(side_margins: i32) -> f64 {
+        (side_margins as f64 / SQUARE_WITHIN as f64).clamp(0.0, 1.0)
+    }
 }
 
 pub mod app_grid {
