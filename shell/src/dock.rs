@@ -890,9 +890,9 @@ impl Dock {
             if self.solid { 1.0 } else { 0.0 },
             cnde_ui::anim::MEDIUM,
         );
-        // Urgent icons breathe: a slow wave from the dock's first frame.
-        let urgent = self.items.iter().any(|i| i.badge.urgent);
-        let pulse = pulse_at(PULSE_START.elapsed().as_secs_f32());
+        // Urgent icons get a steady ring: animating it would repaint the
+        // dock every frame for as long as an app wants attention.
+        let pulse = 1.0;
         let matched;
         let theme = match self.tint_fade.update(self.tint) {
             Some(shown) => {
@@ -980,7 +980,6 @@ impl Dock {
             || self.solid_fade.running()
             || self.tint_fade.running()
             || self.shape.running()
-            || urgent
         {
             self.dirty = true;
         }
@@ -1319,16 +1318,6 @@ fn off_dock(at: (f64, f64), size: (u32, u32)) -> bool {
     dx.hypot(dy) > UNPIN_DISTANCE
 }
 
-/// How long an urgent icon's ring takes to breathe in and out.
-const PULSE_PERIOD: f32 = 1.8;
-static PULSE_START: std::sync::LazyLock<std::time::Instant> =
-    std::sync::LazyLock::new(std::time::Instant::now);
-
-/// 0 to 1 and back, `secs` into the dock's life.
-fn pulse_at(secs: f32) -> f32 {
-    0.5 - 0.5 * (secs / PULSE_PERIOD * std::f32::consts::TAU).cos()
-}
-
 /// The progress bar along the bottom of an icon at `icon_box`: the track,
 /// then how much of it is filled.
 fn progress_bars((x, y): (f32, f32), icon: f32, progress: f32) -> (Rect, Rect) {
@@ -1360,7 +1349,7 @@ fn paint_badge(
         return;
     }
     if badge.urgent {
-        // A ring that breathes round the icon.
+        // A ring round the icon.
         let reach = 2.0 + 2.0 * pulse;
         canvas.stroke_rounded_rect(
             at.0 - reach,
@@ -1425,14 +1414,6 @@ mod tests {
         assert!(over.w <= track.w + 1e-4);
     }
 
-    #[test]
-    fn pulse_stays_within_zero_and_one() {
-        for i in 0..40 {
-            let p = pulse_at(i as f32 * 0.1);
-            assert!((0.0..=1.0).contains(&p));
-        }
-        assert!(pulse_at(0.0) < 0.01);
-    }
     #[test]
     fn hides_only_when_touched_and_not_held_out() {
         assert!(should_hide(true, true, false, false));
