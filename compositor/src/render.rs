@@ -247,6 +247,7 @@ pub fn output_elements(
             output_loc,
             scale,
             now,
+            1.0,
         ));
     }
     for closed in closing.iter().filter(|c| c.below >= windows.len()) {
@@ -376,10 +377,13 @@ pub(crate) fn window_elements(
     output_loc: smithay::utils::Point<f64, Logical>,
     scale: Scale<f64>,
     now: Instant,
+    // Multiplies the window's own opacity (1 for a window as it is).
+    opacity: f32,
 ) -> Vec<OutputElement> {
     let bar = crate::decorations::titlebar_height(win) as f64;
     with_state(win, |state| {
-        let frame = effects::window_frame(state, live, now);
+        let mut frame = effects::window_frame(state, live, now);
+        frame.alpha *= opacity;
         if !win.geometry().is_empty() {
             state.last_frame = Some(LastFrame::record(renderer, win, scale, frame.rect));
         }

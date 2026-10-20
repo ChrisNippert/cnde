@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use cnde_config::DockPosition;
-use cnde_ipc::{Request, Side};
+use cnde_ipc::{DockIcon, Request, Side};
 use smithay_client_toolkit::reexports::calloop::{
     RegistrationToken,
     timer::{TimeoutAction, Timer},
@@ -37,6 +37,8 @@ pub struct Preview {
     clicked: Option<Target>,
     show_timer: Option<(RegistrationToken, Target)>,
     hide_timer: Option<RegistrationToken>,
+    /// The icon positions last sent to the compositor, per monitor.
+    icons_sent: Vec<(String, Vec<DockIcon>)>,
 }
 
 /// Which side of its icon the panel opens on for a dock at `position`.
@@ -196,6 +198,46 @@ impl App {
             }
             None => self.dock_preview_hide(),
         }
+    }
+
+    /// Tell the compositor where the dock's icons are, if that changed, so
+    /// windows minimize into them and grow back out.
+    pub fn dock_icons_sync(&mut self) {
+        let icon = self.config.dock.icon_size as f32;
+        let mut now = Vec::new();
+        for dock in &self.docks {
+            let Some(output) = self.outputs.info(&dock.output).and_then(|i| i.name) else {
+                continue;
+            };
+            let icons: Vec<DockIcon> = dock
+                .items()
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| !item.windows.is_empty())
+                .filter_map(|(i, item)| {
+                    let cell = dock.cell_rect(i, icon)?;
+                    Some(DockIcon {
+                        windows: item.windows.clone(),
+                        cell: [cell.x, cell.y, cell.w, cell.h].map(|v| f64::from(v).round()),
+                    })
+                })
+                .collect();
+            now.push((output, icons));
+        }
+        for (output, icons) in &now {
+            if !self
+                .preview
+                .icons_sent
+                .iter()
+                .any(|(o, i)| o == output && i == icons)
+            {
+                self.ipc.send(&Request::DockIcons {
+                    output: output.clone(),
+                    icons: icons.clone(),
+                });
+            }
+        }
+        self.preview.icons_sent = now;
     }
 
     /// The dock's items changed: refresh the panel, or drop it.

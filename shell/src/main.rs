@@ -1023,6 +1023,7 @@ impl App {
                 self.config.dock.icon_size as f32,
             );
         }
+        self.dock_icons_sync();
     }
 
     pub fn redraw_all(&mut self) {

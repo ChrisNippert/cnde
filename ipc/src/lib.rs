@@ -77,6 +77,13 @@ pub enum Side {
     Right,
 }
 
+/// One dock icon: its windows and its cell in the dock's surface.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DockIcon {
+    pub windows: Vec<u64>,
+    pub cell: [f64; 4],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct OutputEdges {
     pub output: String,
@@ -191,6 +198,14 @@ pub enum Request {
         side: Side,
     },
     DockPreviewHide,
+    /// Where the dock's icons are on `output`, so minimizing and restoring
+    /// can fly windows to and from them. Each entry is an icon's windows
+    /// and its (x, y, w, h) within the dock's surface. Sent when the layout
+    /// changes.
+    DockIcons {
+        output: String,
+        icons: Vec<DockIcon>,
+    },
     /// Ask this window to close (as its close button would).
     CloseWindow {
         id: u64,

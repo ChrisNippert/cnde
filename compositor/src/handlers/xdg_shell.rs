@@ -102,6 +102,10 @@ impl XdgShellHandler for State {
     }
 
     fn minimize_request(&mut self, surface: ToplevelSurface) {
+        debug!(
+            x11 = crate::xwayland::is_x11(&self.display_handle, surface.wl_surface()),
+            "client asked to minimize"
+        );
         if let Some(window) = self.window_for_surface(surface.wl_surface()) {
             self.minimize(&window);
         }
