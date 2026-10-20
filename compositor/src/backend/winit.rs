@@ -363,6 +363,12 @@ impl State {
         }
 
         let output = backend.output.clone();
+        State::presentation_feedback(&self.space, &output).presented::<_, smithay::utils::Monotonic>(
+            smithay::utils::Clock::<smithay::utils::Monotonic>::new().now(),
+            smithay::wayland::presentation::Refresh::Unknown,
+            0,
+            smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind::empty(),
+        );
         if self.lock.is_locked() {
             self.lock.frame_drawn();
         }

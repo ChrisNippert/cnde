@@ -36,6 +36,7 @@ use smithay::{
         },
         shm::ShmState,
         socket::ListeningSocketSource,
+        presentation::PresentationState,
         viewporter::ViewporterState,
     },
 };
@@ -159,6 +160,8 @@ pub struct State {
     pub seat_state: SeatState<Self>,
     #[allow(dead_code)] // owns the global; dropping it removes the protocol
     pub viewporter_state: ViewporterState,
+    #[allow(dead_code)] // Holds the wp_presentation global.
+    pub presentation_state: PresentationState,
     #[allow(dead_code)] // owns the global; dropping it removes the protocol
     pub fractional_scale_state: FractionalScaleManagerState,
     pub data_device_state: DataDeviceState,
@@ -185,6 +188,10 @@ impl State {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let presentation_state = PresentationState::new::<Self>(
+            &dh,
+            <smithay::utils::Monotonic as smithay::utils::ClockSource>::ID as u32,
+        );
         let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
         smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(&dh);
         // Games: raw mouse motion, and the pointer locked or confined to
@@ -275,6 +282,7 @@ impl State {
             output_manager_state,
             seat_state,
             viewporter_state,
+            presentation_state,
             fractional_scale_state,
             data_device_state,
         })
@@ -368,6 +376,32 @@ impl State {
             warn!(?err, "failed to flush clients");
         }
         crate::watchdog::beat(Phase::Dispatch);
+    }
+
+    /// Presentation-time feedback for everything visible on `output`, to
+    /// fire when this frame reaches the screen. Games pace themselves on it
+    /// (vkd3d's present-wait), so it must exist.
+    pub fn presentation_feedback(
+        space: &smithay::desktop::Space<smithay::desktop::Window>,
+        output: &Output,
+    ) -> smithay::desktop::utils::OutputPresentationFeedback {
+        use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind;
+        let mut feedback = smithay::desktop::utils::OutputPresentationFeedback::new(output);
+        for window in space.elements_for_output(output) {
+            window.take_presentation_feedback(
+                &mut feedback,
+                |_, _| Some(output.clone()),
+                |_, _| Kind::empty(),
+            );
+        }
+        for layer in smithay::desktop::layer_map_for_output(output).layers() {
+            layer.take_presentation_feedback(
+                &mut feedback,
+                |_, _| Some(output.clone()),
+                |_, _| Kind::empty(),
+            );
+        }
+        feedback
     }
 
     /// Tell clients visible on `output` to draw their next frame.

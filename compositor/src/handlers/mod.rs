@@ -7,7 +7,7 @@ use smithay::{
     backend::allocator::dmabuf::Dmabuf,
     delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
     delegate_output, delegate_pointer_constraints, delegate_relative_pointer, delegate_seat,
-    delegate_viewporter, delegate_xdg_decoration,
+    delegate_presentation, delegate_viewporter, delegate_xdg_decoration,
     input::{
         Seat, SeatHandler, SeatState,
         pointer::{CursorImageStatus, PointerHandle},
@@ -133,6 +133,7 @@ delegate_dmabuf!(State);
 // Surface cropping/scaling. Required by xwayland-satellite, and with
 // fractional scale it lets clients draw at the exact pixel size.
 delegate_viewporter!(State);
+delegate_presentation!(State);
 
 // Tells each client the scale of the monitor it's on (1.25, not just 1 or 2),
 // so it can draw sharp instead of being resampled by us.

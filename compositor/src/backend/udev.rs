@@ -61,14 +61,17 @@ const COLOR_FORMATS: &[Fourcc] = &[
 ];
 const CLEAR_COLOR: [f32; 4] = [0.12, 0.12, 0.14, 1.0];
 
+/// Each queued frame carries the presentation feedback it answers.
+type Feedback = Option<smithay::desktop::utils::OutputPresentationFeedback>;
+
 type GbmOutputManager = DrmOutputManager<
     GbmAllocator<DrmDeviceFd>,
     GbmFramebufferExporter<DrmDeviceFd>,
-    (),
+    Feedback,
     DrmDeviceFd,
 >;
 type GbmOutput =
-    DrmOutput<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
+    DrmOutput<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, Feedback, DrmDeviceFd>;
 
 pub struct UdevBackend {
     pub session: LibSeatSession,
@@ -1044,7 +1047,8 @@ impl State {
         );
 
         if rendered {
-            match surface.drm_output.queue_frame(()) {
+            let feedback = State::presentation_feedback(&self.space, &output);
+            match surface.drm_output.queue_frame(Some(feedback)) {
                 Ok(()) => {
                     surface.redraw = RedrawState::WaitingForVblank {
                         redraw_needed: false,
@@ -1091,8 +1095,35 @@ impl State {
         else {
             return;
         };
-        if let Err(err) = surface.drm_output.frame_submitted() {
-            warn!(?err, "frame_submitted failed");
+        match surface.drm_output.frame_submitted() {
+            Ok(Some(Some(mut feedback))) => {
+                use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind;
+                let refresh = surface.output.current_mode().map_or(
+                    smithay::wayland::presentation::Refresh::Unknown,
+                    |mode| {
+                        smithay::wayland::presentation::Refresh::fixed(
+                            std::time::Duration::from_secs_f64(
+                                1000.0 / mode.refresh.max(1) as f64,
+                            ),
+                        )
+                    },
+                );
+                let (time, seq) = match _metadata {
+                    Some(DrmEventMetadata {
+                        time: smithay::backend::drm::DrmEventTime::Monotonic(time),
+                        sequence,
+                    }) => (smithay::utils::Time::from(*time), *sequence as u64),
+                    _ => (smithay::utils::Clock::<smithay::utils::Monotonic>::new().now(), 0),
+                };
+                feedback.presented::<_, smithay::utils::Monotonic>(
+                    time,
+                    refresh,
+                    seq,
+                    Kind::Vsync | Kind::HwClock | Kind::HwCompletion,
+                );
+            }
+            Ok(_) => {}
+            Err(err) => warn!(?err, "frame_submitted failed"),
         }
         // The monitors went off while this frame was on its way.
         if screens_off {
