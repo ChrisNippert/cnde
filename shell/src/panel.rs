@@ -48,6 +48,8 @@ pub struct Draw<'a> {
     pub overview_open: bool,
     pub quick_settings_open: bool,
     pub calendar_open: bool,
+    /// A dot beside the clock: notifications nobody's looked at.
+    pub unread: bool,
     pub clock_position: ClockPosition,
     /// Number beside the battery icon.
     pub battery_percent: bool,
@@ -404,6 +406,7 @@ impl Panel {
             overview_open,
             quick_settings_open,
             calendar_open,
+            unread,
             clock_position,
             battery_percent,
             battery_low,
@@ -738,6 +741,14 @@ impl Panel {
             );
         }
         canvas.text(fonts, &mut clock, clock_x, clock_y, theme.panel_foreground);
+        if unread {
+            canvas.circle(
+                clock_x + clock.width + 7.0,
+                (height / 2.0).round(),
+                3.0,
+                theme.accent,
+            );
+        }
         self.clock_region = Some(clock_region);
 
         if self.edit.is_some() {

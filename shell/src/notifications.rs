@@ -5,11 +5,16 @@
 //!
 //! The D-Bus side answers on zbus's own thread and hands each one to the
 //! main loop. If another server (mako, dunst) already has the name, it
-//! keeps it and we show nothing.
+//! keeps it and we show nothing. We hold the name replaceable: a daemon
+//! started with `--replace` takes over and we step back, taking the name
+//! again once it goes.
 
 use std::{
     collections::HashMap,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    },
     time::Duration,
 };
 
@@ -31,13 +36,18 @@ use smithay_client_toolkit::{
         wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerSurface},
     },
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use zbus::{
     fdo::{RequestNameFlags, RequestNameReply},
     zvariant::{OwnedValue, Structure},
 };
 
-use crate::App;
+use crate::{
+    App,
+    calendar::Target,
+    history::{self, Entry},
+    media::Op,
+};
 
 const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
@@ -67,7 +77,9 @@ enum Reason {
 pub enum Event {
     /// We have the name: the connection to keep.
     Ready(zbus::blocking::Connection),
-    Notify(Note),
+    /// Another server took the name from us.
+    Lost,
+    Notify(Box<Note>),
     Close(u32),
 }
 
@@ -86,6 +98,9 @@ pub struct Note {
     timeout: Option<Duration>,
     /// Stays after an action is chosen.
     resident: bool,
+    /// Not worth keeping in the history (volume and the like).
+    transient: bool,
+    desktop_entry: Option<String>,
     sound: Option<String>,
 }
 
@@ -104,8 +119,9 @@ pub struct Notifications {
     /// Newest first.
     cards: Vec<Card>,
     pub stack: Option<Stack>,
-    /// Waiting for a connection we asked for.
-    starting: bool,
+    /// The D-Bus thread is running (owning the name or waiting for it);
+    /// setting this ends it.
+    stop: Option<Arc<AtomicBool>>,
     tx: Option<Sender<Event>>,
 }
 
@@ -146,17 +162,113 @@ pub fn setup(handle: &LoopHandle<'static, App>) -> Notifications {
     }
 }
 
-fn serve(tx: Sender<Event>) -> zbus::Result<Option<zbus::blocking::Connection>> {
+/// What happened to the name, as far as owning it goes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Ownership {
+    /// Another server has it, or nobody and we haven't asked yet.
+    Out,
+    Owner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Signal {
+    /// The bus took the name from us.
+    Lost,
+    /// Nobody has the name any more.
+    Free,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Step {
+    Nothing,
+    /// Clear our cards and stop answering.
+    GiveWay,
+    /// Ask for the name.
+    Request,
+}
+
+/// What a bus signal about the name means for us.
+fn hand_off(own: Ownership, signal: Signal) -> (Ownership, Step) {
+    match (own, signal) {
+        (Ownership::Owner, Signal::Lost) => (Ownership::Out, Step::GiveWay),
+        (Ownership::Out, Signal::Free) => (Ownership::Out, Step::Request),
+        _ => (own, Step::Nothing),
+    }
+}
+
+/// Ask for the name, replaceable and without queueing.
+fn claim(conn: &zbus::blocking::Connection) -> zbus::Result<bool> {
+    let reply = conn.request_name_with_flags(
+        NAME,
+        RequestNameFlags::AllowReplacement | RequestNameFlags::DoNotQueue,
+    )?;
+    Ok(matches!(reply, RequestNameReply::PrimaryOwner))
+}
+
+/// Serve the name until `stop`: claim it if it's free, step back if
+/// another server replaces us, claim it again when that one goes.
+fn serve(tx: Sender<Event>, stop: Arc<AtomicBool>) -> zbus::Result<()> {
     let conn = zbus::blocking::Connection::session()?;
     conn.object_server().at(
         PATH,
         Server {
-            tx,
+            tx: tx.clone(),
             next_id: AtomicU32::new(1),
         },
     )?;
-    let reply = conn.request_name_with_flags(NAME, RequestNameFlags::DoNotQueue.into())?;
-    Ok(matches!(reply, RequestNameReply::PrimaryOwner).then_some(conn))
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender("org.freedesktop.DBus")?
+        .interface("org.freedesktop.DBus")?
+        .build();
+    let signals = zbus::blocking::MessageIterator::for_match_rule(rule, &conn, Some(64))?;
+    let mut own = Ownership::Out;
+    if claim(&conn)? {
+        own = Ownership::Owner;
+        let _ = tx.send(Event::Ready(conn.clone()));
+    } else {
+        info!("another notification server is running");
+    }
+    for message in signals.flatten() {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let header = message.header();
+        let signal = match header.member().map(|m| m.as_str()) {
+            Some("NameLost") => message
+                .body()
+                .deserialize::<String>()
+                .is_ok_and(|n| n == NAME)
+                .then_some(Signal::Lost),
+            Some("NameOwnerChanged") => message
+                .body()
+                .deserialize::<(String, String, String)>()
+                .is_ok_and(|(name, _, new)| name == NAME && new.is_empty())
+                .then_some(Signal::Free),
+            _ => None,
+        };
+        let Some(signal) = signal else {
+            continue;
+        };
+        let (next, step) = hand_off(own, signal);
+        own = next;
+        match step {
+            Step::Nothing => {}
+            Step::GiveWay => {
+                info!("another notification server took over");
+                let _ = tx.send(Event::Lost);
+            }
+            Step::Request => {
+                if claim(&conn)? {
+                    own = Ownership::Owner;
+                    let _ = tx.send(Event::Ready(conn.clone()));
+                }
+            }
+        }
+    }
+    // Give the name back for whoever's next.
+    let _ = conn.release_name(NAME);
+    Ok(())
 }
 
 struct Server {
@@ -234,11 +346,13 @@ impl Server {
             critical,
             timeout,
             resident: hint_bool("resident"),
+            transient: hint_bool("transient"),
+            desktop_entry: hint_str(&["desktop-entry"]),
             sound: (!hint_bool("suppress-sound"))
                 .then(|| hint_str(&["sound-name"]))
                 .flatten(),
         };
-        let _ = self.tx.send(Event::Notify(note));
+        let _ = self.tx.send(Event::Notify(Box::new(note)));
         id
     }
 
@@ -329,31 +443,28 @@ impl App {
     pub fn sync_notification_server(&mut self) {
         let n = &mut self.notifications;
         if self.config.notifications.enabled {
-            if n.conn.is_none() && !n.starting {
-                let Some(tx) = n.tx.clone() else {
-                    return;
-                };
-                n.starting = true;
-                let ready = tx.clone();
+            if n.stop.is_none()
+                && let Some(tx) = n.tx.clone()
+            {
+                let stop = Arc::new(AtomicBool::new(false));
+                n.stop = Some(stop.clone());
                 let _ = std::thread::Builder::new()
                     .name("notifications".into())
-                    .spawn(move || match serve(tx) {
-                        Ok(Some(conn)) => {
-                            let _ = ready.send(Event::Ready(conn));
+                    .spawn(move || {
+                        if let Err(err) = serve(tx, stop) {
+                            warn!(%err, "can't serve notifications");
                         }
-                        Ok(None) => info!("another notification server is running"),
-                        Err(err) => warn!(%err, "can't serve notifications"),
                     });
             }
-        } else if n.conn.take().is_some() {
-            // Dropping the connection gives the name back.
-            info!("notifications off");
-            for card in std::mem::take(&mut n.cards) {
-                if let Some(timer) = card.expire {
-                    self.loop_handle.remove(timer);
-                }
+        } else if let Some(stop) = n.stop.take() {
+            // The thread ends at the bus's next word and releases the name;
+            // do it now too if we have it.
+            stop.store(true, Ordering::Relaxed);
+            if let Some(conn) = n.conn.take() {
+                let _ = conn.release_name(NAME);
             }
-            n.stack = None;
+            info!("notifications off");
+            self.clear_cards();
         }
         self.status.do_not_disturb = self
             .notifications
@@ -362,23 +473,63 @@ impl App {
             .then_some(self.config.notifications.do_not_disturb);
     }
 
+    fn clear_cards(&mut self) {
+        for card in std::mem::take(&mut self.notifications.cards) {
+            if let Some(timer) = card.expire {
+                self.loop_handle.remove(timer);
+            }
+        }
+        self.notifications.stack = None;
+    }
+
     pub fn notification_event(&mut self, event: Event) {
         match event {
             Event::Ready(conn) => {
-                self.notifications.starting = false;
-                if self.config.notifications.enabled {
+                if self.config.notifications.enabled && self.notifications.stop.is_some() {
                     info!("showing notifications");
                     self.notifications.conn = Some(conn);
                 }
                 self.sync_notification_server();
                 self.redraw_all();
             }
-            Event::Notify(note) => self.notify(note),
+            Event::Lost => {
+                self.notifications.conn = None;
+                self.clear_cards();
+                self.sync_notification_server();
+                self.redraw_all();
+            }
+            Event::Notify(note) => self.notify(*note),
             Event::Close(id) => self.close_notification(id, Reason::Closed),
         }
     }
 
     fn notify(&mut self, note: Note) {
+        if self.config.notifications.history {
+            self.history.push(
+                Entry {
+                    seq: 0,
+                    id: note.id,
+                    app_name: note.app_name.clone(),
+                    icon: note.icon.clone(),
+                    summary: note.summary.clone(),
+                    body: note.body.clone(),
+                    at: history::now(),
+                    actions: note.actions.clone(),
+                    desktop_entry: note.desktop_entry.clone(),
+                },
+                note.transient,
+            );
+            // Looking at the list as it arrives: nothing's unread.
+            if self.calendar.is_some() {
+                self.history.mark_read();
+            }
+            // Looking at the list as it arrives: nothing's unread.
+            if self.calendar.is_some() {
+                self.history.mark_read();
+            }
+            self.draw_calendar();
+            self.redraw_panels();
+        }
         if self.config.notifications.do_not_disturb && !note.critical {
             // Not kept anywhere yet: as if it had timed out.
             self.notification_closed(note.id, Reason::Expired);
@@ -574,6 +725,53 @@ impl App {
             stack.hover = hover;
             self.draw_notifications();
         }
+    }
+
+    /// A click in the clock's popover that isn't about the month.
+    pub fn centre_action(&mut self, target: Target) {
+        debug!(?target, "notification centre click");
+        match target {
+            Target::Item(seq) => {
+                let Some(entry) = self.history.get(seq) else {
+                    return;
+                };
+                // The app hears about the click; it raises itself.
+                if entry.has_default() {
+                    let id = entry.id;
+                    self.notification_signal("ActionInvoked", &(id, "default"));
+                    self.history.remove(seq);
+                }
+            }
+            Target::Dismiss(seq) => self.history.remove(seq),
+            Target::ClearApp(i) => {
+                if let Some(app) = self.calendar.as_ref().and_then(|c| c.app_name(i)) {
+                    let app = app.to_string();
+                    self.history.clear_app(&app);
+                }
+            }
+            Target::ClearAll => self.history.clear(),
+            Target::DoNotDisturb => {
+                crate::config::set_do_not_disturb(!self.config.notifications.do_not_disturb)
+            }
+            Target::PlayPause | Target::Next | Target::Previous => {
+                if let Some(bus) = self.media.current().map(|p| p.bus.clone()) {
+                    let op = match target {
+                        Target::Next => Op::Next,
+                        Target::Previous => Op::Previous,
+                        _ => Op::PlayPause,
+                    };
+                    self.media.control(&bus, op);
+                }
+            }
+            Target::Pick(i) => {
+                let bus = self.media.live().get(i).map(|p| p.bus.clone());
+                if bus.is_some() {
+                    self.media.selected = bus;
+                }
+            }
+            Target::Month(_) => {}
+        }
+        self.draw_calendar();
     }
 
     /// A click: `secondary` (right button) dismisses.
@@ -821,6 +1019,18 @@ fn stack_height(cards: &[Card]) -> u32 {
 mod tests {
     use super::*;
     use zbus::zvariant::{StructureBuilder, Value};
+
+    #[test]
+    fn name_hand_off() {
+        use {Ownership::*, Signal::*, Step::*};
+        // Replaced while serving: step back, then take it again when free.
+        assert_eq!(hand_off(Owner, Lost), (Out, GiveWay));
+        assert_eq!(hand_off(Out, Free), (Out, Request));
+        // Another server was there from the start: wait for it to go.
+        assert_eq!(hand_off(Out, Lost), (Out, Nothing));
+        // Our own name going away isn't a reason to ask again.
+        assert_eq!(hand_off(Owner, Free), (Owner, Nothing));
+    }
 
     #[test]
     fn image_data_is_read_and_shrunk() {

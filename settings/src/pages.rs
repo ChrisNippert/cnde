@@ -2391,6 +2391,14 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .sub("A power icon on the status button; power options are in quick settings"),
                 Row::new(
+                    "panel.media_controls",
+                    "Media controls",
+                    Control::switch(),
+                    Value::Bool(p.media_controls),
+                    Value::Bool(dp.media_controls),
+                )
+                .sub("The song that's playing, with play and skip buttons, in the clock's popover"),
+                Row::new(
                     "panel.clock_format",
                     "Clock",
                     Control::Dropdown(clocks),
@@ -3119,6 +3127,14 @@ fn accessibility(c: &Config, d: &Config) -> Vec<Group> {
                 Value::Bool(d.notifications.do_not_disturb),
             )
             .sub("Only urgent ones show"),
+            Row::new(
+                "notifications.history",
+                "Notification history",
+                Control::switch(),
+                Value::Bool(c.notifications.history),
+                Value::Bool(d.notifications.history),
+            )
+            .sub("The clock's popover lists past notifications"),
         ],
     )]
 }

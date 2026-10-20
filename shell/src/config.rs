@@ -165,6 +165,7 @@ impl App {
         self.status
             .set_profile_command(&self.config.power.profile_command);
         self.sync_notification_server();
+        self.sync_media();
         self.sync_tray();
         if self.config.dock.locked && self.dock_editing {
             self.finish_dock_edit();
