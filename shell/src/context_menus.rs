@@ -160,7 +160,7 @@ impl App {
         }
     }
 
-    fn open_menu(
+    pub fn open_menu(
         &mut self,
         parent: &wlr_layer::LayerSurface,
         serial: u32,
@@ -369,6 +369,7 @@ impl App {
             Action::EditDock => self.start_dock_edit(),
             Action::EditPanel if self.panel_editing() => self.finish_panel_edit(),
             Action::EditPanel => self.start_panel_edit(),
+            Action::Tray(key, id) => self.tray_menu_click(&key, id),
         }
     }
 }

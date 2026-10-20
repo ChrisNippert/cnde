@@ -110,6 +110,7 @@
 [panel]
 # enabled = true           # false: hide the top bar (e.g. to use waybar via autostart)
 # all_monitors = false     # true: a panel on every monitor, not just the main one
+# tray = true              # show tray icons (Discord, Steam, Nextcloud...) in the bar
 # height = 32
 # rounded = false          # rounded bottom corners and a soft shadow
 # frosted = true           # just the bar, overriding appearance.material

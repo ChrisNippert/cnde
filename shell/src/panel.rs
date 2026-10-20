@@ -26,6 +26,7 @@ use tracing::warn;
 use crate::{
     App, Status,
     status::{Battery, Network, Volume},
+    tray::TrayItem,
     workspaces::Workspace,
 };
 
@@ -38,6 +39,7 @@ pub struct Draw<'a> {
     pub clock_format: &'a str,
     pub workspaces: &'a [Workspace],
     pub status: &'a Status,
+    pub tray: &'a mut [TrayItem],
     /// What the buttons open is open (they're drawn highlighted).
     pub overview_open: bool,
     pub quick_settings_open: bool,
@@ -104,6 +106,8 @@ pub struct Panel {
     activities_region: Option<(f32, f32)>,
     /// The status icons' logical x range, from the last draw.
     status_region: Option<(f32, f32)>,
+    /// Each tray icon's (index, logical x range), from the last draw.
+    tray_regions: Vec<(usize, f32, f32)>,
     /// The button under the pointer.
     hover: Option<Button>,
     /// Being edited in place.
@@ -161,6 +165,7 @@ impl Panel {
             scale: 1,
             activities_region: None,
             status_region: None,
+            tray_regions: Vec::new(),
             hover: None,
             edit: None,
             clock_region: None,
@@ -248,6 +253,24 @@ impl Panel {
         } else {
             None
         }
+    }
+
+    /// The tray icon (an index into the tray's items) at `x`.
+    pub fn tray_at(&self, (x, _y): (f64, f64)) -> Option<usize> {
+        let x = x as f32;
+        let &(i, ..) = self.tray_regions.iter().find(|(_, a, b)| x >= *a && x < *b)?;
+        Some(i)
+    }
+
+    /// The first tray icon, for the debug aid.
+    pub fn tray_at_first(&self) -> Option<usize> {
+        self.tray_regions.first().map(|r| r.0)
+    }
+
+    /// Where a tray icon's menu hangs from: panel coordinates.
+    pub fn tray_rect(&self, i: usize) -> Option<(i32, i32, i32, i32)> {
+        let &(_, a, b) = self.tray_regions.iter().find(|(n, ..)| *n == i)?;
+        Some((a as i32, 0, (b - a) as i32, self.height as i32))
     }
 
     /// What's under `point` while editing.
@@ -344,6 +367,7 @@ impl Panel {
             clock_format,
             workspaces,
             status,
+            tray,
             overview_open,
             quick_settings_open,
             calendar_open,
@@ -569,13 +593,29 @@ impl Panel {
             canvas.text(fonts, text, x.round(), text_y, color);
         }
 
+        // Tray icons, just left of the status button.
+        self.tray_regions.clear();
+        let shown: Vec<usize> = (0..tray.len()).filter(|&i| tray[i].visible()).collect();
+        let mut tray_start = region.0;
+        if !shown.is_empty() {
+            let gap = theme.status_spacing;
+            let width = shown.len() as f32 * (icon + gap);
+            tray_start = region.0 - width - 4.0;
+            let mut x = tray_start + gap / 2.0;
+            for i in shown {
+                tray[i].draw(&mut canvas, icons, (x, icon_y, icon), fg);
+                self.tray_regions.push((i, x - gap / 2.0, x + icon + gap / 2.0));
+                x += icon + gap;
+            }
+        }
+
         // Editing: a Done button left of the status icons.
         self.done_region = None;
-        let mut right_limit = region.0;
+        let mut right_limit = tray_start;
         if self.edit.is_some() {
             let mut label = fonts.layout("Done", theme.font_size, Weight::Bold, scale as f32);
             let bw = label.width + 2.0 * pad + 8.0;
-            let bx = region.0 - 8.0 - bw;
+            let bx = tray_start - 8.0 - bw;
             let inset = theme.panel_button_inset;
             let bh = height - 2.0 * inset;
             canvas.rounded_rect(bx, inset, bw, bh, bh / 2.0, theme.accent);

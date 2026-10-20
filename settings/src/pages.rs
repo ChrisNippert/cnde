@@ -2228,6 +2228,14 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                     Value::Bool(dp.all_monitors),
                 ),
                 Row::new(
+                    "panel.tray",
+                    "Tray icons",
+                    Control::switch(),
+                    Value::Bool(p.tray),
+                    Value::Bool(dp.tray),
+                )
+                .sub("Show icons from apps like Discord, Steam and Nextcloud"),
+                Row::new(
                     "panel.clock_format",
                     "Clock",
                     Control::Dropdown(clocks),
