@@ -1,12 +1,16 @@
 //! cnde-share-picker: the "what do you want to share?" window for screen
 //! sharing. xdg-desktop-portal-wlr runs it as its chooser (`chooser_type =
-//! simple`): it shows a card per monitor with a thumbnail, prints `Monitor: <name>`
-//! for the one picked on stdout and exits 0, or exits 1 when cancelled.
+//! simple`): it shows a card per monitor (Screens tab) or per window
+//! (Windows tab, from ext-foreign-toplevel-list) with a thumbnail, prints
+//! `Monitor: <name>` or `Window: <identifier>` for the one picked on stdout
+//! and exits 0, or exits 1 when cancelled.
 //!
-//! Thumbnails are one ext-image-copy-capture frame of each monitor, taken
-//! before the overlay opens (so the picker isn't in them) and shrunk on
-//! the CPU. If the compositor can't capture, the cards have no preview.
+//! Thumbnails are one ext-image-copy-capture frame of each monitor or
+//! window, taken before the overlay opens (so the picker isn't in them) and
+//! shrunk on the CPU. If the compositor can't capture, the cards have no
+//! preview (windows show their app's icon instead).
 
+mod appicon;
 mod layout;
 mod picker;
 mod thumb;
@@ -18,8 +22,8 @@ use cnde_ui::{
     Canvas, Color, Fonts, Icons, Painter, Rect, Theme, Weight,
     tiny_skia::{IntSize, Pixmap},
 };
-use layout::{CARD_PAD, CARD_W, Hit, THUMB_H, layout};
-use picker::{Nav, Outcome, Picker, report};
+use layout::{CARD_PAD, CARD_W, Hit, THUMB_H, layout_for};
+use picker::{Nav, Outcome, Picker, Tab, report};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_dispatch2, delegate_registry,
@@ -54,7 +58,12 @@ use smithay_client_toolkit::{
 };
 use tracing::{debug, info, warn};
 use wayland_protocols::ext::{
+    foreign_toplevel_list::v1::client::{
+        ext_foreign_toplevel_handle_v1::{self, ExtForeignToplevelHandleV1},
+        ext_foreign_toplevel_list_v1::{self, ExtForeignToplevelListV1},
+    },
     image_capture_source::v1::client::{
+        ext_foreign_toplevel_image_capture_source_manager_v1::ExtForeignToplevelImageCaptureSourceManagerV1,
         ext_image_capture_source_v1::ExtImageCaptureSourceV1,
         ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
     },
@@ -71,14 +80,35 @@ const THUMB_PIXELS: usize = 640;
 /// without them.
 const CAPTURE_WAIT: Duration = Duration::from_millis(2500);
 
-/// One monitor and its capture.
+/// What a card is for.
+enum Kind {
+    Monitor(wl_output::WlOutput),
+    Window {
+        handle: ExtForeignToplevelHandleV1,
+        /// The icon to show when there's no thumbnail.
+        icon: String,
+    },
+}
+
+/// A window the compositor listed.
+struct Toplevel {
+    handle: ExtForeignToplevelHandleV1,
+    title: String,
+    app_id: String,
+    identifier: String,
+}
+
+/// One monitor or window and its capture.
 struct Shot {
+    /// The output name, or the window's title.
     name: String,
-    /// "Dell U2723QE" or similar, if the monitor says.
+    /// What the portal is told: the output name or the window identifier.
+    id: String,
+    /// A monitor's "Dell U2723QE" or similar, if it says; a window's app ID.
     model: String,
     /// "3840 x 2160", from the monitor's current mode.
     resolution: String,
-    output: wl_output::WlOutput,
+    kind: Kind,
     size: (u32, u32),
     format: Option<wl_shm::Format>,
     session: Option<ExtImageCopyCaptureSessionV1>,
@@ -103,7 +133,15 @@ struct App {
 
     copy_manager: Option<ExtImageCopyCaptureManagerV1>,
     source_manager: Option<ExtOutputImageCaptureSourceManagerV1>,
+    toplevel_sources: Option<ExtForeignToplevelImageCaptureSourceManagerV1>,
+    /// Keeps the window list alive; its windows land in `toplevels`.
+    _toplevel_list: Option<ExtForeignToplevelListV1>,
+    toplevels: Vec<Toplevel>,
+    /// Monitors first (that many), then windows.
     shots: Vec<Shot>,
+    monitors: usize,
+    /// Where the tab control's segments were last drawn.
+    tab_rects: Vec<Rect>,
     picker: Picker,
 
     layer: Option<LayerSurface>,
@@ -155,8 +193,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         code: None,
         copy_manager: globals.bind(&qh, 1..=1, ()).ok(),
         source_manager: globals.bind(&qh, 1..=1, ()).ok(),
+        toplevel_sources: globals.bind(&qh, 1..=1, ()).ok(),
+        _toplevel_list: globals.bind(&qh, 1..=1, ()).ok(),
+        toplevels: Vec::new(),
         shots: Vec::new(),
-        picker: Picker::new(Vec::new()),
+        monitors: 0,
+        tab_rects: Vec::new(),
+        picker: Picker::new(Vec::new(), Vec::new()),
         layer: None,
         size: (0, 0),
         scale: 1,
@@ -178,7 +221,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .handle()
         .insert_source(Timer::from_duration(CAPTURE_WAIT), |_, _, app| {
             if app.layer.is_none() {
-                warn!("monitor capture timed out; showing the cards without previews");
+                warn!("capture timed out; showing the cards without previews");
                 app.open();
             }
             TimeoutAction::Drop
@@ -215,10 +258,11 @@ impl App {
                 .unwrap_or_default();
             self.scale = self.scale.max(info.scale_factor);
             self.shots.push(Shot {
+                id: name.clone(),
                 name,
                 model,
                 resolution,
-                output,
+                kind: Kind::Monitor(output),
                 size: (0, 0),
                 format: None,
                 session: None,
@@ -228,12 +272,52 @@ impl App {
                 thumb: None,
             });
         }
-        self.picker = Picker::new(self.shots.iter().map(|s| s.name.clone()).collect());
-        info!(outputs = self.shots.len(), "choosing what to share");
-        if self.shots.is_empty() {
+        self.monitors = self.shots.len();
+        if self.monitors == 0 {
             self.finish(Outcome::Cancel);
             return;
         }
+        for t in &self.toplevels {
+            if t.identifier.is_empty() {
+                continue;
+            }
+            self.shots.push(Shot {
+                name: if t.title.is_empty() {
+                    t.app_id.clone()
+                } else {
+                    t.title.clone()
+                },
+                id: t.identifier.clone(),
+                model: t.app_id.clone(),
+                resolution: String::new(),
+                kind: Kind::Window {
+                    handle: t.handle.clone(),
+                    icon: appicon::icon_name(&t.app_id),
+                },
+                size: (0, 0),
+                format: None,
+                session: None,
+                frame: None,
+                buffer: None,
+                done: false,
+                thumb: None,
+            });
+        }
+        self.picker = Picker::new(
+            self.shots[..self.monitors]
+                .iter()
+                .map(|s| s.id.clone())
+                .collect(),
+            self.shots[self.monitors..]
+                .iter()
+                .map(|s| s.id.clone())
+                .collect(),
+        );
+        info!(
+            outputs = self.monitors,
+            windows = self.shots.len() - self.monitors,
+            "choosing what to share"
+        );
         // Testing aid for debug builds: a nested compositor can only serve one
         // capture before its window surface is lost, and the test takes its own.
         let skip =
@@ -245,7 +329,17 @@ impl App {
             return;
         };
         for (i, shot) in self.shots.iter_mut().enumerate() {
-            let source = sources.create_source(&shot.output, &self.qh, ());
+            let source = match (&shot.kind, &self.toplevel_sources) {
+                (Kind::Monitor(output), _) => sources.create_source(output, &self.qh, ()),
+                (Kind::Window { handle, .. }, Some(windows)) => {
+                    windows.create_source(handle, &self.qh, ())
+                }
+                // No window capture here: the card shows the app's icon.
+                (Kind::Window { .. }, None) => {
+                    shot.done = true;
+                    continue;
+                }
+            };
             shot.session = Some(copy.create_session(
                 &source,
                 ext_image_copy_capture_manager_v1::Options::empty(),
@@ -293,7 +387,7 @@ impl App {
         self.capture_done(index, thumb);
     }
 
-    /// This monitor's capture is over (with a picture or without).
+    /// This card's capture is over (with a picture or without).
     fn capture_done(&mut self, index: usize, thumb: Option<Pixmap>) {
         let Some(shot) = self.shots.get_mut(index) else {
             return;
@@ -306,7 +400,7 @@ impl App {
         }
         shot.buffer = None;
         shot.done = true;
-        debug!(output = %shot.name, preview = thumb.is_some(), "monitor captured");
+        debug!(output = %shot.name, preview = thumb.is_some(), "captured");
         shot.thumb = thumb;
         if self.shots.iter().all(|s| s.done) {
             self.open();
@@ -342,9 +436,8 @@ impl App {
     }
 
     fn pointer_at(&mut self, pos: (f64, f64)) {
-        let columns = layout((self.size.0 as f32, self.size.1 as f32), self.shots.len()).columns;
-        self.picker.set_columns(columns);
-        let hit = self.layout().hit(pos);
+        self.picker.set_columns(self.layout().columns);
+        let hit = self.hit(pos);
         let changed = self.picker.hover(hit) || hit != self.hover;
         self.hover = hit;
         if changed {
@@ -353,14 +446,25 @@ impl App {
     }
 
     fn layout(&self) -> layout::Layout {
-        layout((self.size.0 as f32, self.size.1 as f32), self.shots.len())
+        layout_for(
+            (self.size.0 as f32, self.size.1 as f32),
+            self.picker.count(),
+            self.monitors.max(self.shots.len() - self.monitors),
+        )
+    }
+
+    fn hit(&self, pos: (f64, f64)) -> Hit {
+        match self.tab_rects.iter().position(|r| r.contains(pos)) {
+            Some(i) => Hit::Tab(i),
+            None => self.layout().hit(pos),
+        }
     }
 
     fn key(&mut self, event: KeyEvent) {
         self.picker.set_columns(self.layout().columns);
         let nav = match event.keysym {
             Keysym::Left => Some(Nav::Left),
-            Keysym::Right | Keysym::Tab => Some(Nav::Right),
+            Keysym::Right => Some(Nav::Right),
             Keysym::Up => Some(Nav::Up),
             Keysym::Down => Some(Nav::Down),
             _ => None,
@@ -371,11 +475,14 @@ impl App {
             return;
         }
         match event.keysym {
-            Keysym::Return | Keysym::KP_Enter | Keysym::space => {
-                if let Some(outcome) = self.picker.confirm() {
-                    self.finish(outcome);
-                }
+            Keysym::Tab | Keysym::ISO_Left_Tab => {
+                self.picker.cycle_tab();
+                self.draw();
             }
+            Keysym::Return | Keysym::KP_Enter | Keysym::space => match self.picker.confirm() {
+                Some(outcome) => self.finish(outcome),
+                None => self.draw(),
+            },
             Keysym::Escape => self.finish(Outcome::Cancel),
             _ => {}
         }
@@ -390,6 +497,9 @@ impl App {
             return;
         }
         let scale = self.scale;
+        let layout = self.layout();
+        let (on_screens, on_windows) = self.shots.split_at(self.monitors);
+        let mut tab_rects = Vec::new();
         let (w, h) = (lw as i32 * scale, lh as i32 * scale);
         let (buffer, pixels) = match self
             .pool
@@ -410,12 +520,19 @@ impl App {
                 theme: &self.theme,
             };
             let view = View {
-                shots: &self.shots,
+                shots: match self.picker.tab {
+                    Tab::Screens => on_screens,
+                    Tab::Windows => on_windows,
+                },
+                layout,
+                tab: self.picker.tab,
+                tabs_focused: self.picker.tabs_focused,
                 selected: self.picker.selected,
                 hover: self.hover,
             };
-            paint(&mut p, (lw as f32, lh as f32), &view);
+            tab_rects = paint(&mut p, &view);
         }
+        self.tab_rects = tab_rects;
         // The canvas draws RGBA; the buffer wants BGRA.
         for px in pixels.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
@@ -431,13 +548,17 @@ impl App {
 
 struct View<'a> {
     shots: &'a [Shot],
+    layout: layout::Layout,
+    tab: Tab,
+    tabs_focused: bool,
     selected: usize,
     hover: Hit,
 }
 
-fn paint(p: &mut Painter<'_, '_>, size: (f32, f32), v: &View<'_>) {
+/// Draws the picker; returns where the tab control's segments are.
+fn paint(p: &mut Painter<'_, '_>, v: &View<'_>) -> Vec<Rect> {
     let t = p.theme;
-    let l = layout(size, v.shots.len());
+    let l = &v.layout;
     p.canvas.clear(Color::rgba(0, 0, 0, 0.5));
 
     let panel = l.panel;
@@ -467,16 +588,53 @@ fn paint(p: &mut Painter<'_, '_>, size: (f32, f32), v: &View<'_>) {
         t.popup_text,
     );
     p.label(
-        "Pick the screen to show to the app",
+        match v.tab {
+            Tab::Screens => "Pick the screen to show to the app",
+            Tab::Windows => "Pick the window to show to the app",
+        },
         l.title.0,
         l.title.1 + 28.0,
         13.0,
         Weight::Normal,
         t.qs_dim,
     );
+    let tab_rects = p.segmented(
+        l.tabs.0,
+        l.tabs.1,
+        &["Screens", "Windows"],
+        Some(v.tab.index() as f32),
+        |i| (v.hover == Hit::Tab(i)) as u8 as f32,
+    );
+    if v.tabs_focused
+        && let (Some(first), Some(last)) = (tab_rects.first(), tab_rects.last())
+    {
+        p.canvas.stroke_rounded_rect(
+            first.x - 3.0,
+            first.y - 3.0,
+            last.right() - first.x + 6.0,
+            first.h + 6.0,
+            t.button_radius + 3.0,
+            2.0,
+            t.accent,
+        );
+    }
+
+    if v.shots.is_empty() {
+        let label = "No windows open";
+        let lw = p.measure(label, 14.0, Weight::Normal);
+        p.label_v(
+            label,
+            panel.x + (panel.w - lw) / 2.0,
+            l.tabs.1 + 48.0 + THUMB_H / 2.0,
+            lw + 4.0,
+            14.0,
+            Weight::Normal,
+            t.qs_dim,
+        );
+    }
 
     for (i, (card, shot)) in l.cards.iter().zip(v.shots).enumerate() {
-        let selected = i == v.selected;
+        let selected = i == v.selected && !v.tabs_focused;
         let fill = if selected {
             t.qs_tile.mix(t.accent, 0.22)
         } else {
@@ -495,17 +653,29 @@ fn paint(p: &mut Painter<'_, '_>, size: (f32, f32), v: &View<'_>) {
             None => {
                 p.canvas
                     .rounded_rect(tx, ty, tw, THUMB_H, inner, t.qs_toggle_off);
-                let label = "No preview";
-                let lw = p.measure(label, 13.0, Weight::Normal);
-                p.label_v(
-                    label,
-                    tx + (tw - lw) / 2.0,
-                    ty + THUMB_H / 2.0,
-                    tw,
-                    13.0,
-                    Weight::Normal,
-                    t.qs_dim,
-                );
+                let icon = match &shot.kind {
+                    Kind::Window { icon, .. } => p.canvas.app_icon(
+                        p.icons,
+                        icon,
+                        tx + (tw - 64.0) / 2.0,
+                        ty + (THUMB_H - 64.0) / 2.0,
+                        64.0,
+                    ),
+                    Kind::Monitor(_) => false,
+                };
+                if !icon {
+                    let label = "No preview";
+                    let lw = p.measure(label, 13.0, Weight::Normal);
+                    p.label_v(
+                        label,
+                        tx + (tw - lw) / 2.0,
+                        ty + THUMB_H / 2.0,
+                        tw,
+                        13.0,
+                        Weight::Normal,
+                        t.qs_dim,
+                    );
+                }
             }
         }
         if selected {
@@ -558,6 +728,7 @@ fn paint(p: &mut Painter<'_, '_>, size: (f32, f32), v: &View<'_>) {
         Weight::Normal,
         t.popup_text,
     );
+    tab_rects
 }
 
 impl LayerShellHandler for App {
@@ -754,9 +925,10 @@ impl PointerHandler for App {
                     button: BTN_LEFT, ..
                 } => {
                     self.pointer_at(event.position);
-                    let hit = self.layout().hit(event.position);
-                    if let Some(outcome) = self.picker.click(hit) {
-                        self.finish(outcome);
+                    let hit = self.hit(event.position);
+                    match self.picker.click(hit) {
+                        Some(outcome) => self.finish(outcome),
+                        None => self.draw(),
                     }
                 }
                 _ => {}
@@ -841,6 +1013,67 @@ impl Dispatch<ExtImageCaptureSourceV1, ()> for App {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+    }
+}
+
+impl Dispatch<ExtForeignToplevelImageCaptureSourceManagerV1, ()> for App {
+    fn event(
+        _: &mut Self,
+        _: &ExtForeignToplevelImageCaptureSourceManagerV1,
+        _: <ExtForeignToplevelImageCaptureSourceManagerV1 as smithay_client_toolkit::reexports::client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ExtForeignToplevelListV1, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &ExtForeignToplevelListV1,
+        event: ext_foreign_toplevel_list_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let ext_foreign_toplevel_list_v1::Event::Toplevel { toplevel } = event {
+            app.toplevels.push(Toplevel {
+                handle: toplevel,
+                title: String::new(),
+                app_id: String::new(),
+                identifier: String::new(),
+            });
+        }
+    }
+
+    smithay_client_toolkit::reexports::client::event_created_child!(App, ExtForeignToplevelListV1, [
+        ext_foreign_toplevel_list_v1::EVT_TOPLEVEL_OPCODE => (ExtForeignToplevelHandleV1, ()),
+    ]);
+}
+
+impl Dispatch<ExtForeignToplevelHandleV1, ()> for App {
+    fn event(
+        app: &mut Self,
+        handle: &ExtForeignToplevelHandleV1,
+        event: ext_foreign_toplevel_handle_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use ext_foreign_toplevel_handle_v1::Event;
+        let Some(i) = app.toplevels.iter().position(|t| t.handle == *handle) else {
+            return;
+        };
+        match event {
+            Event::Title { title } => app.toplevels[i].title = title,
+            Event::AppId { app_id } => app.toplevels[i].app_id = app_id,
+            Event::Identifier { identifier } => app.toplevels[i].identifier = identifier,
+            Event::Closed => {
+                app.toplevels.remove(i);
+            }
+            _ => {}
+        }
     }
 }
 

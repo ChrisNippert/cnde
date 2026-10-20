@@ -12,6 +12,8 @@ pub const THUMB_H: f32 = 136.0;
 pub const GAP: f32 = 12.0;
 const PAD: f32 = 26.0;
 const TITLE_H: f32 = 60.0;
+/// The tab control's row, below the title.
+const TABS_H: f32 = 48.0;
 const FOOTER_H: f32 = 34.0;
 const CANCEL_W: f32 = 96.0;
 /// Cards per row at most.
@@ -23,6 +25,8 @@ const MARGIN: f32 = 48.0;
 pub struct Layout {
     pub panel: Rect,
     pub title: (f32, f32),
+    /// Top-left of the Screens / Windows control.
+    pub tabs: (f32, f32),
     pub cards: Vec<Rect>,
     pub cancel: Rect,
     pub columns: usize,
@@ -31,6 +35,8 @@ pub struct Layout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
     Card(usize),
+    /// A segment of the tab control.
+    Tab(usize),
     Cancel,
     /// On the panel but nothing in particular.
     Panel,
@@ -38,18 +44,26 @@ pub enum Hit {
     Outside,
 }
 
-pub fn layout((sw, sh): (f32, f32), count: usize) -> Layout {
+#[cfg(test)]
+pub fn layout(size: (f32, f32), count: usize) -> Layout {
+    layout_for(size, count, count)
+}
+
+/// `count` cards in a panel big enough for `slots` (so it keeps its size
+/// when the tab changes).
+pub fn layout_for((sw, sh): (f32, f32), count: usize, slots: usize) -> Layout {
+    let slots = slots.max(count);
     let fit = ((sw - 2.0 * (PAD + MARGIN) + GAP) / (CARD_W + GAP)).floor();
-    let columns = (fit.max(1.0) as usize).min(MAX_COLUMNS).min(count.max(1));
-    let rows = count.max(1).div_ceil(columns);
+    let columns = (fit.max(1.0) as usize).min(MAX_COLUMNS).min(slots.max(1));
+    let rows = slots.max(1).div_ceil(columns);
     let grid_w = columns as f32 * CARD_W + (columns - 1) as f32 * GAP;
     let grid_h = rows as f32 * CARD_H + (rows - 1) as f32 * GAP;
     let w = grid_w.max(CANCEL_W + 120.0) + 2.0 * PAD;
-    let h = PAD + TITLE_H + grid_h + GAP + FOOTER_H + PAD;
+    let h = PAD + TITLE_H + TABS_H + grid_h + GAP + FOOTER_H + PAD;
     let x = ((sw - w) / 2.0).round();
     let y = ((sh - h) / 2.0).round().max(0.0);
     let grid_x = x + (w - grid_w) / 2.0;
-    let grid_y = y + PAD + TITLE_H;
+    let grid_y = y + PAD + TITLE_H + TABS_H;
     let cards = (0..count)
         .map(|i| {
             let (col, row) = (i % columns, i / columns);
@@ -64,6 +78,7 @@ pub fn layout((sw, sh): (f32, f32), count: usize) -> Layout {
     Layout {
         panel: Rect::new(x, y, w, h),
         title: (x + PAD, y + PAD),
+        tabs: (x + PAD, y + PAD + TITLE_H),
         cards,
         cancel: Rect::new(
             x + w - PAD - CANCEL_W,
@@ -121,6 +136,17 @@ mod tests {
     #[test]
     fn narrow_screens_get_fewer_columns() {
         assert_eq!(layout((600.0, 900.0), 3).columns, 1);
+    }
+
+    #[test]
+    fn window_grids_wrap_and_empty_lists_keep_a_row() {
+        let l = layout((1920.0, 1080.0), 7);
+        assert_eq!((l.columns, l.cards.len()), (3, 7));
+        assert!(l.cards[6].y > l.cards[3].y && l.cards[6].x == l.cards[0].x);
+        let none = layout((1920.0, 1080.0), 0);
+        assert!(none.cards.is_empty() && none.panel.h > CARD_H);
+        // The tab control sits above the first card.
+        assert!(l.tabs.1 + 40.0 <= l.cards[0].y);
     }
 
     #[test]
