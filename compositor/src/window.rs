@@ -245,11 +245,18 @@ impl State {
             .then(|| self.output_for(window))
             .flatten();
             let bbox = self.space.element_bbox(window);
-            for output in entered {
-                let keep = match &own {
-                    Some(own) => *own == output,
-                    None => self.window_on(window, &output),
-                };
+            let keeps: Vec<bool> = entered
+                .iter()
+                .map(|output| match &own {
+                    Some(own) => own == output,
+                    None => self.window_on(window, output),
+                })
+                .collect();
+            // Never leave a window on no monitor at all: a game told it's
+            // nowhere may never present (black screen, audio only).
+            let none_kept = !keeps.contains(&true);
+            for (i, (output, keep)) in entered.into_iter().zip(keeps).enumerate() {
+                let keep = keep || (none_kept && i == 0);
                 if !keep {
                     // Every time: a changed overlap makes `Space` re-enter.
                     with_trimmed(window, |t| {
