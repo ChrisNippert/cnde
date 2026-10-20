@@ -479,6 +479,72 @@ impl Canvas<'_> {
 }
 
 impl Canvas<'_> {
+    /// [`Canvas::icon`] turned `angle` radians clockwise about its centre
+    /// (a chevron that swings from pointing right to pointing down).
+    #[allow(clippy::too_many_arguments)]
+    pub fn icon_rotated(
+        &mut self,
+        icons: &mut Icons,
+        name: &str,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: Color,
+        angle: f32,
+    ) -> bool {
+        let s = self.scale;
+        let px = (size * s).round().max(1.0) as u32;
+        let Some(mask) = icons.get(name, px) else {
+            return false;
+        };
+        let n = mask.size as i32;
+        let half = n as f32 / 2.0;
+        let (cx, cy) = (x * s + half, y * s + half);
+        let (sin, cos) = angle.sin_cos();
+        let (width, height) = (self.pixmap.width() as i32, self.pixmap.height() as i32);
+        let rgb = [
+            (color.r * 255.0).round() as u8,
+            (color.g * 255.0).round() as u8,
+            (color.b * 255.0).round() as u8,
+        ];
+        let reach = (half * std::f32::consts::SQRT_2).ceil() as i32 + 1;
+        let (ox, oy) = (cx.round() as i32, cy.round() as i32);
+        let data = self.pixmap.data_mut();
+        let at = |mx: i32, my: i32| -> f32 {
+            if mx < 0 || my < 0 || mx >= n || my >= n {
+                0.0
+            } else {
+                mask.alpha[(my * n + mx) as usize] as f32
+            }
+        };
+        for dy in -reach..=reach {
+            for dx in -reach..=reach {
+                let (px, py) = (ox + dx, oy + dy);
+                if px < 0 || py < 0 || px >= width || py >= height {
+                    continue;
+                }
+                // Back into the unrotated mask, sampled bilinearly.
+                let (fx, fy) = (px as f32 + 0.5 - cx, py as f32 + 0.5 - cy);
+                let u = fx * cos + fy * sin + half - 0.5;
+                let v = -fx * sin + fy * cos + half - 0.5;
+                let (u0, v0) = (u.floor(), v.floor());
+                let (tu, tv) = (u - u0, v - v0);
+                let (u0, v0) = (u0 as i32, v0 as i32);
+                let top = at(u0, v0) * (1.0 - tu) + at(u0 + 1, v0) * tu;
+                let bottom = at(u0, v0 + 1) * (1.0 - tu) + at(u0 + 1, v0 + 1) * tu;
+                let coverage = (top * (1.0 - tv) + bottom * tv) * color.a;
+                if coverage < 0.5 {
+                    continue;
+                }
+                let i = ((py * width + px) * 4) as usize;
+                blend_premultiplied(&mut data[i..i + 4], rgb, coverage.round() as u8);
+            }
+        }
+        true
+    }
+}
+
+impl Canvas<'_> {
     /// A full-colour app icon (see [`Icons::app`]), `size` logical px square,
     /// top-left at (`x`, `y`). Returns false if no icon was found.
     pub fn app_icon(&mut self, icons: &mut Icons, name: &str, x: f32, y: f32, size: f32) -> bool {
