@@ -364,7 +364,7 @@ fn layer_elements(
 /// One live window, top element first: the crossfading snapshot (if a
 /// resize or a refit is running) above the window's own surfaces.
 #[allow(clippy::too_many_arguments)]
-fn window_elements(
+pub(crate) fn window_elements(
     renderer: &mut GlesRenderer,
     decorations: &mut crate::decorations::Decorations,
     frost: Option<&mut crate::frost::WindowFrost<'_>>,

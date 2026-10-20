@@ -32,6 +32,7 @@ mod shaders;
 mod snap;
 mod snapshot;
 mod spawn;
+mod switcher;
 mod state;
 mod tint;
 mod wallpaper;

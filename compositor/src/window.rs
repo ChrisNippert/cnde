@@ -395,6 +395,8 @@ impl State {
         if let Some(window) = window {
             self.space.raise_element(window, true);
             self.workspaces.raise(window);
+            self.mru.retain(|w| w != window && smithay::utils::IsAlive::alive(w));
+            self.mru.insert(0, window.clone());
         }
         for other in self.space.elements() {
             if Some(other) != window {
