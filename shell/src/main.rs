@@ -24,6 +24,7 @@ mod screenshot;
 mod sounds;
 mod status;
 mod tray;
+mod tray_popover;
 mod workspaces;
 
 use std::{path::PathBuf, time::Duration, time::SystemTime};
@@ -168,6 +169,10 @@ pub struct App {
     quick_settings: Option<(QuickSettings, (i32, i32, i32, i32))>,
     /// The calendar under the clock, while open.
     calendar: Option<calendar::Calendar>,
+    /// The tray's overflow card under the chevron, while open.
+    tray_popover: Option<tray_popover::TrayPopover>,
+    /// As `quick_settings_dismissed`, for the tray popover.
+    tray_popover_dismissed: Option<std::time::Instant>,
     /// As `quick_settings_dismissed`, for the calendar.
     calendar_dismissed: Option<std::time::Instant>,
     seat_handle: Option<wl_seat::WlSeat>,
@@ -222,6 +227,10 @@ pub struct App {
     /// outside it). A click on the status icons right after is that same
     /// click, meant to close it, not to reopen it.
     quick_settings_dismissed: Option<std::time::Instant>,
+    /// The tray item whose menu is open.
+    tray_menu_key: Option<String>,
+    /// The tray item whose menu a click just dismissed, and when.
+    tray_menu_dismissed: Option<(String, std::time::Instant)>,
     apps: Vec<apps::App>,
     app_dirs: Vec<PathBuf>,
     /// When `app_dirs` last changed, as of the last scan.
@@ -335,6 +344,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         quick_settings: None,
         calendar: None,
         calendar_dismissed: None,
+        tray_popover: None,
+        tray_popover_dismissed: None,
         seat_handle: None,
         pointer: None,
         keyboard: None,
@@ -359,6 +370,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         overview_open: false,
         reported_grid: false,
         quick_settings_dismissed: None,
+        tray_menu_key: None,
+        tray_menu_dismissed: None,
         apps: Vec::new(),
         app_dirs: apps::application_dirs(),
         apps_stamp: Vec::new(),
@@ -580,6 +593,7 @@ impl App {
     fn open_screenshot_ui(&mut self, windows: Vec<cnde_ipc::ScreenshotWindow>) {
         self.quick_settings = None;
         self.calendar = None;
+        self.tray_popover = None;
         // A menu's grab would keep the keys (Ctrl+C, Enter) from the tool.
         // The screen is already frozen with it in.
         if self.menu.is_some() {
@@ -816,6 +830,7 @@ impl App {
             // Quick settings hangs from a panel; it can't outlive it.
             self.quick_settings = None;
             self.calendar = None;
+            self.tray_popover = None;
         }
         self.panels.retain(|p| wanted.contains(&p.output));
         for output in wanted {
@@ -1015,6 +1030,7 @@ impl App {
         self.draw_quick_settings();
         // Today moves at midnight.
         self.draw_calendar();
+        self.draw_tray_popover();
     }
 
     /// The colour for the adaptive palette: the main monitor's wallpaper
@@ -1096,6 +1112,7 @@ impl App {
         // Before the new grab, or the compositor disconnects us.
         self.menu = None;
         self.quick_settings = None;
+        self.tray_popover = None;
         self.calendar = calendar::Calendar::open(
             &self.compositor,
             &self.xdg_shell,
@@ -1162,6 +1179,7 @@ impl App {
         // Before the new grab, or the compositor disconnects us.
         self.menu = None;
         self.calendar = None;
+        self.tray_popover = None;
         self.quick_settings = QuickSettings::open(
             &self.compositor,
             &self.xdg_shell,
@@ -1265,6 +1283,9 @@ impl App {
                 workspaces: &self.workspaces.list,
                 status: &self.status,
                 tray: &mut self.tray.items,
+                tray_mode: self.config.panel.tray,
+                tray_popover_open: self.tray_popover.is_some(),
+                power_icon: self.config.panel.power_icon,
                 overview_open: self.overview_open,
                 quick_settings_open: self.quick_settings.is_some(),
                 calendar_open: self.calendar.is_some(),
@@ -1285,6 +1306,7 @@ impl App {
         if self.panels[index].shown != was {
             self.draw_quick_settings();
             self.draw_calendar();
+            self.draw_tray_popover();
             self.draw_menu();
         }
     }
@@ -1317,6 +1339,12 @@ impl CompositorHandler for App {
         {
             calendar.set_scale(factor);
             self.draw_calendar();
+        }
+        if let Some(popover) = &mut self.tray_popover
+            && popover.popup.wl_surface() == surface
+        {
+            popover.set_scale(factor);
+            self.draw_tray_popover();
         }
         if let Some(launcher) = &mut self.launcher
             && launcher.layer.wl_surface() == surface
@@ -1391,6 +1419,12 @@ impl CompositorHandler for App {
             && calendar.frame_done()
         {
             self.draw_calendar();
+        }
+        if let Some(popover) = &mut self.tray_popover
+            && popover.popup.wl_surface() == surface
+            && popover.frame_done()
+        {
+            self.draw_tray_popover();
         }
         if let Some(launcher) = &mut self.launcher
             && launcher.layer.wl_surface() == surface
@@ -1812,6 +1846,14 @@ impl PointerHandler for App {
                 self.calendar_pointer(event);
                 continue;
             }
+            if self
+                .tray_popover
+                .as_ref()
+                .is_some_and(|p| p.popup.wl_surface() == &event.surface)
+            {
+                self.tray_popover_pointer(event);
+                continue;
+            }
             let Some(index) = self
                 .panels
                 .iter()
@@ -1829,6 +1871,9 @@ impl PointerHandler for App {
             if self.panels[index].edit.is_some() && !right_click {
                 self.panel_edit_pointer(index, event);
                 continue;
+            }
+            if matches!(event.kind, PointerEventKind::Press { .. }) {
+                self.tray_close_on_bar_press();
             }
             if let Some(i) = self.panels[index].tray_at(event.position)
                 && self.tray_pointer(index, i, &event.kind)
@@ -1859,10 +1904,11 @@ impl PointerHandler for App {
                 } => match self.panels[index].button_at(event.position) {
                     Some(Button::Status) => self.toggle_quick_settings(index, serial),
                     Some(Button::Clock) => self.toggle_calendar(index, serial),
+                    Some(Button::Chevron) => self.toggle_tray_popover(index, serial),
                     Some(Button::Activities) => {
                         self.ipc.send(&cnde_ipc::Request::ToggleOverview);
                     }
-                    None => {}
+                    Some(Button::Tray(_)) | None => {}
                 },
                 _ => {}
             }
@@ -1890,6 +1936,12 @@ impl PopupHandler for App {
             calendar.configured();
             self.draw_calendar();
         }
+        if let Some(popover) = &mut self.tray_popover
+            && &popover.popup == popup
+        {
+            popover.configured();
+            self.draw_tray_popover();
+        }
         if let Some(menu) = &mut self.menu
             && &menu.popup == popup
         {
@@ -1901,6 +1953,10 @@ impl PopupHandler for App {
     /// The compositor dismissed it (a click outside).
     fn done(&mut self, _: &Connection, _: &QueueHandle<Self>, popup: &Popup) {
         if self.menu.as_ref().is_some_and(|m| &m.popup == popup) {
+            if let Some(key) = self.tray_menu_key.take() {
+                tracing::debug!(%key, "tray menu dismissed");
+                self.tray_menu_dismissed = Some((key, std::time::Instant::now()));
+            }
             self.close_menu();
         }
         if self
@@ -1910,6 +1966,16 @@ impl PopupHandler for App {
         {
             self.quick_settings = None;
             self.quick_settings_dismissed = Some(std::time::Instant::now());
+            self.redraw_panels();
+        }
+        if self
+            .tray_popover
+            .as_ref()
+            .is_some_and(|p| &p.popup == popup)
+        {
+            tracing::debug!("tray popover dismissed");
+            self.tray_popover = None;
+            self.tray_popover_dismissed = Some(std::time::Instant::now());
             self.redraw_panels();
         }
         if self.calendar.as_ref().is_some_and(|c| &c.popup == popup) {
@@ -1990,7 +2056,9 @@ impl KeyboardHandler for App {
         } else if self.launcher.is_some() {
             self.launcher_key(event);
         } else if event.keysym == Keysym::Escape
-            && (self.quick_settings.take().is_some() || self.calendar.take().is_some())
+            && (self.quick_settings.take().is_some()
+                || self.calendar.take().is_some()
+                || self.tray_popover.take().is_some())
         {
             self.redraw_panels();
         }

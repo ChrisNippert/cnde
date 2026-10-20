@@ -3,7 +3,7 @@
 //! the centre, and the status icons on the right open quick settings.
 
 use chrono::Local;
-use cnde_config::{BarMode, ClockPosition};
+use cnde_config::{BarMode, ClockPosition, TrayMode};
 use cnde_ipc::panel::GAP as FLOAT_GAP;
 use cnde_ui::{
     Animator, Canvas, Color, Fonts, Icons, Theme, Weight,
@@ -26,7 +26,7 @@ use tracing::warn;
 use crate::{
     App, Status,
     status::{Battery, Network, Volume},
-    tray::TrayItem,
+    tray::{self, TrayItem},
     workspaces::Workspace,
 };
 
@@ -40,6 +40,10 @@ pub struct Draw<'a> {
     pub workspaces: &'a [Workspace],
     pub status: &'a Status,
     pub tray: &'a mut [TrayItem],
+    pub tray_mode: TrayMode,
+    pub tray_popover_open: bool,
+    /// A power icon at the end of the status button.
+    pub power_icon: bool,
     /// What the buttons open is open (they're drawn highlighted).
     pub overview_open: bool,
     pub quick_settings_open: bool,
@@ -84,12 +88,18 @@ pub enum EditTarget {
 
 /// How close to the bottom edge a press grabs it.
 const EDGE_GRAB: f32 = 7.0;
+/// Between the tray icons and the status button.
+const TRAY_GAP: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Button {
     Activities,
     Status,
     Clock,
+    /// A tray icon in the bar (an index into the tray's items).
+    Tray(usize),
+    /// The chevron that opens the tray popover.
+    Chevron,
 }
 
 pub struct Panel {
@@ -108,6 +118,8 @@ pub struct Panel {
     status_region: Option<(f32, f32)>,
     /// Each tray icon's (index, logical x range), from the last draw.
     tray_regions: Vec<(usize, f32, f32)>,
+    /// The tray chevron's logical x range, from the last draw.
+    chevron_region: Option<(f32, f32)>,
     /// The button under the pointer.
     hover: Option<Button>,
     /// Being edited in place.
@@ -166,6 +178,7 @@ impl Panel {
             activities_region: None,
             status_region: None,
             tray_regions: Vec::new(),
+            chevron_region: None,
             hover: None,
             edit: None,
             clock_region: None,
@@ -248,7 +261,14 @@ impl Panel {
             Some(Button::Activities)
         } else if self.status_region.is_some_and(|(start, _)| x >= start) {
             Some(Button::Status)
-        } else if self.clock_region.is_some_and(|(start, end)| x >= start && x < end) {
+        } else if let Some(i) = self.tray_at((x as f64, 0.0)) {
+            Some(Button::Tray(i))
+        } else if self.chevron_region.is_some_and(|(a, b)| x >= a && x < b) {
+            Some(Button::Chevron)
+        } else if self
+            .clock_region
+            .is_some_and(|(start, end)| x >= start && x < end)
+        {
             Some(Button::Clock)
         } else {
             None
@@ -258,8 +278,17 @@ impl Panel {
     /// The tray icon (an index into the tray's items) at `x`.
     pub fn tray_at(&self, (x, _y): (f64, f64)) -> Option<usize> {
         let x = x as f32;
-        let &(i, ..) = self.tray_regions.iter().find(|(_, a, b)| x >= *a && x < *b)?;
+        let &(i, ..) = self
+            .tray_regions
+            .iter()
+            .find(|(_, a, b)| x >= *a && x < *b)?;
         Some(i)
+    }
+
+    /// Where the tray popover hangs from: the chevron, panel coordinates.
+    pub fn chevron_anchor(&self) -> Option<(i32, i32, i32, i32)> {
+        let (a, b) = self.chevron_region?;
+        Some((a as i32, 0, (b - a) as i32, self.height as i32))
     }
 
     /// The first tray icon, for the debug aid.
@@ -349,7 +378,8 @@ impl Panel {
             .mix(theme.panel_button_active, opened);
         let inset = theme.panel_button_inset;
         let h = height - 2.0 * inset;
-        canvas.rounded_rect(start, inset, end - start, h, h / 2.0, color);
+        let radius = (h / 2.0).min((end - start) / 2.0);
+        canvas.rounded_rect(start, inset, end - start, h, radius, color);
     }
 
     /// The frame callback fired; true if a draw was held back for it.
@@ -368,6 +398,9 @@ impl Panel {
             workspaces,
             status,
             tray,
+            tray_mode,
+            tray_popover_open,
+            power_icon,
             overview_open,
             quick_settings_open,
             calendar_open,
@@ -547,6 +580,9 @@ impl Panel {
         if let Some(battery) = status.battery {
             items.push(battery_icon(battery));
         }
+        if power_icon {
+            items.push("system-shutdown-symbolic".into());
+        }
         let mut percent = status.battery.filter(|_| battery_percent).map(|battery| {
             fonts.layout(
                 &format!("{:.0}%", battery.percent),
@@ -593,19 +629,50 @@ impl Panel {
             canvas.text(fonts, text, x.round(), text_y, color);
         }
 
-        // Tray icons, just left of the status button.
+        // Tray icons, just left of the status button: inline ones, and in
+        // the collapsed style a chevron (and any wanting attention).
         self.tray_regions.clear();
-        let shown: Vec<usize> = (0..tray.len()).filter(|&i| tray[i].visible()).collect();
+        self.chevron_region = None;
+        let (inline, hidden) = tray::split(tray, tray_mode);
+        let gap = theme.status_spacing;
+        let slot = icon + gap;
         let mut tray_start = region.0;
-        if !shown.is_empty() {
-            let gap = theme.status_spacing;
-            let width = shown.len() as f32 * (icon + gap);
-            tray_start = region.0 - width - 4.0;
-            let mut x = tray_start + gap / 2.0;
-            for i in shown {
-                tray[i].draw(&mut canvas, icons, (x, icon_y, icon), fg);
-                self.tray_regions.push((i, x - gap / 2.0, x + icon + gap / 2.0));
-                x += icon + gap;
+        let mut right = region.0 - TRAY_GAP;
+        if !hidden.is_empty() {
+            let a = right - slot;
+            self.chevron_region = Some((a, right));
+            self.button_background(
+                &mut canvas,
+                theme,
+                (a, right),
+                height,
+                Button::Chevron,
+                tray_popover_open,
+            );
+            let name = if tray_popover_open {
+                "pan-up-symbolic"
+            } else {
+                "pan-down-symbolic"
+            };
+            canvas.icon(icons, name, a + gap / 2.0, icon_y, icon, fg);
+            right = a;
+            tray_start = a;
+        }
+        if !inline.is_empty() {
+            tray_start = right - inline.len() as f32 * slot;
+            let mut x = tray_start;
+            for i in inline {
+                self.button_background(
+                    &mut canvas,
+                    theme,
+                    (x, x + slot),
+                    height,
+                    Button::Tray(i),
+                    false,
+                );
+                tray[i].draw(&mut canvas, icons, (x + gap / 2.0, icon_y, icon), fg);
+                self.tray_regions.push((i, x, x + slot));
+                x += slot;
             }
         }
 
@@ -726,7 +793,8 @@ impl Panel {
         if self.anim.running()
             || self.solid_fade.running()
             || self.tint_fade.running()
-            || self.float.running() {
+            || self.float.running()
+        {
             self.dirty = true;
         }
         self.layer.commit();

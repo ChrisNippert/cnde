@@ -2264,11 +2264,23 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                 Row::new(
                     "panel.tray",
                     "Tray icons",
-                    Control::switch(),
-                    Value::Bool(p.tray),
-                    Value::Bool(dp.tray),
+                    Control::Segmented(choices(&[
+                        ("Collapsed", s("collapsed")),
+                        ("Inline", s("inline")),
+                        ("Off", s("off")),
+                    ])),
+                    s(p.tray.as_str()),
+                    s(dp.tray.as_str()),
                 )
-                .sub("Show icons from apps like Discord, Steam and Nextcloud"),
+                .sub("Icons from apps like Discord, Steam and Nextcloud: behind a chevron, or right in the bar"),
+                Row::new(
+                    "panel.power_icon",
+                    "Power icon",
+                    Control::switch(),
+                    Value::Bool(p.power_icon),
+                    Value::Bool(dp.power_icon),
+                )
+                .sub("A power icon on the status button; power options are in quick settings"),
                 Row::new(
                     "panel.clock_format",
                     "Clock",

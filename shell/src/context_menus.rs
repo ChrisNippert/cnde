@@ -176,6 +176,8 @@ impl App {
         // child of the topmost one gets the shell disconnected.
         self.quick_settings = None;
         self.calendar = None;
+        self.tray_popover = None;
+        self.tray_menu_key = None;
         self.menu = None;
         self.menu = Menu::open(
             &self.compositor,
@@ -208,6 +210,7 @@ impl App {
 
     pub fn close_menu(&mut self) {
         self.menu = None;
+        self.tray_menu_key = None;
         // An autohide dock the menu held out lets go after a moment.
         for dock in &mut self.docks {
             dock.linger();

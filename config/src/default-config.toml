@@ -110,7 +110,8 @@
 [panel]
 # enabled = true           # false: hide the top bar (e.g. to use waybar via autostart)
 # all_monitors = false     # true: a panel on every monitor, not just the main one
-# tray = true              # show tray icons (Discord, Steam, Nextcloud...) in the bar
+# tray = "collapsed"       # "collapsed" (a chevron next to the status button opens a popover of icons), "inline" (each icon in the bar), "off"; true/false still work
+# power_icon = true        # a power icon at the end of the status button (power options live in quick settings)
 # height = 32
 # rounded = false          # rounded bottom corners and a soft shadow
 # frosted = true           # just the bar, overriding appearance.material
@@ -143,7 +144,7 @@
 # reserve = true           # on an edge: maximized windows stop at it; false floats it over them
 # adaptive_color = "bar"   # with palette = "adaptive": "bar" (the bar's colour) or "darker" (a darker shade of the window at the bottom edge, or the wallpaper)
 # locked = false           # true: no dragging icons or the dock, and no edit mode
-# click_minimizes = false  # true: clicking the icon of the focused app minimizes its windows; clicking again restores them
+# click_minimizes = true   # true: clicking the icon of the focused app minimizes its windows; clicking again restores them
 # system_monitor = "gnome-system-monitor"  # "System Monitor" in the dock's menu runs this; "" hides it
 
 [launcher]

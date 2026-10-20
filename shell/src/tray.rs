@@ -41,6 +41,8 @@ use zbus::{
     zvariant::{OwnedValue, Value},
 };
 
+use cnde_config::TrayMode;
+
 use crate::{
     App,
     menu::{Action, Entry, Placement},
@@ -170,6 +172,27 @@ impl TrayItem {
             ),
         }
     }
+}
+
+/// Which tray items go inline in the bar and which behind the chevron
+/// (indices into `items`, visible ones only). Collapsed keeps the ones
+/// wanting attention in view.
+pub fn split(items: &[TrayItem], mode: TrayMode) -> (Vec<usize>, Vec<usize>) {
+    let shown = (0..items.len()).filter(|&i| items[i].visible());
+    match mode {
+        TrayMode::Off => (Vec::new(), Vec::new()),
+        TrayMode::Inline => (shown.collect(), Vec::new()),
+        TrayMode::Collapsed => shown.partition(|&i| items[i].item.status == Status::NeedsAttention),
+    }
+}
+
+/// Whether a left click should open the item's menu right away rather than
+/// try `Activate` first: it says so (`ItemIsMenu`), or it's a
+/// libappindicator item, whose `Activate` does nothing (KDE opens the
+/// menu for these too).
+pub fn left_click_opens_menu(item: &Item) -> bool {
+    item.menu.is_some()
+        && (item.item_is_menu || item.path.starts_with("/org/ayatana/NotificationItem/"))
 }
 
 /// A dbusmenu entry.
@@ -829,7 +852,7 @@ impl App {
     /// Start the watcher if the tray is on, stop it if it's off.
     pub fn sync_tray(&mut self) {
         let t = &mut self.tray;
-        if self.config.panel.tray {
+        if self.config.panel.tray != TrayMode::Off {
             if t.conn.is_none() && !t.starting {
                 let Some(tx) = t.tx.clone() else {
                     return;
@@ -861,12 +884,12 @@ impl App {
         match event {
             Event::Ready(conn) => {
                 self.tray.starting = false;
-                if self.config.panel.tray {
+                if self.config.panel.tray != TrayMode::Off {
                     self.tray.conn = Some(conn);
                 }
             }
             Event::Item(item) => {
-                if !self.config.panel.tray {
+                if self.config.panel.tray == TrayMode::Off {
                     return;
                 }
                 match self.tray.items.iter_mut().find(|t| t.item.key == item.key) {
@@ -906,6 +929,9 @@ impl App {
                     entries,
                     scale,
                 );
+                if self.menu.is_some() {
+                    self.tray_menu_key = Some(key);
+                }
             }
         }
     }
@@ -913,14 +939,28 @@ impl App {
     /// A press or wheel notch on tray icon `i` of panel `panel`; true if
     /// the tray took it.
     pub fn tray_pointer(&mut self, panel: usize, i: usize, kind: &PointerEventKind) -> bool {
+        match self.panels.get(panel).and_then(|p| p.tray_rect(i)) {
+            Some(rect) => self.tray_press(panel, i, rect, kind),
+            None => false,
+        }
+    }
+
+    /// As `tray_pointer`, with the menu hanging from `rect` (the icon, or
+    /// the chevron when the click came from its popover).
+    pub fn tray_press(
+        &mut self,
+        panel: usize,
+        i: usize,
+        rect: Rect,
+        kind: &PointerEventKind,
+    ) -> bool {
         const BTN_LEFT: u32 = 0x110;
         const BTN_RIGHT: u32 = 0x111;
         const BTN_MIDDLE: u32 = 0x112;
-        let (Some(conn), Some(tx), Some(entry), Some(rect)) = (
+        let (Some(conn), Some(tx), Some(entry)) = (
             self.tray.conn.clone(),
             self.tray.tx.clone(),
             self.tray.items.get(i),
-            self.panels.get(panel).and_then(|p| p.tray_rect(i)),
         ) else {
             return false;
         };
@@ -928,9 +968,12 @@ impl App {
         let (x, y) = (rect.0, rect.1 + rect.3);
         match *kind {
             PointerEventKind::Press { button, serial, .. } if button == BTN_LEFT => {
+                if self.tray_menu_toggle(&item.key) {
+                    return true;
+                }
                 let name = std::thread::Builder::new().name("tray-call".into());
                 let _ = name.spawn(move || {
-                    if item.item_is_menu {
+                    if left_click_opens_menu(&item) {
                         return fetch_menu(&conn, &tx, item, panel, rect, serial);
                     }
                     let reply = conn.call_method(
@@ -940,10 +983,9 @@ impl App {
                         "Activate",
                         &(x, y),
                     );
-                    // Not activatable (a menu-only item): show the menu.
-                    if let Err(zbus::Error::MethodError(name, ..)) = &reply
-                        && name.as_str().ends_with("UnknownMethod")
-                    {
+                    // Not activatable, whatever the reason: show the menu.
+                    if let Err(err) = reply {
+                        debug!(%err, "tray activate failed");
                         fetch_menu(&conn, &tx, item, panel, rect, serial);
                     }
                 });
@@ -954,6 +996,9 @@ impl App {
                 true
             }
             PointerEventKind::Press { button, serial, .. } if button == BTN_RIGHT => {
+                if self.tray_menu_toggle(&item.key) {
+                    return true;
+                }
                 let _ = std::thread::Builder::new()
                     .name("tray-menu".into())
                     .spawn(move || fetch_menu(&conn, &tx, item, panel, rect, serial));
@@ -973,6 +1018,41 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    /// A press on the bar closes the tray's menu and popover (the compositor
+    /// doesn't dismiss popups for clicks on the shell's own surfaces). They're
+    /// marked as just dismissed, so a press on the icon or chevron that opened
+    /// them closes rather than reopens.
+    pub fn tray_close_on_bar_press(&mut self) {
+        let now = std::time::Instant::now();
+        if self.tray_popover.take().is_some() {
+            self.tray_popover_dismissed = Some(now);
+            self.redraw_panels();
+        }
+        if let Some(key) = self.tray_menu_key.take() {
+            debug!(key, "tray menu closed by a bar press");
+            if self.menu.is_some() {
+                self.close_menu();
+            }
+            self.tray_menu_dismissed = Some((key, now));
+        }
+    }
+
+    /// A click on an icon whose menu is open (or was just closed by this
+    /// very click, which the compositor delivers as a dismissal first)
+    /// closes it rather than opening it again. True if it did.
+    fn tray_menu_toggle(&mut self, key: &str) -> bool {
+        let just_dismissed = self
+            .tray_menu_dismissed
+            .take()
+            .is_some_and(|(k, at)| k == key && at.elapsed() < Duration::from_millis(300));
+        let open = self.tray_menu_key.as_deref() == Some(key) && self.menu.is_some();
+        if open {
+            debug!(key, "tray menu toggled closed");
+            self.close_menu();
+        }
+        just_dismissed || open
     }
 
     /// Debug aid (CNDE_SHELL_OPEN=tray_menu): right-click the first icon.
@@ -1061,6 +1141,42 @@ mod tests {
         assert_eq!(pick_pixmap(&sizes, 8).unwrap().width, 16);
         // Bigger than any: the biggest.
         assert_eq!(pick_pixmap(&sizes, 128).unwrap().width, 64);
+    }
+
+    #[test]
+    fn left_click_menu_decision() {
+        let item = |menu: Option<&str>, is_menu: bool, path: &str| Item {
+            menu: menu.map(Into::into),
+            item_is_menu: is_menu,
+            path: path.into(),
+            ..Item::default()
+        };
+        let plain = "/StatusNotifierItem";
+        assert!(left_click_opens_menu(&item(Some("/Menu"), true, plain)));
+        assert!(!left_click_opens_menu(&item(Some("/Menu"), false, plain)));
+        // No menu to open, whatever it claims.
+        assert!(!left_click_opens_menu(&item(None, true, plain)));
+        let ayatana = "/org/ayatana/NotificationItem/steam";
+        assert!(left_click_opens_menu(&item(Some("/Menu"), false, ayatana)));
+        assert!(!left_click_opens_menu(&item(None, false, ayatana)));
+    }
+
+    #[test]
+    fn collapsed_tray_keeps_attention_in_view() {
+        let mk = |status| {
+            TrayItem::new(Item {
+                status,
+                ..Item::default()
+            })
+        };
+        let items = [
+            mk(Status::Active),
+            mk(Status::Passive),
+            mk(Status::NeedsAttention),
+        ];
+        assert_eq!(split(&items, TrayMode::Collapsed), (vec![2], vec![0]));
+        assert_eq!(split(&items, TrayMode::Inline), (vec![0, 2], vec![]));
+        assert_eq!(split(&items, TrayMode::Off), (vec![], vec![]));
     }
 
     #[test]

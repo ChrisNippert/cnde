@@ -531,9 +531,11 @@ pub struct Panel {
     pub enabled: bool,
     /// Show the panel on every monitor instead of only the main one.
     pub all_monitors: bool,
-    /// Show tray icons (StatusNotifierItem apps: Discord, Steam, ...) in
-    /// the bar.
-    pub tray: bool,
+    /// Tray icons (StatusNotifierItem apps: Discord, Steam, ...): behind a
+    /// chevron popover, inline in the bar, or off.
+    pub tray: TrayMode,
+    /// A power icon at the end of the status button.
+    pub power_icon: bool,
     /// Logical pixels.
     pub height: u32,
     /// Rounded bottom corners and a soft shadow; off, a flat strip.
@@ -568,7 +570,8 @@ impl Default for Panel {
         Self {
             enabled: true,
             all_monitors: false,
-            tray: true,
+            tray: TrayMode::Collapsed,
+            power_icon: true,
             height: 32,
             rounded: false,
             frosted: None,
@@ -583,6 +586,50 @@ impl Default for Panel {
             workspace_active_width: 28.0,
             padding: 12.0,
             button_padding: 10.0,
+        }
+    }
+}
+
+/// Where tray icons go. Also reads the old `true` / `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrayMode {
+    /// Behind a chevron next to the status button.
+    #[default]
+    Collapsed,
+    /// Each icon in the bar.
+    Inline,
+    Off,
+}
+
+impl TrayMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Collapsed => "collapsed",
+            Self::Inline => "inline",
+            Self::Off => "off",
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TrayMode {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Str(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Bool(true) => Ok(Self::Collapsed),
+            Raw::Bool(false) => Ok(Self::Off),
+            Raw::Str(s) => match s.as_str() {
+                "collapsed" => Ok(Self::Collapsed),
+                "inline" => Ok(Self::Inline),
+                "off" => Ok(Self::Off),
+                other => Err(serde::de::Error::custom(format!(
+                    "tray must be \"collapsed\", \"inline\" or \"off\", not {other:?}"
+                ))),
+            },
         }
     }
 }
@@ -679,7 +726,7 @@ impl Default for Dock {
             adaptive_color: DockAdaptive::Bar,
             reserve: true,
             locked: false,
-            click_minimizes: false,
+            click_minimizes: true,
             system_monitor: "gnome-system-monitor".into(),
         }
     }
@@ -1092,6 +1139,16 @@ mod tests {
     fn default_file_parses_to_defaults() {
         let parsed = Config::parse(DEFAULT_CONFIG).expect("default config must parse");
         assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn tray_reads_modes_and_old_booleans() {
+        let tray = |v: &str| Config::parse(&format!("[panel]\ntray = {v}\n")).map(|c| c.panel.tray);
+        assert_eq!(tray("true").unwrap(), TrayMode::Collapsed);
+        assert_eq!(tray("false").unwrap(), TrayMode::Off);
+        assert_eq!(tray("\"inline\"").unwrap(), TrayMode::Inline);
+        assert_eq!(tray("\"collapsed\"").unwrap(), TrayMode::Collapsed);
+        assert!(tray("\"sideways\"").is_err());
     }
 
     #[test]
