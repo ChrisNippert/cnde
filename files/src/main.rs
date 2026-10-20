@@ -6,6 +6,7 @@
 //! window never waits on a slow disk.
 
 mod apps;
+mod archive;
 mod bookmarks;
 mod clipboard;
 mod dbus;

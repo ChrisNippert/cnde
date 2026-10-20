@@ -28,6 +28,7 @@ use tracing::debug;
 
 use crate::{
     App, Event,
+    archive::Format,
     folder::Location,
     info,
     model::{self, Entry},
@@ -84,6 +85,12 @@ pub enum Act {
     ToggleHidden,
     /// The × on the progress strip.
     CancelTransfer,
+    /// Show or hide the list of archive formats.
+    CompressMenu,
+    /// Compress the selection into an archive of this format.
+    Compress(Format),
+    /// Unpack the selected archive beside itself.
+    ExtractHere,
 }
 
 const MENU: [(Act, &str); 9] = [
@@ -137,7 +144,7 @@ const MENU_EMPTY: [(Act, &str); 5] = [
 impl Act {
     /// Rows that open a list or tick a box leave the menu up.
     fn keeps_menu(self) -> bool {
-        matches!(self, Act::NewFileMenu)
+        matches!(self, Act::NewFileMenu | Act::CompressMenu)
     }
 }
 
@@ -158,6 +165,7 @@ pub struct Rename {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sub {
     New,
+    Compress,
 }
 
 /// The right-click menu, at a window position.
@@ -175,6 +183,10 @@ pub struct Menu {
     /// Over a bookmark of the sidebar: which.
     pub bookmark: Option<usize>,
     pub templates: Vec<(String, PathBuf)>,
+    /// Over files that can be compressed (and bsdtar is there).
+    pub compress: bool,
+    /// Over a single archive that can be unpacked.
+    pub extract: bool,
 }
 
 impl Menu {
@@ -186,8 +198,8 @@ impl Menu {
         }
     }
 
-    fn rows(&self) -> &'static [(Act, &'static str)] {
-        if self.bookmark.is_some() {
+    fn rows(&self) -> Vec<(Act, &'static str)> {
+        let base: &[(Act, &str)] = if self.bookmark.is_some() {
             &MENU_MARK
         } else if self.dir {
             &MENU_DIR
@@ -197,7 +209,18 @@ impl Menu {
             &MENU_RECENT
         } else {
             &MENU
+        };
+        let mut rows = base.to_vec();
+        // The archive rows go before Move to Trash.
+        if let Some(at) = rows.iter().position(|(a, _)| *a == Act::Trash) {
+            if self.compress {
+                rows.insert(at, (Act::CompressMenu, "Compress  ›"));
+            }
+            if self.extract {
+                rows.insert(at, (Act::ExtractHere, "Extract Here"));
+            }
         }
+        rows
     }
 
     /// The submenu's rows: label, what it does, and the ticked one. At
@@ -211,6 +234,12 @@ impl Menu {
                 for (i, (name, _)) in self.templates.iter().enumerate().take(fit.max(2) - 1) {
                     labels.push(name.clone());
                     acts.push(Act::NewTemplate(i));
+                }
+            }
+            Some(Sub::Compress) => {
+                for f in Format::ALL {
+                    labels.push(f.label().into());
+                    acts.push(Act::Compress(f));
                 }
             }
             None => {}
@@ -281,13 +310,16 @@ pub fn paint_menu(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, w: f32, h
     let hover = |i: usize| (ui.hover == Some(Target::Act(items[i].0))) as u8 as f32;
     let rects = p.popover(x, y, MENU_W, &labels, None, hover, 1.0);
     let mut live = rects.len();
-    let opener = menu.sub.map(|Sub::New| Act::NewFileMenu);
+    let opener = menu.sub.map(|s| match s {
+        Sub::New => Act::NewFileMenu,
+        Sub::Compress => Act::CompressMenu,
+    });
     let mut row_y = y;
     for (rect, (act, _)) in rects.into_iter().zip(items) {
-        if Some(*act) == opener {
+        if Some(act) == opener {
             row_y = rect.y;
         }
-        out.hits.push((rect, Target::Act(*act)));
+        out.hits.push((rect, Target::Act(act)));
     }
     if menu.sub.is_some() {
         let fit = ((h - 28.0) / 36.0) as usize;
@@ -312,7 +344,7 @@ pub fn paint_menu(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, w: f32, h
 }
 
 /// The first of `names` that is an executable on `$PATH`.
-fn on_path(name: &str) -> bool {
+pub(crate) fn on_path(name: &str) -> bool {
     if name.contains('/') {
         return Path::new(name).is_file();
     }
@@ -495,7 +527,9 @@ impl App {
                     self.remove_bookmark(i);
                 }
             }
-            Act::NewFileMenu => {}
+            Act::NewFileMenu | Act::CompressMenu => {}
+            Act::Compress(format) => self.compress_selection(format),
+            Act::ExtractHere => self.extract_selection(),
             Act::SelectAll => self.ui.folder.select_all(),
             Act::Refresh => self.reload_folder(),
             Act::ToggleHidden => self.toggle_hidden(),
@@ -531,6 +565,8 @@ impl App {
             return;
         };
         match act {
+            Act::CompressMenu if menu.sub == Some(Sub::Compress) => menu.sub = None,
+            Act::CompressMenu => menu.sub = Some(Sub::Compress),
             Act::NewFileMenu if menu.sub == Some(Sub::New) => menu.sub = None,
             Act::NewFileMenu => {
                 let env = crate::apps::Env::from_env();
@@ -653,8 +689,14 @@ impl App {
         }
         self.ui.folder.cursor = Some(pos);
         let dir = self.selected_dirs().len() == 1 && self.ui.folder.selected.len() == 1;
+        let have = crate::archive::available();
+        let extract = have
+            && matches!(self.selected_entries().as_slice(),
+                [e] if !e.is_dir && crate::archive::is_archive(&e.name));
         self.ui.x.menu = Some(Menu {
             dir,
+            compress: have,
+            extract,
             ..Menu::at(x, y)
         });
         self.redraw();
