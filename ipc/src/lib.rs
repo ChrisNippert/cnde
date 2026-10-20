@@ -58,6 +58,23 @@ pub enum Event {
     Edges {
         outputs: Vec<OutputEdges>,
     },
+    /// The pointer moved onto (`inside`) or off the dock's window preview.
+    DockPreviewHover {
+        inside: bool,
+    },
+    /// The dock's window preview went away by itself (a thumbnail was
+    /// clicked, or its windows closed).
+    DockPreviewGone,
+}
+
+/// Which side of its anchor a popup opens on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    Above,
+    Below,
+    Left,
+    Right,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -160,6 +177,20 @@ pub enum Request {
     CancelScreenshot,
     /// Open the screenshot tool, as Super+Shift+S does.
     OpenScreenshot,
+    /// Minimize these windows (those on screen; others are left alone).
+    MinimizeWindows {
+        ids: Vec<u64>,
+    },
+    /// Show live thumbnails of `windows` beside a dock icon: `cell` is the
+    /// icon's (x, y, w, h) within the dock's surface on `output`, and the
+    /// panel opens on `side` of the dock.
+    DockPreview {
+        output: String,
+        windows: Vec<u64>,
+        cell: [f64; 4],
+        side: Side,
+    },
+    DockPreviewHide,
     /// Ask this window to close (as its close button would).
     CloseWindow {
         id: u64,
@@ -280,6 +311,18 @@ mod tests {
             encode(&Request::SetOverview { open: false }),
             b"{\"request\":\"set_overview\",\"open\":false}\n"
         );
+    }
+
+    #[test]
+    fn dock_preview_round_trip() {
+        let request = Request::DockPreview {
+            output: "DP-1".into(),
+            windows: vec![3, 4],
+            cell: [10.0, 4.0, 56.0, 56.0],
+            side: Side::Above,
+        };
+        let line = encode(&request);
+        assert_eq!(decode::<Request>(&line[..line.len() - 1]), Some(request));
     }
 
     #[test]

@@ -2621,6 +2621,16 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
         );
         rows.push(
             Row::new(
+                "dock.click_minimizes",
+                "Click again to minimize",
+                Control::switch(),
+                Value::Bool(c.dock.click_minimizes),
+                Value::Bool(d.dock.click_minimizes),
+            )
+            .sub("Clicking the focused app's icon minimizes its windows"),
+        );
+        rows.push(
+            Row::new(
                 "dock.system_monitor",
                 "System monitor",
                 Control::text("gnome-system-monitor"),

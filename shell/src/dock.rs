@@ -6,9 +6,10 @@
 //! one that isn't launches it, and a middle click always opens a new one.
 //! The window list and focusing go through the compositor (see `ipc`).
 
+use crate::badges::count_text;
 use cnde_config::{BarMode, DockAlign, DockPosition};
 use cnde_ipc::WindowInfo;
-use cnde_ui::{Canvas, Color, Icons, Theme};
+use cnde_ui::{Canvas, Color, Fonts, Icons, Theme, Weight};
 use smithay_client_toolkit::{
     compositor::{CompositorState, FrameCallbackData},
     reexports::client::{
@@ -23,7 +24,7 @@ use smithay_client_toolkit::{
 };
 use tracing::warn;
 
-use crate::{App, apps::App as AppEntry};
+use crate::{App, apps::App as AppEntry, badges::Badge};
 
 /// Padding inside the dock's background, around the icons' cells.
 const INNER_PAD: f32 = 6.0;
@@ -45,6 +46,8 @@ pub struct Item {
     /// Its open windows, in the compositor's order.
     pub windows: Vec<u64>,
     pub focused: bool,
+    /// Count, progress and urgency an app reported (see `badges`).
+    pub badge: Badge,
 }
 
 /// What the dock shows: favorites first (running or not), then every other
@@ -59,6 +62,7 @@ pub fn items(favorites: &[String], apps: &[AppEntry], windows: &[WindowInfo]) ->
             favorite,
             windows: Vec::new(),
             focused: false,
+            badge: Badge::default(),
         };
         for (i, window) in windows.iter().enumerate() {
             if !claimed[i] && entry.owns(&window.app_id) {
@@ -97,6 +101,7 @@ pub fn items(favorites: &[String], apps: &[AppEntry], windows: &[WindowInfo]) ->
                     favorite: false,
                     windows: vec![window.id],
                     focused: window.focused,
+                    badge: Badge::default(),
                 }),
             }
         }
@@ -283,6 +288,8 @@ pub enum Click {
     Nothing,
     Launch(String),
     Activate(u64),
+    /// Minimize these windows (`dock.click_minimizes`).
+    Minimize(Vec<u64>),
     AppGrid,
 }
 
@@ -332,6 +339,8 @@ pub struct Dock {
     zone: i32,
     /// Room either side of each icon (`dock.padding`).
     pub pad: f32,
+    /// `dock.click_minimizes`.
+    pub click_minimizes: bool,
     pub launcher: LauncherPlace,
     /// The size the compositor gave the surface (stretched docks).
     surface_size: (u32, u32),
@@ -495,6 +504,7 @@ impl Dock {
             left_at: None,
             zone: 0,
             pad: 8.0,
+            click_minimizes: false,
             launcher: LauncherPlace::default(),
             surface_size: (0, 0),
             scale: scale.max(1),
@@ -804,6 +814,11 @@ impl Dock {
             .map(|i| (i, layout.cells[i]))
     }
 
+    /// Where item `index`'s cell is, in the dock's surface.
+    pub fn cell_rect(&self, index: usize, icon: f32) -> Option<Rect> {
+        self.layout(icon).cells.get(index).copied()
+    }
+
     pub fn scale(&self) -> i32 {
         self.scale
     }
@@ -835,7 +850,10 @@ impl Dock {
         if new_window || item.windows.is_empty() {
             return item.app.clone().map_or(Click::Nothing, Click::Launch);
         }
-        // Focused already: cycle to its next window.
+        // Focused already: minimize it, or cycle to its next window.
+        if item.focused && self.click_minimizes {
+            return Click::Minimize(item.windows.clone());
+        }
         let next = if item.focused && item.windows.len() > 1 {
             item.windows[1]
         } else {
@@ -849,7 +867,7 @@ impl Dock {
         qh: &QueueHandle<App>,
         pool: &mut SlotPool,
         format: wl_shm::Format,
-        icons: &mut Icons,
+        (icons, fonts): (&mut Icons, &mut Fonts),
         theme: &Theme,
         icon: f32,
     ) {
@@ -872,6 +890,9 @@ impl Dock {
             if self.solid { 1.0 } else { 0.0 },
             cnde_ui::anim::MEDIUM,
         );
+        // Urgent icons breathe: a slow wave from the dock's first frame.
+        let urgent = self.items.iter().any(|i| i.badge.urgent);
+        let pulse = pulse_at(PULSE_START.elapsed().as_secs_f32());
         let matched;
         let theme = match self.tint_fade.update(self.tint) {
             Some(shown) => {
@@ -934,9 +955,10 @@ impl Dock {
                     radius: self.radius(theme),
                     frosted: self.frosted,
                     solid,
+                    pulse,
                 },
                 (&hops, away),
-                icons,
+                (icons, fonts),
                 theme,
                 icon,
             );
@@ -958,6 +980,7 @@ impl Dock {
             || self.solid_fade.running()
             || self.tint_fade.running()
             || self.shape.running()
+            || urgent
         {
             self.dirty = true;
         }
@@ -976,7 +999,7 @@ fn paint(
     look: Look,
     // Per item: how far it's hopping, and which way is away from the edge.
     (hops, away): (&[f32], (f32, f32)),
-    icons: &mut Icons,
+    (icons, fonts): (&mut Icons, &mut Fonts),
     theme: &Theme,
     icon: f32,
 ) {
@@ -1113,6 +1136,7 @@ fn paint(
                 theme.qs_dim,
             );
         }
+        paint_badge(canvas, fonts, theme, item.badge, (x, y), icon, look.pulse);
         if edit.is_some() && item.favorite {
             let b = badge_rect(*cell);
             canvas.circle(
@@ -1223,6 +1247,8 @@ struct Look {
     frosted: bool,
     /// How far a frosted dock has faded to solid, 0-1.
     solid: f32,
+    /// Where an urgent icon's ring is in its breathing, 0-1.
+    pulse: f32,
 }
 
 /// How opaque a frosted dock's tint is.
@@ -1235,6 +1261,7 @@ impl Look {
             radius: cnde_ipc::dock::RADIUS as f32,
             frosted: false,
             solid: 0.0,
+            pulse: 0.0,
         }
     }
 }
@@ -1292,6 +1319,91 @@ fn off_dock(at: (f64, f64), size: (u32, u32)) -> bool {
     dx.hypot(dy) > UNPIN_DISTANCE
 }
 
+/// How long an urgent icon's ring takes to breathe in and out.
+const PULSE_PERIOD: f32 = 1.8;
+static PULSE_START: std::sync::LazyLock<std::time::Instant> =
+    std::sync::LazyLock::new(std::time::Instant::now);
+
+/// 0 to 1 and back, `secs` into the dock's life.
+fn pulse_at(secs: f32) -> f32 {
+    0.5 - 0.5 * (secs / PULSE_PERIOD * std::f32::consts::TAU).cos()
+}
+
+/// The progress bar along the bottom of an icon at `icon_box`: the track,
+/// then how much of it is filled.
+fn progress_bars((x, y): (f32, f32), icon: f32, progress: f32) -> (Rect, Rect) {
+    let (h, inset) = (4.0, icon * 0.1);
+    let track = Rect {
+        x: x + inset,
+        y: y + icon - h - 1.0,
+        w: icon - 2.0 * inset,
+        h,
+    };
+    let fill = Rect {
+        w: track.w * progress.clamp(0.0, 1.0),
+        ..track
+    };
+    (track, fill)
+}
+
+/// Count, progress and urgency over the icon whose top-left is `at`.
+fn paint_badge(
+    canvas: &mut Canvas<'_>,
+    fonts: &mut Fonts,
+    theme: &Theme,
+    badge: Badge,
+    at: (f32, f32),
+    icon: f32,
+    pulse: f32,
+) {
+    if badge.is_empty() {
+        return;
+    }
+    if badge.urgent {
+        // A ring that breathes round the icon.
+        let reach = 2.0 + 2.0 * pulse;
+        canvas.stroke_rounded_rect(
+            at.0 - reach,
+            at.1 - reach,
+            icon + 2.0 * reach,
+            icon + 2.0 * reach,
+            icon * 0.25 + reach,
+            2.0,
+            theme.accent.with_alpha(0.45 + 0.55 * pulse),
+        );
+    }
+    if let Some(progress) = badge.progress {
+        let (track, fill) = progress_bars(at, icon, progress);
+        canvas.rounded_rect(
+            track.x,
+            track.y,
+            track.w,
+            track.h,
+            2.0,
+            theme.popup_text.with_alpha(0.3),
+        );
+        if fill.w > 0.0 {
+            canvas.rounded_rect(fill.x, fill.y, fill.w, fill.h, 2.0, theme.accent);
+        }
+    }
+    if let Some(count) = badge.count {
+        let mut text = fonts.layout(&count_text(count), 10.5, Weight::Bold, canvas.scale());
+        let (tw, th) = (text.width, text.height);
+        let h = 16.0;
+        let w = (tw + 9.0).max(h);
+        // Hanging off the icon's top-right corner.
+        let (x, y) = (at.0 + icon - w + 4.0, at.1 - 3.0);
+        canvas.rounded_rect(x, y, w, h, h / 2.0, theme.accent);
+        canvas.text(
+            fonts,
+            &mut text,
+            x + (w - tw) / 2.0,
+            y + (h - th) / 2.0,
+            theme.on_accent,
+        );
+    }
+}
+
 fn badge_rect(cell: Rect) -> Rect {
     Rect {
         x: cell.x + cell.w - BADGE - 1.0,
@@ -1303,6 +1415,24 @@ fn badge_rect(cell: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn progress_fills_a_bar_along_the_bottom() {
+        let (track, fill) = progress_bars((10.0, 20.0), 48.0, 0.25);
+        assert_eq!(fill.x, track.x);
+        assert!((fill.w - track.w / 4.0).abs() < 1e-4);
+        assert!(track.y + track.h <= 20.0 + 48.0);
+        let (_, over) = progress_bars((0.0, 0.0), 48.0, 3.0);
+        assert!(over.w <= track.w + 1e-4);
+    }
+
+    #[test]
+    fn pulse_stays_within_zero_and_one() {
+        for i in 0..40 {
+            let p = pulse_at(i as f32 * 0.1);
+            assert!((0.0..=1.0).contains(&p));
+        }
+        assert!(pulse_at(0.0) < 0.01);
+    }
     #[test]
     fn hides_only_when_touched_and_not_held_out() {
         assert!(should_hide(true, true, false, false));
@@ -1357,6 +1487,7 @@ mod tests {
                 favorite: true,
                 windows: vec![],
                 focused: false,
+                badge: Badge::default(),
             };
             3
         ];
@@ -1379,6 +1510,7 @@ mod tests {
             favorite: true,
             windows: vec![],
             focused: false,
+            badge: Badge::default(),
         };
         let items = vec![item; 2];
         let place = LauncherPlace {
@@ -1447,7 +1579,7 @@ mod tests {
                 None,
                 Look::plain(),
                 (&[], (0.0, -1.0)),
-                &mut icons,
+                (&mut icons, &mut Fonts::new(&["DejaVu Sans"])),
                 &theme,
                 48.0,
             );
