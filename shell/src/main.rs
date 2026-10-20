@@ -5,6 +5,7 @@
 
 mod actions;
 mod apps;
+mod audio;
 mod badges;
 mod calendar;
 mod config;
@@ -92,6 +93,7 @@ pub struct Status {
     pub network: status::Network,
     pub wifi_enabled: Option<bool>,
     pub volume: Option<status::Volume>,
+    pub audio: audio::Audio,
     /// What quick settings shows: the daemon's, else the custom command's.
     pub power_profiles: Option<status::PowerProfiles>,
     /// What the power-modes daemon reported, if one is running.
@@ -132,6 +134,7 @@ impl Status {
             Update::Network(network) => self.network = network,
             Update::WifiEnabled(enabled) => self.wifi_enabled = enabled,
             Update::Volume(volume) => self.volume = volume,
+            Update::Audio(audio) => self.audio = audio,
             Update::PowerProfiles(profiles) => {
                 self.daemon_profiles = profiles;
                 self.sync_profiles();
@@ -1324,6 +1327,7 @@ impl App {
                 tray_mode: self.config.panel.tray,
                 tray_popover_open: self.tray_popover.is_some(),
                 power_icon: self.config.panel.power_icon,
+                mic_indicator: self.config.panel.mic_indicator,
                 overview_open: self.overview_open,
                 quick_settings_open: self.quick_settings.is_some(),
                 calendar_open: self.calendar.is_some(),

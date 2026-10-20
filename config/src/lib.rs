@@ -538,6 +538,8 @@ pub struct Panel {
     pub power_icon: bool,
     /// Media controls (MPRIS players) in the clock's popover.
     pub media_controls: bool,
+    /// A microphone icon in the status button while an app is recording.
+    pub mic_indicator: bool,
     /// Logical pixels.
     pub height: u32,
     /// Rounded bottom corners and a soft shadow; off, a flat strip.
@@ -575,6 +577,7 @@ impl Default for Panel {
             tray: TrayMode::Collapsed,
             power_icon: true,
             media_controls: true,
+            mic_indicator: true,
             height: 32,
             rounded: false,
             frosted: None,

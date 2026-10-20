@@ -26,14 +26,29 @@ use tracing::warn;
 use crate::{
     App, Status,
     actions::{Action, Actions},
+    audio::Kind,
     panel::volume_icon,
 };
+
+mod audio_page;
+
+/// An audio device list, shown in place of the card.
+struct Page {
+    kind: Kind,
+    lines: Vec<audio_page::Row>,
+    layout: audio_page::PageLayout,
+}
 
 /// What a point in the card does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
     Volume,
     Mute,
+    /// The input slider (the microphone's gain) and its mute end.
+    Input,
+    MicMute,
+    /// The arrow beside a slider: opens that device list.
+    AudioPage(Kind),
     Brightness,
     /// Index into the available power profiles.
     PowerProfile(usize),
@@ -83,6 +98,10 @@ pub struct Layout {
     /// Paired Bluetooth devices, while Bluetooth is on and has some.
     pub devices: Option<DeviceList>,
     pub volume: Rect,
+    /// The arrow to the output list.
+    pub volume_arrow: Rect,
+    /// The microphone slider and its arrow, when there's a microphone.
+    pub input: Option<(Rect, Rect)>,
     pub brightness: Option<Rect>,
     /// The power mode tile and its segments.
     pub power_profiles: Option<(Rect, Vec<Rect>)>,
@@ -140,12 +159,15 @@ pub struct Features {
     pub power_profiles: usize,
     /// Paired Bluetooth devices to list (0: no list, e.g. Bluetooth's off).
     pub bluetooth_devices: usize,
+    /// A microphone to show a slider for.
+    pub input: bool,
 }
 
 impl Features {
     pub fn of(status: &Status) -> Self {
         Self {
             brightness: status.backlight.is_some(),
+            input: !status.audio.inputs.is_empty(),
             power_profiles: status
                 .power_profiles
                 .as_ref()
@@ -232,13 +254,28 @@ pub fn layout(
         list
     });
 
-    let volume = Rect {
-        x: pad,
-        y,
-        w: inner,
-        h: SLIDER_HEIGHT,
+    // Each audio slider has a round arrow at its end, to the device list.
+    let audio_row = |y: f32| {
+        let slider = Rect {
+            x: pad,
+            y,
+            w: inner - SLIDER_HEIGHT - theme.qs_gap,
+            h: SLIDER_HEIGHT,
+        };
+        let arrow = Rect {
+            x: pad + inner - SLIDER_HEIGHT,
+            w: SLIDER_HEIGHT,
+            ..slider
+        };
+        (slider, arrow)
     };
+    let (volume, volume_arrow) = audio_row(y);
     y += SLIDER_HEIGHT + theme.qs_gap;
+    let input = features.input.then(|| {
+        let row = audio_row(y);
+        y += SLIDER_HEIGHT + theme.qs_gap;
+        row
+    });
 
     let brightness = features.brightness.then(|| {
         let h = SLIDER_HEIGHT;
@@ -336,6 +373,8 @@ pub fn layout(
         toggles,
         devices,
         volume,
+        volume_arrow,
+        input,
         brightness,
         power_profiles,
         footer_y,
@@ -348,6 +387,25 @@ pub fn layout(
 
 impl Layout {
     pub fn hit(&self, point: (f64, f64)) -> Option<Hit> {
+        if self.volume_arrow.contains(point) {
+            return Some(Hit::AudioPage(Kind::Output));
+        }
+        if let Some((input, arrow)) = self.input {
+            if arrow.contains(point) {
+                return Some(Hit::AudioPage(Kind::Input));
+            }
+            if input.contains(point) {
+                let icon_zone = Rect {
+                    w: input.h,
+                    ..input
+                };
+                return Some(if icon_zone.contains(point) {
+                    Hit::MicMute
+                } else {
+                    Hit::Input
+                });
+            }
+        }
         if self.volume.contains(point) {
             // The icon end of the slider mutes, like tapping the speaker.
             let icon_zone = Rect {
@@ -397,6 +455,10 @@ impl Layout {
         percent_along(self.volume, x)
     }
 
+    pub fn input_at(&self, x: f64) -> Option<u32> {
+        self.input.map(|(input, _)| percent_along(input, x))
+    }
+
     pub fn brightness_at(&self, x: f64) -> Option<u32> {
         self.brightness.map(|b| percent_along(b, x))
     }
@@ -421,6 +483,7 @@ pub enum Moving {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Slider {
     Volume,
+    Input,
     Brightness,
 }
 
@@ -428,6 +491,7 @@ impl Layout {
     fn slider_at(&self, slider: Slider, x: f64) -> Option<u32> {
         match slider {
             Slider::Volume => Some(self.volume_at(x)),
+            Slider::Input => self.input_at(x),
             Slider::Brightness => self.brightness_at(x),
         }
     }
@@ -443,6 +507,9 @@ pub struct QuickSettings {
     /// What the user just set, shown until the audio server reports it
     /// back (so the slider tracks the pointer with no lag).
     volume_override: Option<(u32, Instant)>,
+    input_override: Option<(u32, Instant)>,
+    /// An output or input list is open in place of the card.
+    page: Option<Page>,
     /// Toggles show their new state as soon as they're pressed; if the
     /// system hasn't confirmed it within `CONFIRM_WITHIN`, they snap back
     /// (the change was refused or failed).
@@ -505,6 +572,8 @@ impl QuickSettings {
             features,
             dragging: None,
             volume_override: None,
+            input_override: None,
+            page: None,
             wifi_override: None,
             bluetooth_override: None,
             device_override: None,
@@ -571,9 +640,46 @@ impl QuickSettings {
         }
         self.layout = new;
         self.collapsing = None;
+        if self.page.is_none()
+            && let Some(positioner) = positioner(xdg_shell, &self.layout, self.anchor)
+        {
+            self.popup.reposition(&positioner, 0);
+        }
+    }
+
+    /// Open the list of outputs or inputs in place of the card.
+    fn open_page(&mut self, kind: Kind, xdg_shell: &XdgShell, theme: &Theme, status: &Status) {
+        let lines = audio_page::rows(status.audio.devices(kind));
+        let layout = audio_page::layout(theme, &lines);
+        self.page = Some(Page {
+            kind,
+            lines,
+            layout,
+        });
+        self.resize_to_page(xdg_shell);
+    }
+
+    /// Back to the card.
+    fn close_page(&mut self, xdg_shell: &XdgShell) {
+        self.page = None;
+        self.dragging = None;
         if let Some(positioner) = positioner(xdg_shell, &self.layout, self.anchor) {
             self.popup.reposition(&positioner, 0);
         }
+        self.dirty = true;
+    }
+
+    fn resize_to_page(&mut self, xdg_shell: &XdgShell) {
+        if let Some(page) = &self.page
+            && let Some(positioner) = sized_positioner(
+                xdg_shell,
+                (page.layout.width, page.layout.height),
+                self.anchor,
+            )
+        {
+            self.popup.reposition(&positioner, 0);
+        }
+        self.dirty = true;
     }
 
     /// The status changed: grow or shrink for parts that came or went (the
@@ -587,6 +693,15 @@ impl QuickSettings {
         if features != self.features {
             self.features = features;
             self.relayout(xdg_shell, theme);
+        }
+        // Devices came or went (a headset plugged in) or gained ports.
+        if let Some(page) = &mut self.page {
+            let lines = audio_page::rows(status.audio.devices(page.kind));
+            if lines != page.lines {
+                page.layout = audio_page::layout(theme, &lines);
+                page.lines = lines;
+                self.resize_to_page(xdg_shell);
+            }
         }
     }
 
@@ -619,7 +734,40 @@ impl QuickSettings {
         theme: &Theme,
         anchor: (i32, i32, i32, i32),
     ) -> bool {
+        if let Some(page) = &self.page {
+            let kind = page.kind;
+            let slider = match kind {
+                Kind::Output => Slider::Volume,
+                Kind::Input => Slider::Input,
+            };
+            match page.layout.hit(point) {
+                Some(audio_page::PageHit::Back) => self.close_page(xdg_shell),
+                Some(audio_page::PageHit::Mute) => actions.run(match kind {
+                    Kind::Output => Action::ToggleMute,
+                    Kind::Input => Action::ToggleMicMute,
+                }),
+                Some(audio_page::PageHit::Slider) => {
+                    self.dragging = Some(slider);
+                    self.slide(slider, point.0, actions);
+                }
+                Some(audio_page::PageHit::Row(row)) => {
+                    if let Some(action) =
+                        audio_page::row_action(kind, status.audio.devices(kind), row)
+                    {
+                        actions.run(action);
+                    }
+                }
+                None => {}
+            }
+            return false;
+        }
         match self.layout.hit(point) {
+            Some(Hit::AudioPage(kind)) => self.open_page(kind, xdg_shell, theme, status),
+            Some(Hit::Input) => {
+                self.dragging = Some(Slider::Input);
+                self.slide(Slider::Input, point.0, actions);
+            }
+            Some(Hit::MicMute) => actions.run(Action::ToggleMicMute),
             Some(Hit::Volume) => {
                 self.dragging = Some(Slider::Volume);
                 self.slide(Slider::Volume, point.0, actions);
@@ -718,10 +866,22 @@ impl QuickSettings {
     }
 
     fn slide(&mut self, slider: Slider, x: f64, actions: &Actions) {
-        let Some(percent) = self.layout.slider_at(slider, x) else {
+        let percent = match (&self.page, slider) {
+            (Some(page), Slider::Volume | Slider::Input) => {
+                Some(percent_along(page.layout.slider, x))
+            }
+            _ => self.layout.slider_at(slider, x),
+        };
+        let Some(percent) = percent else {
             return;
         };
         match slider {
+            Slider::Input => {
+                if self.input_override.map(|(v, _)| v) != Some(percent) {
+                    self.input_override = Some((percent, Instant::now()));
+                    actions.run(Action::SetMicVolume(percent));
+                }
+            }
             Slider::Volume => {
                 if self.volume_override.map(|(v, _)| v) != Some(percent) {
                     self.volume_override = Some((percent, Instant::now()));
@@ -756,9 +916,15 @@ impl QuickSettings {
         // While the power row closes, the popup keeps its open size.
         let layout = self.collapsing.as_ref().map_or(&self.layout, |(l, _)| l);
         let scale = self.scale;
+        let (width, height) = self
+            .page
+            .as_ref()
+            .map_or((layout.width, layout.height), |p| {
+                (p.layout.width, p.layout.height)
+            });
         let (w, h) = (
-            (layout.width * scale as f32) as i32,
-            (layout.height * scale as f32) as i32,
+            (width * scale as f32) as i32,
+            (height * scale as f32) as i32,
         );
         let (buffer, pixels) = match pool.create_buffer(w, h, w * 4, format) {
             Ok(created) => created,
@@ -776,6 +942,12 @@ impl QuickSettings {
             && self.dragging != Some(Slider::Volume)
         {
             self.volume_override = None;
+        }
+        if let Some((_, since)) = self.input_override
+            && since.elapsed() > Duration::from_secs(2)
+            && self.dragging != Some(Slider::Input)
+        {
+            self.input_override = None;
         }
         // Pressed toggles, until the system confirms or the wait runs out.
         let mut shown = status.clone();
@@ -822,23 +994,52 @@ impl QuickSettings {
             (None, Some(current)) => (current.percent, current.muted),
             (None, None) => (0, true),
         };
-        paint(
-            &mut canvas,
-            layout,
-            self.layout.power_menu.is_some(),
-            fonts,
-            icons,
-            theme,
-            status,
-            volume,
-            self.brightness,
-            scale as f32,
-            &mut self.anim,
-            self.dragging,
-            self.device_override
-                .as_ref()
-                .map(|(address, connect, _)| (address.as_str(), *connect)),
-        );
+        let input = match (
+            self.input_override,
+            status.audio.default_device(Kind::Input),
+        ) {
+            (Some((percent, _)), current) => Some((percent, current.is_some_and(|c| c.muted))),
+            (None, Some(current)) => Some((current.percent, current.muted)),
+            (None, None) => None,
+        };
+        if let Some(page) = &self.page {
+            let shown = match page.kind {
+                Kind::Output => volume,
+                Kind::Input => input.unwrap_or((0, true)),
+            };
+            audio_page::paint(
+                &mut canvas,
+                &page.layout,
+                page.kind,
+                shown,
+                status,
+                fonts,
+                icons,
+                theme,
+                scale as f32,
+                &mut self.anim,
+                self.dragging,
+            );
+        } else {
+            paint(
+                &mut canvas,
+                layout,
+                self.layout.power_menu.is_some(),
+                fonts,
+                icons,
+                theme,
+                status,
+                volume,
+                input,
+                self.brightness,
+                scale as f32,
+                &mut self.anim,
+                self.dragging,
+                self.device_override
+                    .as_ref()
+                    .map(|(address, connect, _)| (address.as_str(), *connect)),
+            );
+        }
         // Still moving: draw again when this frame is shown.
         if self.anim.running() {
             self.dirty = true;
@@ -874,6 +1075,7 @@ fn paint(
     theme: &Theme,
     status: &Status,
     volume: (u32, bool),
+    input: Option<(u32, bool)>,
     brightness: Option<u32>,
     s: f32,
     anim: &mut Animator<Moving>,
@@ -891,6 +1093,7 @@ fn paint(
         }
     };
     let volume_shown = slide(Slider::Volume, volume.0 as f32 / 100.0);
+    let input_shown = input.map(|(percent, _)| slide(Slider::Input, percent as f32 / 100.0));
     let brightness_shown = brightness.map(|b| slide(Slider::Brightness, b as f32 / 100.0));
     // The power row fades in as the footer slides down to make room for it
     // (`shift` is how much of its room isn't open yet).
@@ -1052,47 +1255,35 @@ fn paint(
         paint_devices(canvas, list, bluetooth, pending, fonts, icons, theme, s);
     }
 
-    // Volume: the fat slider, speaker icon inside.
-    let v = layout.volume;
+    // Output and input: the fat slider, speaker or microphone inside, and
+    // an arrow to the device list.
     let (percent, muted) = volume;
-    let fill = if muted {
-        theme.qs_slider_fill.with_alpha(0.35)
-    } else {
-        theme.qs_slider_fill
-    };
-    canvas.slider_rounded(
-        v.x,
-        v.y,
-        v.w,
-        v.h,
-        theme.qs_tile_radius,
-        volume_shown,
-        theme.qs_slider_track,
-        fill,
-    );
-    let icon_size = 20.0;
-    let icon_x = v.x + (v.h - icon_size) / 2.0 + 4.0;
-    // Dark icon where the bright fill is under it.
-    let covered = volume_shown * v.w > icon_x - v.x + icon_size;
-    let icon_color = if covered && !muted {
-        theme.qs_on_fill
-    } else {
-        theme.popup_text
-    };
     let name = status.volume.map_or("audio-volume-muted-symbolic", |vol| {
         volume_icon(crate::status::Volume {
             percent,
             muted: vol.muted,
         })
     });
-    canvas.icon(
+    paint_volume_row(
+        canvas,
         icons,
+        theme,
+        layout.volume,
+        volume_shown,
+        muted,
         name,
-        icon_x,
-        v.y + (v.h - icon_size) / 2.0,
-        icon_size,
-        icon_color,
     );
+    paint_arrow(canvas, icons, theme, layout.volume_arrow);
+    if let (Some((rect, arrow)), Some((_, muted)), Some(shown)) = (layout.input, input, input_shown)
+    {
+        let name = if muted {
+            "microphone-sensitivity-muted-symbolic"
+        } else {
+            "audio-input-microphone-symbolic"
+        };
+        paint_volume_row(canvas, icons, theme, rect, shown, muted, name);
+        paint_arrow(canvas, icons, theme, arrow);
+    }
 
     // Brightness: the same fat slider, a sun inside.
     if let (Some(b), Some(shown)) = (layout.brightness, brightness_shown) {
@@ -1106,6 +1297,7 @@ fn paint(
             theme.qs_slider_track,
             theme.qs_slider_fill,
         );
+        let icon_size = 20.0;
         let icon_x = b.x + (b.h - icon_size) / 2.0 + 4.0;
         let covered = shown * b.w > icon_x - b.x + icon_size;
         canvas.icon(
@@ -1327,6 +1519,70 @@ fn paint(
     );
 }
 
+/// A fat slider with `icon` at its start; the icon is dark where the bright
+/// fill is under it. A muted one is dimmed.
+fn paint_volume_row(
+    canvas: &mut Canvas<'_>,
+    icons: &mut Icons,
+    theme: &Theme,
+    v: Rect,
+    shown: f32,
+    muted: bool,
+    icon: &str,
+) {
+    let fill = if muted {
+        theme.qs_slider_fill.with_alpha(0.35)
+    } else {
+        theme.qs_slider_fill
+    };
+    canvas.slider_rounded(
+        v.x,
+        v.y,
+        v.w,
+        v.h,
+        theme.qs_tile_radius,
+        shown,
+        theme.qs_slider_track,
+        fill,
+    );
+    let icon_size = 20.0;
+    let icon_x = v.x + (v.h - icon_size) / 2.0 + 4.0;
+    let covered = shown * v.w > icon_x - v.x + icon_size;
+    let icon_color = if covered && !muted {
+        theme.qs_on_fill
+    } else {
+        theme.popup_text
+    };
+    canvas.icon(
+        icons,
+        icon,
+        icon_x,
+        v.y + (v.h - icon_size) / 2.0,
+        icon_size,
+        icon_color,
+    );
+}
+
+/// The round arrow at a slider's end.
+fn paint_arrow(canvas: &mut Canvas<'_>, icons: &mut Icons, theme: &Theme, rect: Rect) {
+    canvas.rounded_rect(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        theme.qs_tile_radius,
+        theme.qs_slider_track,
+    );
+    canvas.icon(
+        icons,
+        "go-next-symbolic",
+        rect.x + (rect.w - 16.0) / 2.0,
+        rect.y + (rect.h - 16.0) / 2.0,
+        16.0,
+        theme.popup_text,
+    );
+}
+
 /// The Bluetooth devices tile: "Devices" and an arrow, then (open) a row
 /// per paired device saying whether it's connected.
 #[allow(clippy::too_many_arguments)]
@@ -1418,12 +1674,20 @@ fn paint_devices(
 fn positioner(
     xdg_shell: &XdgShell,
     layout: &Layout,
+    anchor: (i32, i32, i32, i32),
+) -> Option<XdgPositioner> {
+    sized_positioner(xdg_shell, (layout.width, layout.height), anchor)
+}
+
+fn sized_positioner(
+    xdg_shell: &XdgShell,
+    (width, height): (f32, f32),
     (ax, ay, aw, ah): (i32, i32, i32, i32),
 ) -> Option<XdgPositioner> {
     let positioner = XdgPositioner::new(xdg_shell)
         .map_err(|err| warn!(?err, "no xdg positioner"))
         .ok()?;
-    positioner.set_size(layout.width as i32, layout.height as i32);
+    positioner.set_size(width as i32, height as i32);
     positioner.set_anchor_rect(ax, ay, aw.max(1), ah.max(1));
     // Hang below the status icons, right edges aligned.
     positioner.set_anchor(Anchor::BottomRight);
@@ -1698,6 +1962,7 @@ mod tests {
                 &theme,
                 &status,
                 (62, false),
+                Some((80, false)),
                 Some(40),
                 scale,
                 &mut Animator::new(),

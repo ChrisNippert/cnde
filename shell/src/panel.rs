@@ -44,6 +44,8 @@ pub struct Draw<'a> {
     pub tray_popover_open: bool,
     /// A power icon at the end of the status button.
     pub power_icon: bool,
+    /// A microphone while an app is recording.
+    pub mic_indicator: bool,
     /// What the buttons open is open (they're drawn highlighted).
     pub overview_open: bool,
     pub quick_settings_open: bool,
@@ -403,6 +405,7 @@ impl Panel {
             tray_mode,
             tray_popover_open,
             power_icon,
+            mic_indicator,
             overview_open,
             quick_settings_open,
             calendar_open,
@@ -579,6 +582,9 @@ impl Panel {
         }
         if let Some(volume) = status.volume {
             items.push(volume_icon(volume).into());
+        }
+        if mic_indicator && status.audio.recording {
+            items.push("audio-input-microphone-symbolic".into());
         }
         if let Some(battery) = status.battery {
             items.push(battery_icon(battery));
