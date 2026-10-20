@@ -250,6 +250,12 @@ fn restart_portals() {
         info!("no portal services installed to restart");
         return;
     }
+    // A backend that crash-looped while the last session ended has hit
+    // systemd's start limit, and try-restart skips failed units: clear that
+    // first so D-Bus activation can start it again.
+    let mut reset = vec!["reset-failed"];
+    reset.extend(&units);
+    let _ = systemctl(&reset);
     let mut args = vec!["try-restart"];
     args.extend(&units);
     match systemctl(&args) {

@@ -1,7 +1,7 @@
 //! cnde-share-picker: the "what do you want to share?" window for screen
 //! sharing. xdg-desktop-portal-wlr runs it as its chooser (`chooser_type =
-//! simple`): it shows a card per monitor with a thumbnail, prints the name
-//! of the one picked on stdout and exits 0, or exits 1 when cancelled.
+//! simple`): it shows a card per monitor with a thumbnail, prints `Monitor: <name>`
+//! for the one picked on stdout and exits 0, or exits 1 when cancelled.
 //!
 //! Thumbnails are one ext-image-copy-capture frame of each monitor, taken
 //! before the overlay opens (so the picker isn't in them) and shrunk on

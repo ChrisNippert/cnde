@@ -1,7 +1,7 @@
 //! The picker's choice, apart from any drawing: which card is selected,
 //! what a key or click does, and what we tell xdg-desktop-portal-wlr.
 //!
-//! The portal's "simple" chooser protocol: print the chosen output's name
+//! The portal's "simple" chooser protocol: print `Monitor: <output>`
 //! on stdout and exit 0, or exit non-zero to cancel.
 
 use std::io::{self, Write};
@@ -87,7 +87,9 @@ impl Picker {
 pub fn report(out: &mut impl Write, outcome: &Outcome) -> io::Result<i32> {
     match outcome {
         Outcome::Choose(name) => {
-            writeln!(out, "{name}")?;
+            // portal-wlr reads "Monitor: <output>"; anything else counts as
+            // the user declining.
+            writeln!(out, "Monitor: {name}")?;
             out.flush()?;
             Ok(0)
         }
@@ -154,7 +156,7 @@ mod tests {
     fn protocol_prints_name_or_nothing() {
         let mut out = Vec::new();
         let code = report(&mut out, &Outcome::Choose("HDMI-A-1".into())).unwrap();
-        assert_eq!((code, out.as_slice()), (0, b"HDMI-A-1\n".as_slice()));
+        assert_eq!((code, out.as_slice()), (0, b"Monitor: HDMI-A-1\n".as_slice()));
         let mut out = Vec::new();
         assert_eq!(report(&mut out, &Outcome::Cancel).unwrap(), 1);
         assert!(out.is_empty());
