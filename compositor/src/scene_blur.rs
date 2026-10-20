@@ -27,10 +27,13 @@ use tracing::{debug, warn};
 
 use crate::render::OutputElement;
 
-/// The scene is drawn this many times smaller than the screen; the GPU's
-/// filtering scales the blur back up.
-const DOWN: i32 = 6;
-/// Blur passes (each one horizontal, then vertical).
+/// The scene is first drawn at half size, then halved by plain bilinear
+/// draws (each one averaging 2x2 texels, so nothing sparkles or goes
+/// blocky) down to 1/`DEEP`, blurred there, and drawn back up to 1/`KEEP`,
+/// which is what's held: smooth enough to stretch, and small.
+const DEEP: i32 = 8;
+const KEEP: i32 = 4;
+/// Blur passes at the smallest size (each one horizontal, then vertical).
 const PASSES: usize = 2;
 /// How far apart the taps sit, in texels: wider is blurrier.
 const SPREAD: f32 = 1.5;
@@ -92,7 +95,8 @@ pub struct SceneBlur {
     shader: Option<GlesTexProgram>,
     /// Shader failed to compile: don't keep trying.
     broken: bool,
-    held: Option<Held>,
+    /// One per output.
+    held: Vec<Held>,
 }
 
 /// Draw `elements` into a new texture of `size` (not waiting for it: the
@@ -119,17 +123,66 @@ fn draw<E: RenderElement<GlesRenderer>>(
     Some(texture)
 }
 
+/// `texture` (of `from` texels) drawn stretched to `to`, through `shader`
+/// with `uniforms` if given.
+fn resample(
+    renderer: &mut GlesRenderer,
+    texture: GlesTexture,
+    to: Size<i32, Physical>,
+    shader: Option<(&GlesTexProgram, [f32; 2])>,
+) -> Option<GlesTexture> {
+    let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
+    let source = TextureRenderElement::from_texture_buffer(
+        (0.0, 0.0),
+        &buffer,
+        Some(1.0),
+        None,
+        Some(Size::from((to.w, to.h))),
+        Kind::Unspecified,
+    );
+    match shader {
+        Some((shader, step)) => {
+            let element =
+                TextureShaderElement::new(source, shader.clone(), vec![Uniform::new("step", step)]);
+            draw(renderer, &[element], to, Scale::from(1.0))
+        }
+        None => draw(renderer, &[source], to, Scale::from(1.0)),
+    }
+}
+
+/// A Gaussian pass each way over `texture` (`size` texels), `spread` apart.
+fn blur(
+    renderer: &mut GlesRenderer,
+    shader: &GlesTexProgram,
+    mut texture: GlesTexture,
+    size: Size<i32, Physical>,
+    spread: f32,
+) -> Option<GlesTexture> {
+    let texel = [1.0 / size.w as f32, 1.0 / size.h as f32];
+    for step in [[texel[0] * spread, 0.0], [0.0, texel[1] * spread]] {
+        texture = resample(renderer, texture, size, Some((shader, step)))?;
+    }
+    Some(texture)
+}
+
+fn shrink(full: Size<i32, Physical>, by: i32) -> Size<i32, Physical> {
+    Size::from((((full.w + by - 1) / by).max(1), ((full.h + by - 1) / by).max(1)))
+}
+
 impl SceneBlur {
     /// Whether a blurred copy of `output` is held.
     pub fn has(&self, output: &Output) -> bool {
-        self.held
-            .as_ref()
-            .is_some_and(|h| h.output == output.name())
+        self.find(output).is_some()
+    }
+
+    fn find(&self, output: &Output) -> Option<&Held> {
+        let name = output.name();
+        self.held.iter().find(|h| h.output == name)
     }
 
     /// Let go of the copy (the switcher has closed).
     pub fn release(&mut self) {
-        self.held = None;
+        self.held.clear();
     }
 
     /// Draw `scene` (top first, as the renderer takes it), small, and blur it.
@@ -159,41 +212,39 @@ impl SceneBlur {
         };
         let scale = output.current_scale().fractional_scale();
         let full = output.current_transform().transform_size(mode.size);
-        let size =
-            Size::<i32, Physical>::from(((full.w + DOWN - 1) / DOWN, (full.h + DOWN - 1) / DOWN));
-        let Some(mut texture) = draw(renderer, scene, size, Scale::from(scale / DOWN as f64))
-        else {
+        let mut size = shrink(full, 2);
+        let Some(mut texture) = draw(renderer, scene, size, Scale::from(scale / 2.0)) else {
             warn!("can't draw the scene for the switcher's blur");
             return;
         };
-        let texel = [1.0 / size.w as f32, 1.0 / size.h as f32];
-        for pass in 0..PASSES * 2 {
-            let step = if pass % 2 == 0 {
-                [texel[0] * SPREAD, 0.0]
-            } else {
-                [0.0, texel[1] * SPREAD]
-            };
-            let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
-            let source = TextureRenderElement::from_texture_buffer(
-                (0.0, 0.0),
-                &buffer,
-                Some(1.0),
-                None,
-                None,
-                Kind::Unspecified,
-            );
-            let element =
-                TextureShaderElement::new(source, shader.clone(), vec![Uniform::new("step", step)]);
-            let Some(next) = draw(renderer, &[element], size, Scale::from(1.0)) else {
-                warn!("can't blur the scene for the switcher");
-                return;
-            };
-            texture = next;
-        }
+        let mut by = 2;
+        let result = (|| {
+            while by < DEEP {
+                by *= 2;
+                size = shrink(full, by);
+                texture = resample(renderer, texture.clone(), size, None)?;
+            }
+            for _ in 0..PASSES {
+                texture = blur(renderer, &shader, texture.clone(), size, SPREAD)?;
+            }
+            while by > KEEP {
+                by /= 2;
+                size = shrink(full, by);
+                texture = resample(renderer, texture.clone(), size, None)?;
+            }
+            // Smooth out the stretch's bilinear creases.
+            blur(renderer, &shader, texture.clone(), size, 1.0)
+        })();
+        let Some(texture) = result else {
+            warn!("can't blur the scene for the switcher");
+            return;
+        };
         let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
         let logical = full.to_f64().to_logical(scale).to_i32_round();
-        self.held = Some(Held {
-            output: output.name(),
+        let name = output.name();
+        self.held.retain(|h| h.output != name);
+        self.held.push(Held {
+            output: name,
             buffer,
             size: Size::from((size.w, size.h)),
             logical,
@@ -212,7 +263,7 @@ impl SceneBlur {
         output: &Output,
         alpha: f32,
     ) -> Option<TextureRenderElement<GlesTexture>> {
-        let held = self.held.as_ref().filter(|h| h.output == output.name())?;
+        let held = self.find(output)?;
         Some(crate::wallpaper::full_screen(
             &held.buffer,
             held.size.w,
@@ -230,7 +281,7 @@ impl SceneBlur {
         area: Rectangle<i32, Logical>,
         alpha: f32,
     ) -> Option<(TextureRenderElement<GlesTexture>, [f32; 4])> {
-        let held = self.held.as_ref().filter(|h| h.output == output.name())?;
+        let held = self.find(output)?;
         let scale = output.current_scale().fractional_scale();
         let (fx, fy) = (
             held.size.w as f64 / held.logical.w.max(1) as f64,

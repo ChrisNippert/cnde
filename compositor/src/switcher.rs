@@ -374,9 +374,11 @@ impl Switcher {
                 ),
                 _ => return Vec::new(),
             };
-            if &session.output != output || level <= 0.0 {
+            if level <= 0.0 {
                 return Vec::new();
             }
+            // The panel lives on one output; the others just dim and blur.
+            let here = &session.output == output;
             if frost.is_some() && !self.blur.has(output) {
                 self.blur.capture(renderer, output, scene);
             }
@@ -414,27 +416,31 @@ impl Switcher {
                 .clone()
                 .filter(|_| live)
                 .map(|(w, since)| (w, 1.0 - eased(since, now)));
-            if let (Some(s), Some(at)) = (&mut self.session, at) {
+            if let (true, Some(s), Some(at)) = (here, &mut self.session, at) {
                 s.slide.last = Some(at);
             }
             let look = Look {
                 level,
                 highlight: at,
             };
-            let mut elements = self.panel_elements(
-                renderer,
-                decorations,
-                space,
-                output,
-                &windows,
-                &geometry,
-                Some(selected),
-                None,
-                &look,
-                &mut frost,
-                true,
-                now,
-            );
+            let mut elements = if here {
+                self.panel_elements(
+                    renderer,
+                    decorations,
+                    space,
+                    output,
+                    &windows,
+                    &geometry,
+                    Some(selected),
+                    None,
+                    &look,
+                    &mut frost,
+                    true,
+                    now,
+                )
+            } else {
+                Vec::new()
+            };
             let scale = Scale::from(output.current_scale().fractional_scale());
             let output_loc = space
                 .output_geometry(output)
