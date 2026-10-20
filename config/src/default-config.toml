@@ -185,6 +185,16 @@
 # crashes while locked, the screen stays locked and it's started again.
 # command = "cnde-lock"
 
+[portal]
+# The window that asks which screen to share (OBS, browsers, calls).
+# "cnde" shows cnde-share-picker, set up as xdg-desktop-portal-wlr's chooser
+# unless you have an xdg-desktop-portal-wlr config of your own. "keep"
+# leaves xdg-desktop-portal-wlr's settings alone. To use the picker from
+# your own config, put this in its [screencast] section:
+#   chooser_type=simple
+#   chooser_cmd=cnde-share-picker
+# share_picker = "cnde"
+
 [files]
 # Icon sizes in the file manager, in logical pixels. The menu next to the
 # window buttons (and Ctrl+scroll, Ctrl+plus/minus) changes them.

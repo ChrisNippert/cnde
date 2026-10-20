@@ -1,0 +1,14 @@
+[package]
+name = "cnde-share-picker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cnde-ui = { path = "../ui" }
+cnde-config = { path = "../config" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "xkbcommon"] }
+# ext-image-copy-capture: one frame of each monitor for the thumbnails.
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }

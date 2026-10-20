@@ -148,8 +148,12 @@ windows), not `wlr-screencopy`: it's the standardized successor, and
 xdg-desktop-portal-wlr 0.8+, grim and OBS speak it. Apps reach it through
 xdg-desktop-portal → xdg-desktop-portal-wlr → PipeWire (`data/cnde-portals.conf`).
 The compositor exports its environment to the session bus at startup so
-the portals, started on demand by D-Bus, can find it. A cnde-shell picker
-replacing the wlr portal's dmenu-style chooser (fuzzel for now) is planned.
+the portals, started on demand by D-Bus, can find it, and restarts the
+portal systemd user services so ones left over from the last session don't
+keep a dead display. Which monitor to share is chosen in `cnde-share-picker`
+(its own small binary), which portal-wlr runs as its `simple` chooser via a
+`cnde` config the compositor writes if the user has none (`[portal]
+share_picker` in config.toml).
 
 ## 5. Shell (`cnde-shell`)
 
