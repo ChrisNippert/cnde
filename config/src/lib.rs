@@ -903,6 +903,8 @@ impl Default for Autostart {
 pub struct Tiling {
     /// How workspaces arrange their windows unless switched.
     pub layout: WindowLayout,
+    /// What Super+T switches.
+    pub toggle: TilingToggle,
     /// How tiling arranges windows.
     pub style: TilingStyle,
     /// Share of the width the first window takes, 0.1 to 0.9.
@@ -917,12 +919,25 @@ impl Default for Tiling {
     fn default() -> Self {
         Self {
             layout: WindowLayout::Floating,
+            toggle: TilingToggle::All,
             style: TilingStyle::Dwindle,
             master_ratio: 0.5,
             gap: 8,
             outer_gap: 8,
         }
     }
+}
+
+/// What Super+T (and the `layout` setting) applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TilingToggle {
+    /// Tiling is one global mode: `layout` is the live mode of every
+    /// workspace, and Super+T flips (and saves) it.
+    #[default]
+    All,
+    /// Super+T switches one workspace; `layout` is how new ones start.
+    Workspace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

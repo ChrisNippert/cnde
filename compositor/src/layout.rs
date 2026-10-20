@@ -26,7 +26,7 @@ use smithay::{
 };
 use tracing::debug;
 
-use cnde_config::{TilingStyle, WindowLayout};
+use cnde_config::{TilingStyle, TilingToggle, WindowLayout};
 
 use crate::keybinds::Direction;
 
@@ -449,14 +449,31 @@ impl<W: PartialEq + Clone> Workspace<W> {
     }
 }
 
+/// The layout a workspace uses: with `toggle = "all"` the config's, for
+/// every workspace; otherwise its own (Super+T) or else the config's.
+fn resolve_mode(
+    toggle: TilingToggle,
+    own: Option<WindowLayout>,
+    config: WindowLayout,
+) -> WindowLayout {
+    match toggle {
+        TilingToggle::All => config,
+        TilingToggle::Workspace => own.unwrap_or(config),
+    }
+}
+
+fn flipped(mode: WindowLayout) -> WindowLayout {
+    match mode {
+        WindowLayout::Floating => WindowLayout::Tiling,
+        WindowLayout::Tiling => WindowLayout::Floating,
+    }
+}
+
 impl State {
     /// The layout workspace `index` uses now.
     fn layout_mode(&self, index: usize) -> WindowLayout {
-        self.workspaces
-            .list
-            .get(index)
-            .and_then(|ws| ws.layout)
-            .unwrap_or(self.config.tiling.layout)
+        let own = self.workspaces.list.get(index).and_then(|ws| ws.layout);
+        resolve_mode(self.config.tiling.toggle, own, self.config.tiling.layout)
     }
 
     fn master_ratio(&self, index: usize) -> f64 {
@@ -756,16 +773,29 @@ impl State {
             })
     }
 
-    /// Super+T: switch the current workspace between floating and tiling.
+    /// Super+T: switch between floating and tiling: every workspace
+    /// (saved to the config so Settings agrees) or just the current one.
     pub fn toggle_tiling(&mut self) {
+        if self.config.tiling.toggle == TilingToggle::All {
+            let was: Vec<_> = (0..self.workspaces.list.len())
+                .map(|i| self.layout_mode(i))
+                .collect();
+            let next = flipped(self.config.tiling.layout);
+            debug!(?next, "global layout");
+            self.overview_before_relayout();
+            self.config.tiling.layout = next;
+            for (index, was) in was.into_iter().enumerate() {
+                self.workspaces.list[index].layout = None;
+                self.layout_switched(index, was);
+            }
+            self.save_tiling_layout(next);
+            return;
+        }
         let Some(index) = self.current_workspace() else {
             return;
         };
         let was = self.layout_mode(index);
-        let next = match was {
-            WindowLayout::Floating => WindowLayout::Tiling,
-            WindowLayout::Tiling => WindowLayout::Floating,
-        };
+        let next = flipped(was);
         debug!(index, ?next, "workspace layout");
         // In the overview, the thumbnails slide to their new places too.
         self.overview_before_relayout();
@@ -885,12 +915,39 @@ impl State {
     /// `tiling` in the config changed (from `old`): workspaces that follow
     /// its layout switch, and tiles take the new ratio and gaps.
     pub fn tiling_config_changed(&mut self, old: &cnde_config::Tiling) {
+        let all = self.config.tiling.toggle == TilingToggle::All;
         for index in 0..self.workspaces.list.len() {
-            if self.workspaces.list[index].layout.is_none() {
-                self.layout_switched(index, old.layout);
+            let own = self.workspaces.list[index].layout;
+            // One global mode: Super+T overrides give way to the setting.
+            if all {
+                self.workspaces.list[index].layout = None;
+            }
+            if all || own.is_none() {
+                let was = resolve_mode(old.toggle, own, old.layout);
+                self.layout_switched(index, was);
             }
         }
         self.relayout_visible(true);
+    }
+
+    /// Write `tiling.layout` to config.toml, keeping the rest of the file.
+    /// The reload this triggers finds nothing changed, as the live config
+    /// already says so.
+    fn save_tiling_layout(&self, mode: WindowLayout) {
+        let Some(path) = &self.config_path else {
+            return;
+        };
+        let value = match mode {
+            WindowLayout::Floating => "floating",
+            WindowLayout::Tiling => "tiling",
+        };
+        let result = cnde_config::ConfigFile::open(path).and_then(|mut file| {
+            file.set("tiling.layout", value);
+            file.save()
+        });
+        if let Err(err) = result {
+            tracing::warn!(%err, "couldn't save the tiling mode to the config");
+        }
     }
 
     /// Super+Enter: swap the focused window with the main one (the main
@@ -1256,6 +1313,20 @@ fn floating_spot(area: Rectangle<i32, Logical>, n: i32) -> Rectangle<i32, Logica
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_resolution() {
+        use TilingToggle::{All, Workspace};
+        use WindowLayout::{Floating, Tiling};
+        // Global: the config wins over any workspace override.
+        assert_eq!(resolve_mode(All, Some(Tiling), Floating), Floating);
+        assert_eq!(resolve_mode(All, None, Tiling), Tiling);
+        // Per workspace: the override wins, else the config.
+        assert_eq!(resolve_mode(Workspace, Some(Tiling), Floating), Tiling);
+        assert_eq!(resolve_mode(Workspace, None, Tiling), Tiling);
+        assert_eq!(flipped(Tiling), Floating);
+        assert_eq!(flipped(Floating), Tiling);
+    }
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new(Point::from((x, y)), Size::from((w, h)))

@@ -95,13 +95,14 @@
 # speed = 1.0              # 0.5 = twice as fast, 0.0 = no animations
 
 [tiling]
-# Super+T switches the current workspace between floating and tiling;
+# Super+T switches between floating and tiling (see toggle);
 # Super+Enter swaps the focused window with the main one, Super+[ and
 # Super+] narrow and widen the main window, Super+Shift+T floats one window.
 # On a tiling workspace Super+arrows move focus between windows and
 # Super+Shift+arrows swap the focused one with its neighbour (or move it to
 # the next monitor). New windows split the focused one.
-# layout = "floating"      # how workspaces start: "floating" or "tiling"
+# layout = "floating"      # "floating" or "tiling"; with toggle = "all" this is the live mode of every workspace
+# toggle = "all"           # Super+T flips: "all" workspaces on every monitor (and saves layout above), or "workspace": just the current one (layout is then how new workspaces start)
 # style = "dwindle"        # "dwindle": each new window halves the last one (Hyprland's default); "master": main window left, the rest stacked right
 # master_ratio = 0.5       # share of the width the first window takes (0.1-0.9)
 # gap = 8                  # px between tiled windows (0-64)

@@ -2142,6 +2142,13 @@ fn window_layout(v: cnde_config::WindowLayout) -> Value {
     })
 }
 
+fn tiling_toggle(v: cnde_config::TilingToggle) -> Value {
+    s(match v {
+        cnde_config::TilingToggle::All => "all",
+        cnde_config::TilingToggle::Workspace => "workspace",
+    })
+}
+
 fn tiling_style(v: cnde_config::TilingStyle) -> Value {
     s(match v {
         cnde_config::TilingStyle::Dwindle => "dwindle",
@@ -2157,7 +2164,7 @@ fn windows(c: &Config, d: &Config) -> Vec<Group> {
         vec![
             Row::new(
                 "tiling.layout",
-                "Arrange windows",
+                "Tiling",
                 Control::Segmented(choices(&[
                     ("Floating", s("floating")),
                     ("Tiling", s("tiling")),
@@ -2165,7 +2172,18 @@ fn windows(c: &Config, d: &Config) -> Vec<Group> {
                 window_layout(t.layout),
                 window_layout(dt.layout),
             )
-            .sub("Tiled windows share the screen without overlapping. Super+T switches one workspace"),
+            .sub("Tiled windows share the screen without overlapping. Applies to every workspace unless Super+T is set to one workspace"),
+            Row::new(
+                "tiling.toggle",
+                "Super+T toggles",
+                Control::Segmented(choices(&[
+                    ("All workspaces", s("all")),
+                    ("This workspace", s("workspace")),
+                ])),
+                tiling_toggle(t.toggle),
+                tiling_toggle(dt.toggle),
+            )
+            .sub("With one workspace, the Tiling setting is how new workspaces start"),
             Row::new(
                 "tiling.style",
                 "Tiling style",
