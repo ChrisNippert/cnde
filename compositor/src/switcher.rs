@@ -16,6 +16,7 @@ use smithay::{
             element::{
                 Kind,
                 memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
+                solid::{SolidColorBuffer, SolidColorRenderElement},
                 utils::RescaleRenderElement,
             },
             gles::GlesRenderer,
@@ -31,6 +32,7 @@ use cnde_ipc::Side;
 use cnde_ui::{Canvas, Color, Fonts, Icons, Weight};
 
 use crate::{
+    animation::Curve,
     render::{OutputElement, Zoom},
     state::State,
     window::with_state,
@@ -38,6 +40,14 @@ use crate::{
 
 /// A tap shorter than this switches without ever drawing the panel.
 const SHOW_AFTER: Duration = Duration::from_millis(150);
+
+/// The panel (and the dim behind it) fades in and out over this, and the
+/// selection slides and windows rise and sink over the same time.
+const FADE: Duration = Duration::from_millis(150);
+/// The panel grows from this scale as it appears.
+const PANEL_START_SCALE: f64 = 0.96;
+/// How dark the rest of the screen goes behind the panel.
+const DIM: f32 = 0.45;
 
 const CELL_W: f64 = 216.0;
 const CELL_H: f64 = 180.0;
@@ -66,6 +76,38 @@ struct Session {
     output: Output,
     /// `None` when driven by the debug IPC: nothing to release.
     held: Option<Held>,
+    /// The selection highlight sliding to its cell.
+    slide: Slide,
+    /// The window that was selected before, sinking back under the dim,
+    /// and when the current one started rising.
+    sinking: Option<(Window, Instant)>,
+    rising_since: Instant,
+}
+
+/// The selection highlight's slide between cells.
+struct Slide {
+    /// Where it was (relative to the panel) when the selection last moved.
+    from: Option<Point<f64, Logical>>,
+    since: Instant,
+    /// Where it was last drawn.
+    last: Option<Point<f64, Logical>>,
+}
+
+/// A closed switcher, fading out.
+struct Leaving {
+    session: Session,
+    since: Instant,
+    /// How far in it was when it closed.
+    level: f64,
+    /// The window left lit as the dim fades: the one picked, or the one
+    /// that stays focused when cancelled.
+    lit: Option<Window>,
+}
+
+/// 0 to 1 over `FADE` from `since`, eased.
+fn eased(since: Instant, now: Instant) -> f64 {
+    Curve::EaseOutCubic
+        .apply(now.saturating_duration_since(since).as_secs_f64() / FADE.as_secs_f64())
 }
 
 /// The dock's hover preview: the same panel, beside a dock icon, with the
@@ -81,6 +123,8 @@ struct Preview {
     close_hot: bool,
     /// The pointer's on the panel.
     inside: bool,
+    /// When the panel first appeared, for fading in.
+    since: Instant,
 }
 
 #[derive(Default)]
@@ -90,6 +134,21 @@ pub struct Switcher {
     fonts: Option<Fonts>,
     icons: Option<Icons>,
     panel: Option<(Key, MemoryRenderBuffer)>,
+    /// The closed switcher, fading out.
+    leaving: Option<Leaving>,
+    /// Darkens everything behind the panel.
+    dim: Option<SolidColorBuffer>,
+    /// The selection highlight: one cell, drawn on its own so it can slide.
+    highlight: Option<(u64, MemoryRenderBuffer)>,
+}
+
+/// How the panel is drawn this frame.
+struct Look {
+    /// 0 (gone) to 1 (up): its opacity, and how far it has grown.
+    level: f64,
+    /// The selection highlight's cell position within the panel; `None` has
+    /// the panel paint it itself (the dock's hover).
+    highlight: Option<Point<f64, Logical>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,6 +156,8 @@ struct Key {
     /// Window id, title and app id of each cell.
     cells: Vec<(u64, String, String)>,
     selected: Option<usize>,
+    /// The selection is painted into the panel (else it's drawn apart).
+    lit: bool,
     /// Cells carry a close button (dock previews); is the hovered one's lit.
     closable: Option<bool>,
     cols: usize,
@@ -191,6 +252,15 @@ fn close_rect(cell: Rectangle<f64, Logical>) -> Rectangle<f64, Logical> {
     )
 }
 
+/// How far in a open switcher is: 0 until the tap delay has passed, then
+/// fading in.
+fn open_level(session: &Session, now: Instant) -> f64 {
+    if now < session.started + SHOW_AFTER {
+        return 0.0;
+    }
+    eased(session.started + SHOW_AFTER, now)
+}
+
 impl Switcher {
     pub fn is_open(&self) -> bool {
         self.session.is_some()
@@ -207,16 +277,29 @@ impl Switcher {
         self.session.as_ref().and_then(|s| s.held)
     }
 
-    /// Whether a frame is due soon: the panel is about to appear.
+    /// Whether a frame is due soon: the panel is about to appear or is
+    /// fading, or the selection is moving.
     pub fn is_animating(&self, now: Instant) -> bool {
+        let busy = |since: Instant| {
+            now.saturating_duration_since(since) < FADE + Duration::from_millis(20)
+        };
         self.session.as_ref().is_some_and(|s| {
-            now.saturating_duration_since(s.started) < SHOW_AFTER + Duration::from_millis(20)
-        })
+            busy(s.started + SHOW_AFTER - Duration::from_millis(20)) || busy(s.rising_since)
+        }) || self.leaving.as_ref().is_some_and(|l| busy(l.since))
+            || self.preview.as_ref().is_some_and(|p| busy(p.since))
     }
 
     fn step(&mut self, back: bool) {
         if let Some(s) = &mut self.session {
             let n = s.windows.len();
+            let now = Instant::now();
+            s.slide = Slide {
+                from: s.slide.last,
+                since: now,
+                last: s.slide.last,
+            };
+            s.sinking = s.windows.get(s.selected).map(|w| (w.clone(), now));
+            s.rising_since = now;
             s.selected = if back {
                 (s.selected + n - 1) % n
             } else {
@@ -225,8 +308,26 @@ impl Switcher {
         }
     }
 
+    /// The switcher closes: its panel and dim fade out (unless it never
+    /// got as far as showing).
+    fn close(&mut self, now: Instant, lit: Option<Window>) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        let level = open_level(&session, now);
+        if level > 0.0 {
+            self.leaving = Some(Leaving {
+                session,
+                since: now,
+                level,
+                lit,
+            });
+        }
+    }
+
     /// The panel and thumbnails for `output`, front first; empty unless the
-    /// switcher (or the dock's preview) is showing there.
+    /// switcher (or the dock's preview) is showing there. The switcher also
+    /// dims the screen, with the selected window lifted back out of the dim.
     pub fn elements(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -235,29 +336,125 @@ impl Switcher {
         output: &Output,
         now: Instant,
     ) -> Vec<OutputElement> {
-        if self.session.is_some() {
-            if !self.is_visible(now) {
+        if self.leaving.as_ref().is_some_and(|l| {
+            now.saturating_duration_since(l.since) >= FADE || self.session.is_some()
+        }) {
+            self.leaving = None;
+        }
+        let Some(size) = space.output_geometry(output).map(|g| g.size.to_f64()) else {
+            return Vec::new();
+        };
+        let open = self.session.is_some();
+        let fading = self.leaving.is_some() && !open;
+        if open || fading {
+            let (session, level, live, kept) = match (&self.session, &self.leaving) {
+                (Some(s), _) => (s, open_level(s, now), true, None),
+                (None, Some(l)) => (
+                    &l.session,
+                    l.level * (1.0 - eased(l.since, now)),
+                    false,
+                    l.lit.clone(),
+                ),
+                _ => return Vec::new(),
+            };
+            if &session.output != output || level <= 0.0 {
                 return Vec::new();
             }
-            let Some(session) = self.session.as_ref().filter(|s| &s.output == output) else {
-                return Vec::new();
-            };
-            let (windows, selected) = (session.windows.clone(), Some(session.selected));
-            let Some(size) = space.output_geometry(output).map(|g| g.size.to_f64()) else {
-                return Vec::new();
-            };
+            let windows = session.windows.clone();
+            let selected = session.selected;
             let geometry = layout(windows.len(), size, Place::Centre);
-            return self.panel_elements(
+            // The highlight slides from where it was to its cell.
+            let target = geometry.cells.get(selected).map(|c| c.loc);
+            let at = target.map(|target| match session.slide.from.filter(|_| live) {
+                Some(from) => {
+                    let e = eased(session.slide.since, now);
+                    Point::from((
+                        from.x + (target.x - from.x) * e,
+                        from.y + (target.y - from.y) * e,
+                    ))
+                }
+                None => target,
+            });
+            // The selected window rises out of the dim as the last one sinks
+            // back into it (when they're on screen to do so).
+            let rising = (
+                if live {
+                    windows.get(selected).cloned()
+                } else {
+                    kept
+                },
+                if live {
+                    eased(session.rising_since, now)
+                } else {
+                    1.0
+                },
+            );
+            let sinking = session
+                .sinking
+                .clone()
+                .filter(|_| live)
+                .map(|(w, since)| (w, 1.0 - eased(since, now)));
+            if let (Some(s), Some(at)) = (&mut self.session, at) {
+                s.slide.last = Some(at);
+            }
+            let look = Look {
+                level,
+                highlight: at,
+            };
+            let mut elements = self.panel_elements(
                 renderer,
                 decorations,
                 space,
                 output,
                 &windows,
                 &geometry,
-                selected,
+                Some(selected),
                 None,
+                &look,
                 now,
             );
+            let scale = Scale::from(output.current_scale().fractional_scale());
+            let output_loc = space
+                .output_geometry(output)
+                .map_or_else(Default::default, |g| g.loc.to_f64());
+            let lit = rising.0.map(|w| (w, rising.1)).into_iter().chain(sinking);
+            for (window, alpha) in lit {
+                // Only a window on screen here has a place to light up.
+                let Some(rect) = space
+                    .elements_for_output(output)
+                    .find(|w| **w == window)
+                    .and_then(|w| space.element_geometry(w))
+                else {
+                    continue;
+                };
+                elements.extend(crate::render::window_elements(
+                    renderer,
+                    decorations,
+                    None,
+                    None,
+                    &window,
+                    rect.to_f64(),
+                    Zoom::IDENTITY,
+                    output_loc,
+                    scale,
+                    now,
+                    alpha as f32,
+                ));
+            }
+            let dim = self.dim.get_or_insert_with(|| {
+                SolidColorBuffer::new(Size::from((1, 1)), [0.0, 0.0, 0.0, 1.0])
+            });
+            let size = size.to_i32_round::<i32>();
+            let size = Size::from((size.w.max(1), size.h.max(1)));
+            dim.resize(size);
+            elements.push(OutputElement::Solid(SolidColorRenderElement::from_buffer(
+                dim,
+                (0, 0),
+                scale,
+                DIM * level as f32,
+                Kind::Unspecified,
+            )));
+            return elements;
         }
         let Some(preview) = self.preview.as_ref().filter(|p| &p.output == output) else {
             return Vec::new();
@@ -268,9 +465,6 @@ impl Switcher {
             .filter(|w| w.alive())
             .cloned()
             .collect();
-        let Some(size) = space.output_geometry(output).map(|g| g.size.to_f64()) else {
-            return Vec::new();
-        };
         if windows.is_empty() {
             return Vec::new();
         }
@@ -280,6 +474,10 @@ impl Switcher {
             Place::Beside(preview.anchor, preview.side),
         );
         let (hover, close_hot) = (preview.hover, preview.close_hot);
+        let look = Look {
+            level: eased(preview.since, now),
+            highlight: None,
+        };
         self.panel_elements(
             renderer,
             decorations,
@@ -289,6 +487,7 @@ impl Switcher {
             &geometry,
             hover,
             Some(close_hot),
+            &look,
             now,
         )
     }
@@ -307,6 +506,7 @@ impl Switcher {
         geometry: &Layout,
         selected: Option<usize>,
         closable: Option<bool>,
+        look: &Look,
         now: Instant,
     ) -> Vec<OutputElement> {
         let Some(output_geo) = space.output_geometry(output) else {
@@ -314,6 +514,22 @@ impl Switcher {
         };
         let scale = Scale::from(output.current_scale().fractional_scale());
         let output_loc = output_geo.loc.to_f64();
+        // The panel grows from its middle as it fades in.
+        let grow = PANEL_START_SCALE + (1.0 - PANEL_START_SCALE) * look.level;
+        let alpha = look.level as f32;
+        let middle = Point::from((
+            output_loc.x + geometry.panel.loc.x + geometry.panel.size.w / 2.0,
+            output_loc.y + geometry.panel.loc.y + geometry.panel.size.h / 2.0,
+        ));
+        let about_middle = |rect: Rectangle<f64, Logical>| {
+            Rectangle::new(
+                Point::from((
+                    middle.x + (rect.loc.x - middle.x) * grow,
+                    middle.y + (rect.loc.y - middle.y) * grow,
+                )),
+                Size::from((rect.size.w * grow, rect.size.h * grow)),
+            )
+        };
 
         let mut elements = Vec::new();
         for (window, cell) in windows.iter().zip(&geometry.cells) {
@@ -338,6 +554,7 @@ impl Switcher {
                 )),
                 Size::from((tw, geo.size.h as f64 * factor)),
             );
+            let target = about_middle(target);
             let live = Rectangle::new(output_loc, Size::from((w, geo.size.h as f64)));
             // Drawing records where the window was, for close animations;
             // this isn't where it is.
@@ -353,6 +570,7 @@ impl Switcher {
                 output_loc,
                 scale,
                 now,
+                alpha,
             ));
             if let Some(rect) = recorded {
                 with_state(window, |s| {
@@ -372,6 +590,7 @@ impl Switcher {
                 })
                 .collect(),
             selected,
+            lit: look.highlight.is_none(),
             closable,
             cols: geometry.cols,
             scale: scale.x.to_bits(),
@@ -384,6 +603,34 @@ impl Switcher {
             };
             self.panel = Some((key, buffer));
         }
+        let scale_up = Scale::from(grow);
+        let around = (middle - output_loc).to_physical(scale).to_i32_round();
+        if let Some(at) = look.highlight {
+            let buffer = self.highlight_buffer(scale.x, &decorations.appearance);
+            let rect = Rectangle::new(
+                Point::from((geometry.panel.loc.x + at.x, geometry.panel.loc.y + at.y)),
+                Size::from((CELL_W, CELL_H - 6.0)),
+            );
+            let location = rect.loc.to_physical(scale);
+            let pixels = (
+                (CELL_W * scale.x).round(),
+                ((CELL_H - 6.0) * scale.x).round(),
+            );
+            match MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                location,
+                &buffer,
+                Some(alpha),
+                Some(Rectangle::from_size(Size::from(pixels))),
+                Some(Size::from((CELL_W as i32, CELL_H as i32 - 6))),
+                Kind::Unspecified,
+            ) {
+                Ok(element) => elements.push(OutputElement::Titlebar(
+                    RescaleRenderElement::from_element(element, around, scale_up),
+                )),
+                Err(err) => warn!(?err, "can't upload the window switcher"),
+            }
+        }
         if let Some((key, buffer)) = &self.panel {
             let location = geometry.panel.loc.to_physical(scale);
             let (w, h) = key.size;
@@ -392,22 +639,68 @@ impl Switcher {
                 renderer,
                 location,
                 buffer,
-                None,
+                Some(alpha),
                 Some(Rectangle::from_size(Size::from(pixels))),
                 Some(Size::from((w, h))),
                 Kind::Unspecified,
             ) {
-                Ok(element) => {
-                    elements.push(OutputElement::Titlebar(RescaleRenderElement::from_element(
-                        element,
-                        location.to_i32_round(),
-                        Scale::from(1.0),
-                    )))
-                }
+                Ok(element) => elements.push(OutputElement::Titlebar(
+                    RescaleRenderElement::from_element(element, around, scale_up),
+                )),
                 Err(err) => warn!(?err, "can't upload the window switcher"),
             }
         }
         elements
+    }
+
+    /// One cell's selection highlight, painted once per scale and style.
+    fn highlight_buffer(
+        &mut self,
+        scale: f64,
+        appearance: &cnde_config::Appearance,
+    ) -> MemoryRenderBuffer {
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            scale.to_bits().hash(&mut hasher);
+            format!("{appearance:?}").hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Some((k, buffer)) = &self.highlight
+            && *k == key
+        {
+            return buffer.clone();
+        }
+        let theme = cnde_ui::Theme::for_appearance(appearance);
+        let (cw, ch) = (CELL_W as f32, CELL_H as f32 - 6.0);
+        let (w, h) = (
+            (cw as f64 * scale).round() as u32,
+            (ch as f64 * scale).round() as u32,
+        );
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        if let Some(mut canvas) = Canvas::new(&mut pixels, w, h, scale as f32) {
+            canvas.clear(Color::rgba(0, 0, 0, 0.0));
+            let r = theme.window_radius.max(8.0);
+            canvas.rounded_rect(
+                1.0,
+                1.0,
+                cw - 2.0,
+                ch - 2.0,
+                r,
+                theme.accent.with_alpha(0.28),
+            );
+            canvas.stroke_rounded_rect(1.0, 1.0, cw - 2.0, ch - 2.0, r, 2.0, theme.accent);
+        }
+        let buffer = MemoryRenderBuffer::from_slice(
+            &pixels,
+            Fourcc::Abgr8888,
+            (w as i32, h as i32),
+            1,
+            Transform::Normal,
+            None,
+        );
+        self.highlight = Some((key, buffer.clone()));
+        buffer
     }
 
     fn paint(&mut self, key: &Key) -> Option<MemoryRenderBuffer> {
@@ -455,7 +748,7 @@ impl Switcher {
             for (i, ((_, title, app_id), cell)) in key.cells.iter().zip(&cells).enumerate() {
                 let (x, y) = (cell.loc.x as f32, cell.loc.y as f32);
                 let (cw, ch) = (CELL_W as f32, CELL_H as f32 - 6.0);
-                if key.selected == Some(i) {
+                if key.selected == Some(i) && key.lit {
                     let r = theme.window_radius.max(8.0);
                     canvas.rounded_rect(x, y, cw, ch, r, theme.accent.with_alpha(0.28));
                     canvas.stroke_rounded_rect(x, y, cw, ch, r, 2.0, theme.accent);
@@ -564,12 +857,21 @@ impl State {
         } else {
             1
         };
+        let now = Instant::now();
+        self.switcher.leaving = None;
         self.switcher.session = Some(Session {
             windows,
             selected,
-            started: Instant::now(),
+            started: now,
             output,
             held,
+            slide: Slide {
+                from: None,
+                since: now,
+                last: None,
+            },
+            sinking: None,
+            rising_since: now + SHOW_AFTER,
         });
         // Draw the panel once the tap window has passed.
         let _ = self.loop_handle.insert_source(
@@ -614,11 +916,13 @@ impl State {
 
     /// Modifier released (or Return from the debug IPC): focus the selection.
     pub fn switcher_commit(&mut self) {
-        let Some(session) = self.switcher.session.take() else {
+        let Some(session) = &self.switcher.session else {
             return;
         };
+        let window = session.windows.get(session.selected).cloned();
+        self.switcher.close(Instant::now(), window.clone());
         self.queue_redraw();
-        if let Some(window) = session.windows.get(session.selected).filter(|w| w.alive()) {
+        if let Some(window) = window.as_ref().filter(|w| w.alive()) {
             let id = with_state(window, |s| s.id);
             tracing::debug!(id, title = %crate::capture::title_and_app_id(window).0, "window switcher picked");
             self.activate_window(id);
@@ -626,7 +930,9 @@ impl State {
     }
 
     pub fn switcher_cancel(&mut self) {
-        if self.switcher.session.take().is_some() {
+        if self.switcher.is_open() {
+            let focused = self.focused_window();
+            self.switcher.close(Instant::now(), focused);
             self.queue_redraw();
         }
     }
@@ -727,7 +1033,14 @@ impl State {
             return;
         }
         let inside = self.switcher.preview.as_ref().is_some_and(|p| p.inside);
+        // Moving between neighbours doesn't fade again.
+        let since = self
+            .switcher
+            .preview
+            .as_ref()
+            .map_or_else(Instant::now, |p| p.since);
         self.switcher.preview = Some(Preview {
+            since,
             windows,
             output,
             anchor,
