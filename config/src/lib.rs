@@ -531,6 +531,9 @@ pub struct Panel {
     pub enabled: bool,
     /// Show the panel on every monitor instead of only the main one.
     pub all_monitors: bool,
+    /// Show tray icons (StatusNotifierItem apps: Discord, Steam, ...) in
+    /// the bar.
+    pub tray: bool,
     /// Logical pixels.
     pub height: u32,
     /// Rounded bottom corners and a soft shadow; off, a flat strip.
@@ -565,6 +568,7 @@ impl Default for Panel {
         Self {
             enabled: true,
             all_monitors: false,
+            tray: true,
             height: 32,
             rounded: false,
             frosted: None,

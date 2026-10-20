@@ -21,6 +21,7 @@ mod calendar;
 mod screenshot;
 mod sounds;
 mod status;
+mod tray;
 mod workspaces;
 
 use std::{path::PathBuf, time::Duration, time::SystemTime};
@@ -231,6 +232,7 @@ pub struct App {
     /// The polkit agent's password dialog.
     polkit: polkit::Polkit,
     notifications: notifications::Notifications,
+    tray: tray::Tray,
     /// The low-battery warning has been shown for this discharge.
     low_battery_warned: bool,
 }
@@ -361,6 +363,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         osd: None,
         polkit: polkit::Polkit::default(),
         notifications: notifications::Notifications::default(),
+        tray: tray::Tray::default(),
         low_battery_warned: false,
     };
     app.rescan_apps_if_changed();
@@ -400,6 +403,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.polkit = polkit::start(&event_loop.handle());
     app.notifications = notifications::setup(&event_loop.handle());
     app.sync_notification_server();
+    app.tray = tray::setup(&event_loop.handle());
+    app.sync_tray();
 
     // The clock: wake exactly when the minute changes, not every second.
     event_loop
@@ -409,7 +414,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             TimeoutAction::ToDuration(until_next_minute())
         })?;
 
-    // Debug aid: CNDE_SHELL_OPEN=quick_settings or calendar opens that
+    // Debug aid: CNDE_SHELL_OPEN=quick_settings, calendar or tray_menu opens that
     // popup on the first panel, for looking at it without a click.
     if let Ok(which) = std::env::var("CNDE_SHELL_OPEN") {
         event_loop.handle().insert_source(
@@ -418,6 +423,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let serial = app.last_serial;
                 match which.as_str() {
                     "calendar" => app.toggle_calendar(0, serial),
+                    // The tray item's menu, once an item has shown up.
+                    "tray_menu" => {
+                        if !app.tray_debug_menu(serial) {
+                            return TimeoutAction::ToDuration(Duration::from_secs(1));
+                        }
+                    }
                     _ => app.toggle_quick_settings(0, serial),
                 }
                 TimeoutAction::Drop
@@ -1006,7 +1017,7 @@ impl App {
         self.edges.iter().find(|e| e.output == name)
     }
 
-    fn redraw_panels(&mut self) {
+    pub fn redraw_panels(&mut self) {
         for i in 0..self.panels.len() {
             self.draw_panel(i);
         }
@@ -1239,6 +1250,7 @@ impl App {
                 clock_format: &self.config.panel.clock_format,
                 workspaces: &self.workspaces.list,
                 status: &self.status,
+                tray: &mut self.tray.items,
                 overview_open: self.overview_open,
                 quick_settings_open: self.quick_settings.is_some(),
                 calendar_open: self.calendar.is_some(),
@@ -1797,6 +1809,11 @@ impl PointerHandler for App {
             );
             if self.panels[index].edit.is_some() && !right_click {
                 self.panel_edit_pointer(index, event);
+                continue;
+            }
+            if let Some(i) = self.panels[index].tray_at(event.position)
+                && self.tray_pointer(index, i, &event.kind)
+            {
                 continue;
             }
             match event.kind {

@@ -55,6 +55,8 @@ pub enum Action {
     EditDock,
     /// Start editing the top bar in place.
     EditPanel,
+    /// A tray item's menu entry: the item's key and the dbusmenu id.
+    Tray(String, i32),
 }
 
 #[derive(Debug, Clone, PartialEq)]
