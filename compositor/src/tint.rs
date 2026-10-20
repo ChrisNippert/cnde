@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tracing::{debug, trace, warn};
+
 use smithay::{
     backend::renderer::{
         element::{AsRenderElements, Element, surface::WaylandSurfaceRenderElement},
@@ -109,6 +111,11 @@ impl Tints {
                     continue;
                 }
             }
+            if elements.is_empty() {
+                // Nothing committed yet (or its buffer wouldn't import).
+                trace!("window has nothing to draw yet");
+                continue;
+            }
             let Some(pixels) = read_back(renderer, &elements, size, scale) else {
                 continue;
             };
@@ -135,6 +142,14 @@ impl Tints {
                 continue;
             };
             let sample = Sample { top, bottom };
+            debug!(
+                app_id = ?window.toplevel().and_then(|t| smithay::wayland::compositor::with_states(t.wl_surface(), |states| {
+                    states.data_map.get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
+                        .and_then(|d| d.lock().ok()?.app_id.clone())
+                })),
+                ?top, ?bottom, ?size, elements = elements.len(),
+                "window sampled"
+            );
             let entry = Entry {
                 sample,
                 commits,
@@ -184,7 +199,17 @@ impl crate::state::State {
         }
         let geo = self.space.output_geometry(output)?;
         let top = self.touching_edges(output, geo).top?;
-        Some(self.tints.get(&top)?.top)
+        self.top_tint(&top)
+    }
+
+    /// The colour of the top of `window`, which is against the top edge.
+    /// A titlebar the compositor draws is what sits under the bar, not
+    /// the client area below it, and it already follows the theme: no tint.
+    pub fn top_tint(&self, window: &Window) -> Option<[u8; 3]> {
+        if crate::decorations::titlebar_height(window) > 0 {
+            return None;
+        }
+        Some(self.tints.get(window)?.top)
     }
 
     /// Per monitor: the frontmost windows against its top and bottom edges
@@ -222,20 +247,32 @@ fn read_back(
         renderer::{Bind, ExportMem, Offscreen, Texture, TextureMapping, damage::OutputDamageTracker},
     };
     let buffer_size = Size::<i32, Buffer>::from((size.w, size.h));
-    let mut texture: smithay::backend::renderer::gles::GlesTexture =
-        renderer.create_buffer(Fourcc::Abgr8888, buffer_size).ok()?;
+    let mut texture: smithay::backend::renderer::gles::GlesTexture = renderer
+        .create_buffer(Fourcc::Abgr8888, buffer_size)
+        .map_err(|e| failed("create the texture", e))
+        .ok()?;
     {
-        let mut target = renderer.bind(&mut texture).ok()?;
+        let mut target = renderer
+            .bind(&mut texture)
+            .map_err(|e| failed("bind the texture", e))
+            .ok()?;
         let mut tracker = OutputDamageTracker::new(size, scale, smithay::utils::Transform::Normal);
         let result = tracker
             .render_output(renderer, &mut target, 0, elements, [0.0, 0.0, 0.0, 0.0])
+            .map_err(|e| failed("draw the window", e))
             .ok()?;
         let _ = result.sync.wait();
     }
     let rect = Rectangle::<i32, Buffer>::from_size(buffer_size);
-    let mapping = renderer.copy_texture(&texture, rect, Fourcc::Abgr8888).ok()?;
+    let mapping = renderer
+        .copy_texture(&texture, rect, Fourcc::Abgr8888)
+        .map_err(|e| failed("copy the texture", e))
+        .ok()?;
     let top_down = mapping.flipped();
-    let bytes = renderer.map_texture(&mapping).ok()?;
+    let bytes = renderer
+        .map_texture(&mapping)
+        .map_err(|e| failed("map the pixels", e))
+        .ok()?;
     let (w, h) = (texture.width() as usize, texture.height() as usize);
     let pixels: Vec<[u8; 4]> = bytes.as_chunks::<4>().0.to_vec();
     if pixels.len() < w * h {
@@ -246,6 +283,14 @@ fn read_back(
     } else {
         pixels[..w * h].chunks(w).rev().flatten().copied().collect()
     })
+}
+
+/// A read-back step failed: said once, as it would repeat on every commit.
+fn failed(step: &str, err: impl std::fmt::Debug) {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        warn!(?err, "can't {step} to read a window's colour; the bar and dock won't follow windows");
+    }
 }
 
 fn key(window: &Window) -> Option<ObjectId> {

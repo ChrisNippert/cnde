@@ -311,12 +311,23 @@ impl State {
                 let sample = |w: &Option<smithay::desktop::Window>| {
                     w.as_ref().and_then(|w| self.tints.get(w))
                 };
-                edges.top_tint = sample(&touching.top).map(|s| s.top);
+                edges.top_tint = touching
+                    .top
+                    .as_ref()
+                    .and_then(|w| self.top_tint(w));
                 edges.bottom_tint = sample(&touching.bottom).map(|s| s.bottom);
                 edges
             })
             .collect();
         if self.ipc.edges.as_ref() != Some(&edges) {
+            for e in &edges {
+                debug!(
+                    target: "cnde_compositor::tint",
+                    output = %e.output, top = e.top, bottom = e.bottom,
+                    top_tint = ?e.top_tint, bottom_tint = ?e.bottom_tint,
+                    "edge tints sent to the shell"
+                );
+            }
             self.ipc.broadcast(&Event::Edges {
                 outputs: edges.clone(),
             });
@@ -345,11 +356,16 @@ impl State {
             // A new tile's committed size lags its configure (it
             // maps at the client's own, maybe full-screen, size), which
             // would flash the bars solid; judge tiles by their slot.
-            if self.is_tiled(window)
-                && !self.workspaces.is_moving()
-                && let Some(slot) = self.tile_rect_now(window)
-            {
-                rect = slot;
+            // Tiles sit an outer gap in from the edge but still count as
+            // against it, or tiling would never colour the bar.
+            let mut slack = 0;
+            if self.is_tiled(window) {
+                slack = self.config.tiling.outer_gap as i32 + 2;
+                if !self.workspaces.is_moving()
+                    && let Some(slot) = self.tile_rect_now(window)
+                {
+                    rect = slot;
+                }
             }
             // A server-drawn titlebar sits above the geometry.
             let top = rect.loc.y - crate::decorations::titlebar_height(window);
@@ -357,10 +373,10 @@ impl State {
                 rect.loc.x < zone.loc.x + zone.size.w && rect.loc.x + rect.size.w > zone.loc.x;
             let overlaps_y =
                 top < zone.loc.y + zone.size.h && rect.loc.y + rect.size.h > zone.loc.y;
-            if overlaps_x && top <= zone.loc.y {
+            if overlaps_x && top <= zone.loc.y + slack {
                 touching.top = Some(window.clone());
             }
-            if overlaps_x && rect.loc.y + rect.size.h >= zone.loc.y + zone.size.h {
+            if overlaps_x && rect.loc.y + rect.size.h + slack >= zone.loc.y + zone.size.h {
                 touching.bottom = Some(window.clone());
             }
             touching.left |= overlaps_y && rect.loc.x <= zone.loc.x;
