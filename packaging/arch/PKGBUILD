@@ -52,6 +52,7 @@ package_cnde-compositor() {
                 'cnde-icons: cnde-style icons on title bars')
     cd cnde
     install -Dm755 target/release/cnde-compositor -t "$pkgdir/usr/bin"
+    install -Dm755 target/release/cnde-share-picker -t "$pkgdir/usr/bin"
     install -Dm644 data/cnde.desktop -t "$pkgdir/usr/share/wayland-sessions"
     install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
 }
@@ -87,6 +88,7 @@ package_cnde-files() {
     depends=(libxkbcommon)
     optdepends=('udisks2: mount and eject drives'
                 'ffmpegthumbnailer: video thumbnails'
+                'libarchive: compress and extract archives'
                 'cnde-icons: cnde-style icons')
     cd cnde
     install -Dm755 target/release/cnde-files -t "$pkgdir/usr/bin"
