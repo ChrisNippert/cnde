@@ -178,7 +178,8 @@ pub enum Key {
     /// Not in the config: Bluetooth, done through BlueZ.
     Bluetooth(BluetoothKey),
     /// Not in the config: an app's volume, mute or output, through `pactl`.
-    Sound(SoundKey),
+    /// The Sound page's mixer (it handles its own pointer input).
+    Mixer,
     /// Not in the config: the panel's backlight, set directly.
     Brightness,
     /// Not in the config: the power mode, set through the power daemon.
@@ -197,14 +198,6 @@ pub enum BluetoothKey {
     Device(String),
     /// The code to type on the device being paired.
     Code,
-}
-
-/// A row of the Sound page's app list, by the app's key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SoundKey {
-    Volume(String),
-    Mute(String),
-    Output(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -307,7 +300,7 @@ impl Key {
             // Wi-Fi and Bluetooth workers instead.
             Key::Wifi(_)
             | Key::Bluetooth(_)
-            | Key::Sound(_)
+            | Key::Mixer
             | Key::Brightness
             | Key::PowerMode
             | Key::DefaultApp(_) => {}
@@ -387,6 +380,8 @@ pub enum Control {
     Info,
     /// The monitors as boxes to drag into place.
     Arrangement,
+    /// The Sound page's devices and the apps playing to them.
+    Mixer,
     /// A colour: a hex entry, and swatches to pick from below the title.
     Color {
         placeholder: &'static str,
@@ -1200,77 +1195,32 @@ fn bluetooth_page(state: Option<&crate::bluetooth::State>) -> Vec<Group> {
 
 // --- Sound
 
-fn sound_row(key: SoundKey, title: &str, control: Control, value: Value) -> Row {
-    Row {
-        key: Key::Sound(key),
-        ..wifi_row(WifiKey::Hidden, title, control, value)
-    }
-}
-
-/// The Sound page: the event sounds switch, and a slider, mute switch and
-/// (with several outputs) output choice for each app playing sound.
+/// The Sound page: the mixer (each output with its apps, then the inputs),
+/// and the event sounds switch.
 fn sound_page(c: &Config, d: &Config, state: Option<&crate::sound::State>) -> Vec<Group> {
     use crate::sound::Availability;
-    let mut apps = Group {
-        title: "Applications".into(),
-        description: String::new(),
-        rows: Vec::new(),
-    };
+    let mut mixer = Group::default();
     match state {
-        Some(st) if st.availability == Availability::Ready => {
-            if st.apps.is_empty() {
-                apps.description = "No apps are playing sound".into();
-            }
-            let outputs = choices(
-                &st.sinks
-                    .iter()
-                    .map(|s| (s.description.as_str(), Value::Str(s.name.clone())))
-                    .collect::<Vec<_>>(),
-            );
-            for app in &st.apps {
-                let sub = match app.streams {
-                    1 => app.media.clone(),
-                    n => format!("{n} streams"),
-                };
-                let mut volume = sound_row(
-                    SoundKey::Volume(app.key.clone()),
-                    &app.name,
-                    Control::Slider {
-                        min: 0.0,
-                        max: 100.0,
-                        step: 1.0,
-                        int: true,
-                        format: |v| format!("{}%", v as i64),
-                    },
-                    Value::Int(i64::from(app.volume.min(100))),
-                );
-                volume.subtitle = sub;
-                apps.rows.push(volume);
-                apps.rows.push(sound_row(
-                    SoundKey::Mute(app.key.clone()),
-                    "Mute",
-                    Control::switch(),
-                    Value::Bool(app.muted),
-                ));
-                if outputs.len() > 1 && st.sinks.iter().any(|s| s.name == app.sink) {
-                    apps.rows.push(sound_row(
-                        SoundKey::Output(app.key.clone()),
-                        "Output",
-                        Control::Dropdown(outputs.clone()),
-                        Value::Str(app.sink.clone()),
-                    ));
-                }
-            }
-        }
+        Some(st) if st.availability == Availability::Ready => mixer.rows.push(Row {
+            key: Key::Mixer,
+            title: String::new(),
+            subtitle: String::new(),
+            control: Control::Mixer,
+            value: Value::Unset,
+            default: Value::Unset,
+            advanced: false,
+            disabled: false,
+        }),
         Some(st) if st.availability == Availability::Unavailable => {
-            apps.description =
-                "App volumes need pactl (PipeWire or PulseAudio), and it isn't answering.".into();
+            mixer.description =
+                "Sound needs pactl (PipeWire or PulseAudio), and it isn't answering.".into();
         }
-        _ => apps.description = "Looking for the audio server…".into(),
+        _ => mixer.description = "Looking for the audio server…".into(),
     }
     vec![
+        mixer,
         group(
-            "Sound",
+            "System sounds",
             vec![
                 Row::new(
                     "sound.event_sounds",
@@ -1282,7 +1232,6 @@ fn sound_page(c: &Config, d: &Config, state: Option<&crate::sound::State>) -> Ve
                 .sub("Volume keys, screenshots, low battery, plugging in"),
             ],
         ),
-        apps,
     ]
 }
 
@@ -3371,41 +3320,22 @@ mod tests {
     }
 
     #[test]
-    fn sound_page_lists_apps() {
-        use crate::sound::{App, Availability, Sink, State};
-        let sink = |i: u32, n: &str| Sink {
-            index: i,
-            name: n.into(),
-            description: n.into(),
-        };
-        let app = |key: &str, ids: Vec<u32>| App {
-            key: key.into(),
-            name: key.into(),
-            streams: ids.len(),
-            ids,
-            volume: 140,
-            muted: false,
-            sink: "a".into(),
-            media: String::new(),
-        };
+    fn sound_page_has_the_mixer_once_ready() {
+        use crate::sound::{Availability, State};
         let c = Config::default();
-        let rows = |state: Option<&State>| sound_page(&c, &c, state);
-        assert!(rows(None)[1].rows.is_empty());
+        let groups = sound_page(&c, &c, None);
+        assert!(groups[0].rows.is_empty());
+        assert_eq!(groups[0].description, "Looking for the audio server…");
         let mut state = State {
-            availability: Availability::Ready,
-            sinks: vec![sink(1, "a")],
-            apps: Vec::new(),
+            availability: Availability::Unavailable,
+            ..State::default()
         };
-        let groups = rows(Some(&state));
-        assert_eq!(groups[1].description, "No apps are playing sound");
-        state.apps = vec![app("mpv", vec![3]), app("firefox", vec![4, 5])];
-        // One output: no choice of it. Volume and mute for each app.
-        let groups = rows(Some(&state));
-        assert_eq!(groups[1].rows.len(), 4);
-        assert_eq!(groups[1].rows[0].value, Value::Int(100));
-        assert_eq!(groups[1].rows[2].subtitle, "2 streams");
-        state.sinks.push(sink(2, "b"));
-        assert_eq!(rows(Some(&state))[1].rows.len(), 6);
+        assert!(sound_page(&c, &c, Some(&state))[0].description.contains("pactl"));
+        state.availability = Availability::Ready;
+        let groups = sound_page(&c, &c, Some(&state));
+        assert!(matches!(groups[0].rows[0].control, Control::Mixer));
+        assert_eq!(groups[1].title, "System sounds");
+        assert_eq!(groups[1].rows.len(), 1);
     }
 
     #[test]

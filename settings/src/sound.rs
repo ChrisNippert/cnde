@@ -1,9 +1,9 @@
-//! Per-app volume for the Sound page, through `pactl` (PipeWire's
-//! pipewire-pulse or PulseAudio; the shell's volume uses the same tool).
-//! A worker thread lists the playing streams (`pactl -f json list
-//! sink-inputs`), runs the volume, mute and output commands, and re-lists
-//! shortly after `pactl subscribe` reports a change, so streams appear and
-//! vanish live and external changes show up. `pactl` is an optional
+//! Audio for the Sound page, through `pactl` (PipeWire's pipewire-pulse or
+//! PulseAudio; the shell's volume uses the same tool). A worker thread
+//! lists the output and input devices, the playing streams (`pactl -f json
+//! list sink-inputs`) and who records, runs the volume, mute, move and
+//! default commands, and re-lists shortly after `pactl subscribe` reports a
+//! change, so streams appear and vanish live and external changes show up. `pactl` is an optional
 //! dependency: without it the page says so.
 
 use std::os::unix::process::CommandExt as _;
@@ -35,11 +35,38 @@ pub enum Availability {
     Ready,
 }
 
+/// Output (sink) or input (source).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Kind {
+    Output,
+    Input,
+}
+
+impl Kind {
+    /// The word `pactl` uses for it.
+    fn noun(self) -> &'static str {
+        match self {
+            Kind::Output => "sink",
+            Kind::Input => "source",
+        }
+    }
+}
+
+/// An output or input device.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sink {
+pub struct Device {
     pub index: u32,
     pub name: String,
     pub description: String,
+    /// A symbolic icon name.
+    pub icon: &'static str,
+    pub percent: u32,
+    pub muted: bool,
+    pub default: bool,
+    /// Not an unplugged jack or cable.
+    pub available: bool,
+    /// A source that records an output (not a microphone).
+    pub monitor: bool,
 }
 
 /// One playing stream, as `pactl` describes it.
@@ -53,11 +80,15 @@ pub struct Stream {
     pub app: String,
     /// What the app calls this stream ("Spotify", a tab's title).
     pub media: String,
-    /// Which program, to tell apps apart (the binary, else the name).
+    /// Which program, to tell apart apps (the binary, else the name).
     pub key: String,
+    /// `application.icon_name`, when the app says.
+    pub icon: String,
+    /// `application.process.binary`, to find its desktop entry.
+    pub binary: String,
 }
 
-/// An app's streams together: one row set on the page.
+/// An app's streams to one output: one row on the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct App {
     pub key: String,
@@ -67,18 +98,36 @@ pub struct App {
     pub volume: u32,
     /// Every stream is muted.
     pub muted: bool,
-    /// The first stream's output.
+    /// The output (by name) they play to.
     pub sink: String,
-    /// The stream's own name when there is just one.
-    pub media: String,
-    pub streams: usize,
+    pub icon: String,
+    pub binary: String,
+}
+
+impl App {
+    /// Tells this row from the others: the same program can play to two
+    /// outputs.
+    pub fn id(&self) -> String {
+        format!("{}\u{1}{}", self.sink, self.key)
+    }
+}
+
+/// An app recording from an input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recorder {
+    /// The input's name.
+    pub source: String,
+    pub app: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
     pub availability: Availability,
-    pub sinks: Vec<Sink>,
+    pub outputs: Vec<Device>,
+    /// Real inputs: monitors of outputs are left out.
+    pub inputs: Vec<Device>,
     pub apps: Vec<App>,
+    pub recorders: Vec<Recorder>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +137,10 @@ pub enum Command {
     Mute(Vec<u32>, bool),
     /// Play to the sink with this name.
     Output(Vec<u32>, String),
+    /// A device's own volume (by name).
+    DeviceVolume(Kind, String, u32),
+    /// Make the input the default, and bring the recording apps along.
+    DefaultInput(String),
 }
 
 enum Msg {
@@ -156,8 +209,10 @@ fn subscribe(tx: &mpsc::Sender<Msg>, stop: &AtomicBool, slot: &Mutex<Option<Chil
         // SAFETY: prctl is async-signal-safe and touches no shared state.
         unsafe {
             cmd.pre_exec(|| {
-                rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))
-                    .map_err(std::io::Error::from)
+                rustix::process::set_parent_process_death_signal(Some(
+                    rustix::process::Signal::TERM,
+                ))
+                .map_err(std::io::Error::from)
             });
         }
         let spawned = cmd
@@ -196,9 +251,17 @@ fn subscribe(tx: &mpsc::Sender<Msg>, stop: &AtomicBool, slot: &Mutex<Option<Chil
 }
 
 /// Whether a `pactl subscribe` line can change the list: streams coming,
-/// going or changing, and sinks (the output choices).
+/// going or changing, and the devices.
 fn is_stream_event(line: &str) -> bool {
-    line.contains("sink-input") || line.contains(" sink #") || line.contains("server")
+    [
+        "sink-input",
+        " sink #",
+        "source-output",
+        " source #",
+        "server",
+    ]
+    .iter()
+    .any(|word| line.contains(word))
 }
 
 fn run(tx: &Sender<State>, rx: &mpsc::Receiver<Msg>) {
@@ -241,8 +304,13 @@ fn run(tx: &Sender<State>, rx: &mpsc::Receiver<Msg>) {
 fn coalesce(commands: Vec<Command>) -> Vec<Command> {
     let mut out: Vec<Command> = Vec::new();
     for command in commands {
-        if let Command::Volume(ids, _) = &command {
-            out.retain(|c| !matches!(c, Command::Volume(other, _) if other == ids));
+        match &command {
+            Command::Volume(ids, _) => {
+                out.retain(|c| !matches!(c, Command::Volume(other, _) if other == ids));
+            }
+            Command::DeviceVolume(kind, name, _) => out
+                .retain(|c| !matches!(c, Command::DeviceVolume(k, n, _) if k == kind && n == name)),
+            _ => {}
         }
         out.push(command);
     }
@@ -281,42 +349,65 @@ fn apply(command: &Command) -> Result<(), String> {
                 pactl(&["move-sink-input", &id.to_string(), sink])?;
             }
         }
+        Command::DeviceVolume(kind, name, percent) => {
+            let verb = format!("set-{}-volume", kind.noun());
+            pactl(&[&verb, name, &format!("{percent}%")])?;
+        }
+        Command::DefaultInput(name) => {
+            let inputs = pactl(&["-f", "json", "list", "sources"])
+                .map(|t| parse_devices(&t, Kind::Input, ""))
+                .unwrap_or_default();
+            let outputs = pactl(&["-f", "json", "list", "source-outputs"]).unwrap_or_default();
+            pactl(&["set-default-source", name])?;
+            // Streams that refuse to move (some can't) are skipped.
+            for id in movable_recorders(&outputs, &inputs) {
+                let _ = pactl(&["move-source-output", &id.to_string(), name]);
+            }
+        }
     }
     Ok(())
 }
 
 fn read() -> State {
-    let (Ok(inputs), Ok(sinks)) = (
+    let (Ok(inputs), Ok(sinks), Ok(sources), Ok(info)) = (
         pactl(&["-f", "json", "list", "sink-inputs"]),
         pactl(&["-f", "json", "list", "sinks"]),
+        pactl(&["-f", "json", "list", "sources"]),
+        pactl(&["-f", "json", "info"]),
     ) else {
         return State {
             availability: Availability::Unavailable,
             ..State::default()
         };
     };
-    let sinks = parse_sinks(&sinks);
-    let streams = parse_streams(&inputs, &sinks);
+    let defaults = parse_json(&info);
+    let default = |key: &str| defaults.as_ref().and_then(|d| d.str(key)).unwrap_or("");
+    let outputs = parse_devices(&sinks, Kind::Output, default("default_sink_name"));
+    let all_inputs = parse_devices(&sources, Kind::Input, default("default_source_name"));
+    let recorders = pactl(&["-f", "json", "list", "source-outputs"])
+        .map(|t| parse_recorders(&t, &all_inputs))
+        .unwrap_or_default();
+    let streams = parse_streams(&inputs, &outputs);
     State {
         availability: Availability::Ready,
         apps: group(&streams),
-        sinks,
+        outputs,
+        inputs: all_inputs.into_iter().filter(|d| !d.monitor).collect(),
+        recorders,
     }
 }
 
-/// Streams of the same program become one app, in order of first
-/// appearance: the slider sets them all, the mute switch is on when every
-/// one is muted.
+/// Streams of the same program to the same output become one app, in order
+/// of first appearance: the slider sets them all, the mute switch is on
+/// when every one is muted.
 pub fn group(streams: &[Stream]) -> Vec<App> {
     let mut apps: Vec<App> = Vec::new();
     for s in streams {
-        match apps.iter_mut().find(|a| a.key == s.key) {
+        match apps.iter_mut().find(|a| a.key == s.key && a.sink == s.sink) {
             Some(app) => {
                 app.ids.push(s.id);
                 app.volume = app.volume.max(s.volume);
                 app.muted &= s.muted;
-                app.streams += 1;
-                app.media.clear();
             }
             None => apps.push(App {
                 key: s.key.clone(),
@@ -325,8 +416,8 @@ pub fn group(streams: &[Stream]) -> Vec<App> {
                 volume: s.volume,
                 muted: s.muted,
                 sink: s.sink.clone(),
-                media: s.media.clone(),
-                streams: 1,
+                icon: s.icon.clone(),
+                binary: s.binary.clone(),
             }),
         }
     }
@@ -505,7 +596,8 @@ fn parse_json(text: &str) -> Option<Json> {
     .value()
 }
 
-pub fn parse_sinks(text: &str) -> Vec<Sink> {
+/// The devices `pactl -f json list sinks` (or sources) describes.
+pub fn parse_devices(text: &str, kind: Kind, default: &str) -> Vec<Device> {
     let Some(Json::Arr(items)) = parse_json(text) else {
         return Vec::new();
     };
@@ -513,18 +605,129 @@ pub fn parse_sinks(text: &str) -> Vec<Sink> {
         .iter()
         .filter_map(|item| {
             let name = item.str("name")?;
-            Some(Sink {
+            let props = item.get("properties");
+            let prop = |k: &str| props.and_then(|p| p.str(k)).unwrap_or("");
+            let monitor = kind == Kind::Input
+                && (name.ends_with(".monitor")
+                    || matches!(item.get("monitor_of_sink"), Some(Json::Num(_)))
+                    || prop("device.class") == "monitor");
+            let active_port = item.str("active_port");
+            let (mut port_type, mut available) = ("", true);
+            if let Some(Json::Arr(list)) = item.get("ports") {
+                for port in list.iter().filter(|p| p.str("name") == active_port) {
+                    port_type = port.str("type").unwrap_or("");
+                    available = port.str("availability") != Some("not available");
+                }
+            }
+            let volume = match item.get("volume") {
+                Some(Json::Obj(channels)) => channels
+                    .iter()
+                    .filter_map(|(_, c)| c.num("value"))
+                    .fold(0.0, f64::max),
+                _ => 0.0,
+            };
+            Some(Device {
                 index: item.num("index")? as u32,
                 name: name.into(),
                 description: item.str("description").unwrap_or(name).into(),
+                icon: icon(
+                    kind,
+                    port_type,
+                    prop("device.form_factor"),
+                    prop("device.bus"),
+                ),
+                percent: (volume * 100.0 / 65536.0).round() as u32,
+                muted: matches!(item.get("mute"), Some(Json::Bool(true))),
+                default: name == default,
+                available,
+                monitor,
             })
         })
         .collect()
 }
 
+/// The icon for a device: what's plugged into it, else what kind of
+/// device it is, else how it connects (as the shell's quick settings do).
+fn icon(kind: Kind, port_type: &str, form_factor: &str, bus: &str) -> &'static str {
+    match port_type.to_lowercase().as_str() {
+        "headphones" => return "audio-headphones-symbolic",
+        "headset" => return "audio-headset-symbolic",
+        "speaker" => return "audio-speakers-symbolic",
+        "hdmi" | "displayport" => return "video-display-symbolic",
+        "mic" => return "audio-input-microphone-symbolic",
+        _ => {}
+    }
+    match form_factor {
+        "headphone" | "hands-free" => "audio-headphones-symbolic",
+        "headset" => "audio-headset-symbolic",
+        "speaker" | "tv" | "computer" => "audio-speakers-symbolic",
+        "hdmi" => "video-display-symbolic",
+        "microphone" | "webcam" => "audio-input-microphone-symbolic",
+        _ if bus == "usb" && kind == Kind::Output => "audio-card-symbolic",
+        _ if kind == Kind::Input => "audio-input-microphone-symbolic",
+        _ => "audio-speakers-symbolic",
+    }
+}
+
+/// A recording stream worth showing: on a real input, not a volume meter's
+/// peak detector or a monitor (screen-sharing audio).
+fn is_mic_stream(item: &Json, inputs: &[Device]) -> bool {
+    let props = item.get("properties");
+    let prop = |k: &str| props.and_then(|p| p.str(k)).unwrap_or("");
+    if prop("stream.monitor") == "true" || prop("media.name").eq_ignore_ascii_case("peak detect") {
+        return false;
+    }
+    let source = item.num("source").unwrap_or(-1.0);
+    inputs
+        .iter()
+        .any(|d| f64::from(d.index) == source && !d.monitor)
+}
+
+/// Who records from which input, from `pactl -f json list source-outputs`.
+/// `inputs` is every source, monitors included.
+pub fn parse_recorders(text: &str, inputs: &[Device]) -> Vec<Recorder> {
+    let Some(Json::Arr(items)) = parse_json(text) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Recorder> = Vec::new();
+    for item in items.iter().filter(|i| is_mic_stream(i, inputs)) {
+        let props = item.get("properties");
+        let prop = |k: &str| props.and_then(|p| p.str(k)).unwrap_or("");
+        let app = [prop("application.name"), prop("application.process.binary")]
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .unwrap_or("Unknown app");
+        let source = item.num("source").unwrap_or(-1.0);
+        let Some(device) = inputs.iter().find(|d| f64::from(d.index) == source) else {
+            continue;
+        };
+        let recorder = Recorder {
+            source: device.name.clone(),
+            app: app.into(),
+        };
+        if !out.contains(&recorder) {
+            out.push(recorder);
+        }
+    }
+    out
+}
+
+/// The recording streams to bring along to a new default input: those on
+/// real inputs (a monitor stream would end up recording the microphone).
+pub fn movable_recorders(text: &str, inputs: &[Device]) -> Vec<u32> {
+    let Some(Json::Arr(items)) = parse_json(text) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter(|item| is_mic_stream(item, inputs))
+        .filter_map(|item| item.num("index").map(|n| n as u32))
+        .collect()
+}
+
 /// The streams worth showing: not event sounds (volume-key pings, which
 /// have `media.role = event`) and not volume meters' peak detectors.
-pub fn parse_streams(text: &str, sinks: &[Sink]) -> Vec<Stream> {
+pub fn parse_streams(text: &str, sinks: &[Device]) -> Vec<Stream> {
     let Some(Json::Arr(items)) = parse_json(text) else {
         return Vec::new();
     };
@@ -567,6 +770,8 @@ pub fn parse_streams(text: &str, sinks: &[Sink]) -> Vec<Stream> {
                 app,
                 media: prop("media.name"),
                 key,
+                icon: prop("application.icon_name"),
+                binary,
             })
         })
         .collect()
@@ -596,18 +801,78 @@ mod tests {
          "properties":{"application.name":"mpv Media Player","media.name":"song"}}
     ]"#;
 
+    fn sinks() -> Vec<Device> {
+        parse_devices(SINKS, Kind::Output, "alsa_output.hdmi")
+    }
+
     #[test]
     fn parses_sinks() {
-        let sinks = parse_sinks(SINKS);
+        let sinks = sinks();
         assert_eq!(sinks.len(), 2);
         assert_eq!(sinks[0].index, 73);
         assert_eq!(sinks[0].description, "Scarlett \"Headphones\"");
         assert_eq!(sinks[1].description, "HDMI é");
+        assert!(!sinks[0].default && sinks[1].default);
+    }
+
+    const DEVICES: &str = r#"[
+        {"index":1,"name":"alsa_output.pci.analog","description":"Built-in","mute":false,
+         "volume":{"front-left":{"value":32768},"front-right":{"value":16384}},
+         "active_port":"analog-output-headphones",
+         "ports":[{"name":"analog-output-speaker","type":"Speaker","availability":"not available"},
+                  {"name":"analog-output-headphones","type":"Headphones","availability":"available"}],
+         "properties":{"device.form_factor":"internal","device.bus":"pci"}},
+        {"index":2,"name":"alsa_output.hdmi","description":"HDMI","mute":true,
+         "active_port":"hdmi-output-0",
+         "ports":[{"name":"hdmi-output-0","type":"HDMI","availability":"not available"}],
+         "properties":{}},
+        {"index":3,"name":"alsa_output.usb","description":"Scarlett","mute":false,
+         "properties":{"device.bus":"usb"}}
+    ]"#;
+
+    #[test]
+    fn devices_get_icons_levels_and_availability() {
+        let d = parse_devices(DEVICES, Kind::Output, "alsa_output.usb");
+        assert_eq!(d[0].icon, "audio-headphones-symbolic");
+        assert_eq!(d[0].percent, 50);
+        assert!(d[0].available);
+        assert_eq!(d[1].icon, "video-display-symbolic");
+        assert!(d[1].muted && !d[1].available);
+        assert_eq!(d[2].icon, "audio-card-symbolic");
+        assert!(d[2].default && d[2].available);
+    }
+
+    const SOURCES: &str = r#"[
+        {"index":20,"name":"alsa_input.mic","description":"Mic","mute":false,"properties":{"device.form_factor":"microphone"}},
+        {"index":21,"name":"alsa_output.usb.monitor","description":"Monitor of Scarlett","monitor_of_sink":3,"mute":false,"properties":{}}
+    ]"#;
+
+    const OUTPUTS: &str = r#"[
+        {"index":40,"source":20,"properties":{"application.name":"Discord"}},
+        {"index":41,"source":20,"properties":{"application.name":"Discord"}},
+        {"index":42,"source":20,"properties":{"application.name":"pavucontrol","media.name":"Peak detect"}},
+        {"index":43,"source":21,"properties":{"application.name":"OBS"}},
+        {"index":44,"source":20,"properties":{"application.name":"Portal","stream.monitor":"true"}},
+        {"index":45,"source":20,"properties":{"application.process.binary":"arecord"}}
+    ]"#;
+
+    #[test]
+    fn recording_ignores_monitors_and_meters() {
+        let inputs = parse_devices(SOURCES, Kind::Input, "alsa_input.mic");
+        assert!(!inputs[0].monitor && inputs[1].monitor);
+        let who = parse_recorders(OUTPUTS, &inputs);
+        let apps: Vec<&str> = who.iter().map(|r| r.app.as_str()).collect();
+        // Two streams of one app count once; the binary names an unnamed one.
+        assert_eq!(apps, ["Discord", "arecord"]);
+        assert!(who.iter().all(|r| r.source == "alsa_input.mic"));
+        // Only real microphone streams come along to a new default input.
+        assert_eq!(movable_recorders(OUTPUTS, &inputs), [40, 41, 45]);
+        assert!(parse_recorders("nope", &inputs).is_empty());
     }
 
     #[test]
     fn parses_streams_and_drops_system_ones() {
-        let streams = parse_streams(INPUTS, &parse_sinks(SINKS));
+        let streams = parse_streams(INPUTS, &sinks());
         let ids: Vec<u32> = streams.iter().map(|s| s.id).collect();
         // The event sound and the peak detector are hidden.
         assert_eq!(ids, [10, 11, 14]);
@@ -615,6 +880,7 @@ mod tests {
         assert_eq!(streams[0].volume, 60);
         assert_eq!(streams[0].sink, "alsa_output.usb-Scarlett");
         assert_eq!(streams[0].media, "Some \"video\" – tab");
+        assert_eq!(streams[0].binary, "firefox");
         assert!(streams[1].muted);
         assert_eq!(streams[1].sink, "alsa_output.hdmi");
         // No binary: the key falls back to the app name.
@@ -623,17 +889,32 @@ mod tests {
     }
 
     #[test]
-    fn groups_streams_of_one_program() {
-        let apps = group(&parse_streams(INPUTS, &parse_sinks(SINKS)));
-        assert_eq!(apps.len(), 2);
-        let firefox = &apps[0];
-        assert_eq!(firefox.ids, [10, 11]);
-        assert_eq!(firefox.streams, 2);
-        assert_eq!(firefox.volume, 100);
-        // One stream is playing unmuted.
-        assert!(!firefox.muted);
-        assert_eq!(firefox.media, "");
-        assert_eq!(apps[1].media, "song");
+    fn groups_streams_by_program_and_output() {
+        let streams = parse_streams(INPUTS, &sinks());
+        // Firefox plays to two outputs: a row on each.
+        let apps = group(&streams);
+        assert_eq!(apps.len(), 3);
+        assert_eq!(apps[0].ids, [10]);
+        assert_eq!(apps[0].sink, "alsa_output.usb-Scarlett");
+        assert_eq!(apps[1].ids, [11]);
+        assert_eq!(apps[1].sink, "alsa_output.hdmi");
+        assert!(apps[1].muted);
+        assert_ne!(apps[0].id(), apps[1].id());
+        assert_eq!(apps[2].name, "mpv Media Player");
+        // The same program to the same output is one row, the loudest volume.
+        let mut more = streams.clone();
+        more.push(Stream {
+            id: 15,
+            volume: 100,
+            muted: true,
+            ..streams[0].clone()
+        });
+        let apps = group(&more);
+        assert_eq!(apps.len(), 3);
+        assert_eq!(apps[0].ids, [10, 15]);
+        assert_eq!(apps[0].volume, 100);
+        // Muted only when every stream is.
+        assert!(!apps[0].muted);
     }
 
     #[test]
@@ -641,11 +922,23 @@ mod tests {
         assert!(parse_streams("", &[]).is_empty());
         assert!(parse_streams("{\"not\": \"a list\"}", &[]).is_empty());
         assert!(parse_streams("[]", &[]).is_empty());
-        assert!(parse_sinks("[{\"index\":").is_empty());
+        assert!(parse_devices("[{\"index\":", Kind::Output, "").is_empty());
     }
 
     #[test]
     fn only_the_last_volume_is_sent() {
+        let sets = vec![
+            Command::DeviceVolume(Kind::Input, "a".into(), 10),
+            Command::DeviceVolume(Kind::Output, "a".into(), 20),
+            Command::DeviceVolume(Kind::Input, "a".into(), 30),
+        ];
+        assert_eq!(
+            coalesce(sets),
+            [
+                Command::DeviceVolume(Kind::Output, "a".into(), 20),
+                Command::DeviceVolume(Kind::Input, "a".into(), 30),
+            ]
+        );
         let commands = vec![
             Command::Volume(vec![1], 10),
             Command::Mute(vec![1], true),
@@ -667,7 +960,8 @@ mod tests {
         assert!(is_stream_event("Event 'new' on sink-input #12"));
         assert!(is_stream_event("Event 'remove' on sink-input #12"));
         assert!(is_stream_event("Event 'change' on sink #5"));
-        assert!(!is_stream_event("Event 'change' on source #5"));
+        assert!(is_stream_event("Event 'change' on source #5"));
+        assert!(is_stream_event("Event 'new' on source-output #7"));
         assert!(!is_stream_event("Event 'new' on client #9"));
     }
 }

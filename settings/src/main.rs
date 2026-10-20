@@ -8,6 +8,7 @@ mod arrange;
 mod backlight;
 mod bluetooth;
 mod defaults;
+mod mixer;
 mod pages;
 mod power_mode;
 mod sound;
@@ -62,7 +63,7 @@ use smithay_client_toolkit::{
         Capability, SeatHandler, SeatState,
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
         pointer::{
-            BTN_LEFT, CursorIcon, PointerEvent, PointerEventKind, PointerHandler, ThemeSpec,
+            BTN_LEFT, BTN_RIGHT, CursorIcon, PointerEvent, PointerEventKind, PointerHandler, ThemeSpec,
             ThemedPointer,
         },
     },
@@ -78,7 +79,7 @@ use smithay_client_toolkit::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    pages::{BluetoothKey, Control, Display, JoinField, Key, Page, SoundKey, Value, WifiKey},
+    pages::{BluetoothKey, Control, Display, JoinField, Key, Page, Value, WifiKey},
     view::{Edit, Painted, Res, Target, Ui},
 };
 
@@ -327,6 +328,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             power_mode: None,
             default_apps: None,
             sound: None,
+            sound_slider: None,
+            sound_drag: None,
+            sound_menu: None,
             brightness: backlight::read(),
             arranged: None,
             arranging: None,
@@ -497,21 +501,18 @@ impl App {
     /// playing apps and follows them until the page is left.
     fn open_sound(&mut self) {
         if self.sound_tx.is_none() {
+            // The app icons come from the desktop entries.
+            cnde_apps::start();
             let (tx, rx) = channel::channel::<sound::State>();
             let inserted = self
                 .loop_handle
                 .insert_source(rx, |event, _, app: &mut App| {
                     if let channel::Event::Msg(mut state) = event {
-                        // Leave an app alone while its slider is being dragged.
-                        if let Some(Key::Sound(SoundKey::Volume(key))) = &app.ui.dragging
-                            && let Some(old) = app
-                                .ui
-                                .sound
-                                .as_ref()
-                                .and_then(|s| s.apps.iter().find(|a| a.key == *key))
-                            && let Some(new) = state.apps.iter_mut().find(|a| a.key == *key)
+                        // Leave a slider alone while it is being dragged.
+                        if let Some((id, _)) = &app.ui.sound_slider
+                            && let Some(old) = &app.ui.sound
                         {
-                            new.volume = old.volume;
+                            mixer::keep_level(old, &mut state, id);
                         }
                         // A worker that was stopped can still have one report in flight.
                         if app.sound.is_some() {
@@ -539,36 +540,96 @@ impl App {
         self.ui.sound = None;
     }
 
-    /// The Sound page's sliders, switches and dropdowns go to the worker.
-    fn write_sound(&mut self, key: &SoundKey, value: &Value) {
-        let (SoundKey::Volume(app) | SoundKey::Mute(app) | SoundKey::Output(app)) = key;
-        let Some(state) = &mut self.ui.sound else {
-            return;
-        };
-        let Some(entry) = state.apps.iter_mut().find(|a| a.key == *app) else {
-            return;
-        };
-        let ids = entry.ids.clone();
-        // Show it at once; the worker confirms (or corrects) shortly.
-        let command = match (key, value) {
-            (SoundKey::Volume(_), v) => {
-                let percent = v.as_f64().unwrap_or(0.0).clamp(0.0, 100.0) as u32;
-                entry.volume = percent;
-                sound::Command::Volume(ids, percent)
-            }
-            (SoundKey::Mute(_), Value::Bool(mute)) => {
-                entry.muted = *mute;
-                sound::Command::Mute(ids, *mute)
-            }
-            (SoundKey::Output(_), Value::Str(sink)) => {
-                entry.sink = sink.clone();
-                sound::Command::Output(ids, sink.clone())
-            }
-            _ => return,
-        };
-        if let Some(handle) = &self.sound {
+    fn sound_command(&mut self, command: Option<sound::Command>) {
+        if let (Some(command), Some(handle)) = (command, &self.sound) {
             handle.command(command);
         }
+    }
+
+    /// A press on the mixer: sliders start dragging, icons mute, rows pick
+    /// up for moving to another output.
+    fn press_mixer(&mut self, hit: mixer::Hit, position: (f64, f64)) {
+        use mixer::Hit;
+        let Some(state) = self.ui.sound.as_mut() else {
+            return;
+        };
+        match hit {
+            Hit::AppIcon(i) => {
+                let command = mixer::toggle_mute(state, i);
+                self.sound_command(command);
+            }
+            Hit::AppSlider(_) | Hit::OutputSlider(_) | Hit::InputSlider(_) => {
+                let rect = self.painted.mixer.as_ref().and_then(|l| l.rect(hit));
+                if let (Some(id), Some(rect)) = (hit.slider(state), rect) {
+                    self.ui.sound_slider = Some((id, rect));
+                    self.drag_mixer(position.0);
+                }
+            }
+            Hit::AppMenu(i) => {
+                let id = state.apps.get(i).map(sound::App::id);
+                self.ui.sound_menu = if self.ui.sound_menu == id { None } else { id };
+            }
+            Hit::MakeDefault(i) => {
+                let command = state
+                    .inputs
+                    .get(i)
+                    .map(|d| sound::Command::DefaultInput(d.name.clone()));
+                self.sound_command(command);
+            }
+            Hit::AppRow(i) => {
+                if let Some(app) = state.apps.get(i) {
+                    self.ui.sound_drag = Some(mixer::Drag {
+                        app: app.id(),
+                        origin: position,
+                        pos: position,
+                        moved: false,
+                    });
+                }
+            }
+            Hit::MenuItem(_) | Hit::MenuBody => {}
+        }
+    }
+
+    /// A slider of the mixer follows the pointer.
+    fn drag_mixer(&mut self, x: f64) {
+        let Some((id, rect)) = self.ui.sound_slider.clone() else {
+            return;
+        };
+        let Some(state) = self.ui.sound.as_mut() else {
+            return;
+        };
+        let command = mixer::set_level(state, &id, rect, x);
+        self.sound_command(command);
+    }
+
+    /// The pointer moved with an app row held: past the slop it is a drag.
+    fn drag_app(&mut self, position: (f64, f64)) {
+        if let Some(drag) = &mut self.ui.sound_drag {
+            drag.pos = position;
+            let (dx, dy) = (position.0 - drag.origin.0, position.1 - drag.origin.1);
+            if dx.hypot(dy) > mixer::DRAG_SLOP {
+                drag.moved = true;
+            }
+        }
+    }
+
+    /// The button came up: an app row dropped on an output moves there.
+    fn drop_app(&mut self) {
+        let Some(drag) = self.ui.sound_drag.take() else {
+            return;
+        };
+        if drag.moved
+            && let Some(output) = self
+                .painted
+                .mixer
+                .as_ref()
+                .and_then(|l| l.drop_target(drag.pos))
+            && let Some(state) = self.ui.sound.as_mut()
+        {
+            let command = mixer::move_app(state, &drag.app, output);
+            self.sound_command(command);
+        }
+        self.redraw();
     }
 
     /// The Default Apps page is showing: scan the installed apps and read
@@ -899,7 +960,6 @@ impl App {
                 Key::Bluetooth(key) => self.write_bluetooth(key, value),
                 Key::Brightness => self.write_brightness(value),
                 Key::PowerMode => self.write_power_mode(value),
-                Key::Sound(key) => self.write_sound(key, value),
                 Key::DefaultApp(cat) => self.write_default_app(cat, value),
                 _ => config_changes.push((key.clone(), value.clone())),
             }
@@ -1067,6 +1127,18 @@ impl App {
             return;
         }
 
+        // An open "Play on" menu takes the click too.
+        if let Some(app) = self.ui.sound_menu.take() {
+            if let Some(Target::Mixer(mixer::Hit::MenuItem(output))) = target
+                && let Some(state) = self.ui.sound.as_mut()
+            {
+                let command = mixer::move_app(state, &app, output);
+                self.sound_command(command);
+            }
+            self.redraw();
+            return;
+        }
+
         if let Some(edge) = self.resize_edge(position)
             && let Some(seat) = &self.seat_handle
         {
@@ -1122,6 +1194,7 @@ impl App {
                     }
                 }
             }
+            Target::Mixer(hit) => self.press_mixer(hit, position),
             Target::Back => self.open_sub_page(None),
             Target::Close => self.exit.stop(),
             Target::Minimize => self.window.set_minimized(),
@@ -1922,6 +1995,16 @@ impl PointerHandler for App {
                         self.drag(event.position.0);
                         continue;
                     }
+                    if self.ui.sound_slider.is_some() {
+                        self.drag_mixer(event.position.0);
+                        self.redraw();
+                        continue;
+                    }
+                    if self.ui.sound_drag.is_some() {
+                        self.drag_app(event.position);
+                        self.redraw();
+                        continue;
+                    }
                     if self.arranging.is_some() {
                         self.arrange_drag(event.position);
                         continue;
@@ -1942,11 +2025,28 @@ impl PointerHandler for App {
                     serial,
                     ..
                 } => self.press(event.position, serial),
+                PointerEventKind::Press {
+                    button: BTN_RIGHT, ..
+                } => {
+                    // Right-click on an app: the same "Play on" menu as its "⋯".
+                    if self.ui.sound_menu.is_none()
+                        && let Some(Target::Mixer(hit)) = self.painted.hit(event.position)
+                        && let Some(i) = hit.app()
+                        && let Some(app) = self.ui.sound.as_ref().and_then(|s| s.apps.get(i))
+                    {
+                        self.ui.sound_menu = Some(app.id());
+                        self.redraw();
+                    }
+                }
                 PointerEventKind::Release {
                     button: BTN_LEFT, ..
                 } => {
                     self.dragging = None;
                     self.ui.dragging = None;
+                    if self.ui.sound_slider.take().is_some() {
+                        self.redraw();
+                    }
+                    self.drop_app();
                     if self.arranging.is_some() {
                         self.arrange_drop();
                     }

@@ -35,6 +35,8 @@ pub enum Target {
     Slider(usize),
     Entry(usize),
     Reset(usize),
+    /// Part of the Sound page's mixer.
+    Mixer(crate::mixer::Hit),
     /// A monitor on the arrangement canvas (index into `Ui::displays`).
     Screen(usize),
     /// A wallpaper tile; `None` is the built-in one.
@@ -59,6 +61,8 @@ pub enum AnimKey {
     Selected(Page),
     Switch(Key),
     Slider(Key),
+    /// A mixer slider, by what it sets.
+    Level(String),
     /// Where a segmented control's highlight is.
     Segment(Key),
     /// The page fading in after switching to it.
@@ -71,7 +75,7 @@ pub type Anim = Animator<AnimKey>;
 
 /// How lit `target`'s hover highlight is (0-1), fading as the pointer
 /// comes and goes.
-fn hover(a: &mut Anim, ui: &Ui, target: Target) -> f32 {
+pub(crate) fn hover(a: &mut Anim, ui: &Ui, target: Target) -> f32 {
     let on = if ui.hover == Some(target) { 1.0 } else { 0.0 };
     a.get(AnimKey::Hover(target), on, SHORT)
 }
@@ -125,8 +129,15 @@ pub struct Ui {
     pub power_mode: Option<crate::power_mode::State>,
     /// The installed apps and defaults (once the page has been opened).
     pub default_apps: Option<crate::defaults::State>,
-    /// The Sound page's playing apps (once the page has been opened).
+    /// The Sound page's devices and playing apps (once the page has been
+    /// opened).
     pub sound: Option<crate::sound::State>,
+    /// The mixer slider being dragged.
+    pub sound_slider: Option<(crate::mixer::SliderId, Rect)>,
+    /// An app row being pressed or dragged to another output.
+    pub sound_drag: Option<crate::mixer::Drag>,
+    /// The app (by id) whose "Play on" menu is open.
+    pub sound_menu: Option<String>,
     /// Where the arrangement shows each display while one's dragged (and
     /// until the compositor reports the result).
     pub arranged: Option<Vec<(i32, i32)>>,
@@ -156,6 +167,8 @@ pub struct Painted {
     pub rows: Vec<Row>,
     /// Where each row's slider is (for dragging).
     pub sliders: Vec<(usize, Rect)>,
+    /// The mixer as last painted, to resolve drops against.
+    pub mixer: Option<crate::mixer::Layout>,
     /// How far the page can scroll.
     pub max_scroll: f32,
     /// Window px per logical px on the arrangement canvas.
@@ -187,7 +200,7 @@ const SIDE_PAD: f32 = 24.0;
 
 /// Whether groups sit on a filled card; Quiet's are transparent, so a
 /// group is just a title and its rows.
-fn boxed(t: &Theme) -> bool {
+pub(crate) fn boxed(t: &Theme) -> bool {
     t.card_background.a > 0.01
 }
 const SLIDER_WIDTH: f32 = 200.0;
@@ -506,14 +519,16 @@ fn page(
         }
         let heights: Vec<f32> = rows.iter().map(|r| row_height(ui, r, t, col_w)).collect();
         let card_h: f32 = heights.iter().sum();
-        if boxed(t) {
+        // The mixer draws a card for each device itself.
+        let mixer = matches!(rows[0].control, Control::Mixer);
+        if boxed(t) && !mixer {
             p.canvas
                 .rounded_rect(x, y, col_w, card_h, t.card_radius, t.card_background);
         }
         let mut ry = y;
         let count = rows.len();
         for (i, (row, rh)) in rows.into_iter().zip(heights).enumerate() {
-            if i > 0 {
+            if i > 0 && !mixer {
                 p.canvas.rounded_rect(
                     x + t.row_padding,
                     ry,
@@ -589,6 +604,11 @@ fn row_height(ui: &Ui, row: &Row, t: &Theme, col_w: f32) -> f32 {
     if let Control::Arrangement = row.control {
         return ARRANGE_HEIGHT;
     }
+    if let Control::Mixer = row.control {
+        return ui.sound.as_ref().map_or(0.0, |s| {
+            crate::mixer::Layout::new(s, 0.0, 0.0, col_w, None).height
+        });
+    }
     if row.subtitle.is_empty() {
         t.row_height
     } else {
@@ -633,6 +653,10 @@ fn paint_row(
     }
     if let Control::Arrangement = row.control {
         arrangement(ui, a, p, out, rect);
+        return;
+    }
+    if let Control::Mixer = row.control {
+        crate::mixer::paint(ui, a, p, out, rect);
         return;
     }
     let activatable = matches!(
@@ -838,7 +862,7 @@ fn paint_row(
             );
             right - tw
         }
-        Control::Wallpapers | Control::Arrangement => unreachable!(),
+        Control::Wallpapers | Control::Arrangement | Control::Mixer => unreachable!(),
     };
 
     let mut text_right = control_x - 12.0;
@@ -1347,6 +1371,9 @@ mod tests {
             power_mode: None,
             default_apps: None,
             sound: None,
+            sound_slider: None,
+            sound_drag: None,
+            sound_menu: None,
             arranged: None,
             arranging: None,
         }
@@ -1497,6 +1524,94 @@ mod tests {
         // render() saves into CNDE_SNAPSHOTS.
         unsafe { std::env::set_var("CNDE_SNAPSHOTS", &dir) };
         render(&ui, stem.to_str().unwrap());
+    }
+
+    fn mock_sound() -> crate::sound::State {
+        use crate::sound::{App, Availability, Device, Recorder, State};
+        let device = |index, name: &str, icon, percent, default| Device {
+            index,
+            name: name.into(),
+            description: name.into(),
+            icon,
+            percent,
+            muted: false,
+            default,
+            available: true,
+            monitor: false,
+        };
+        let app = |key: &str, name: &str, sink: &str, volume, muted| App {
+            key: key.into(),
+            name: name.into(),
+            ids: vec![1],
+            volume,
+            muted,
+            sink: sink.into(),
+            icon: String::new(),
+            binary: key.into(),
+        };
+        State {
+            availability: Availability::Ready,
+            outputs: vec![
+                device(1, "Focusrite Scarlett 2i2 USB", "audio-card-symbolic", 72, true),
+                device(2, "Sony WH-1000XM4", "audio-headphones-symbolic", 40, false),
+                device(3, "HDMI / DisplayPort 1", "video-display-symbolic", 100, false),
+            ],
+            inputs: vec![
+                device(10, "Scarlett 2i2 Input 1", "audio-input-microphone-symbolic", 65, true),
+                device(11, "Webcam C920 Microphone", "audio-input-microphone-symbolic", 90, false),
+            ],
+            apps: vec![
+                app("spotify", "Spotify", "Focusrite Scarlett 2i2 USB", 85, false),
+                app("firefox", "Firefox", "Focusrite Scarlett 2i2 USB", 60, true),
+                app("mpv", "mpv Media Player", "Sony WH-1000XM4", 100, false),
+            ],
+            recorders: vec![Recorder {
+                source: "Scarlett 2i2 Input 1".into(),
+                app: "OBS Studio".into(),
+            }],
+        }
+    }
+
+    /// The Sound page with a mock mixer, plain, mid-drag and with the
+    /// "Play on" menu open (`CNDE_SNAPSHOTS=dir` saves them to look at).
+    #[test]
+    fn sound_page_paints_the_mixer() {
+        let mut ui = ui(Page::Sound);
+        ui.sound = Some(mock_sound());
+        let painted = render(&ui, "Sound");
+        let layout = painted.mixer.as_ref().expect("mixer painted");
+        assert_eq!(layout.sections.len(), 3);
+        assert_eq!(layout.sections[0].apps.len(), 2);
+        // Every mixer hit made it to the pointer's list.
+        assert!(
+            painted
+                .hits
+                .iter()
+                .any(|(_, t)| matches!(t, Target::Mixer(crate::mixer::Hit::AppIcon(0))))
+        );
+        let state = ui.sound.clone().unwrap();
+        let hdmi = layout.sections[2].head;
+        ui.sound_drag = Some(crate::mixer::Drag {
+            app: state.apps[0].id(),
+            origin: (500.0, 300.0),
+            pos: (f64::from(hdmi.x + 200.0), f64::from(hdmi.y + 20.0)),
+            moved: true,
+        });
+        let dragging = render(&ui, "Sound-drag");
+        assert_eq!(
+            dragging.mixer.as_ref().unwrap().drop_target(ui.sound_drag.as_ref().unwrap().pos),
+            Some(2)
+        );
+        ui.sound_drag = None;
+        ui.sound_menu = Some(state.apps[0].id());
+        let menu = render(&ui, "Sound-menu");
+        assert!(menu.mixer.as_ref().unwrap().menu.is_some());
+        ui.sound_menu = None;
+        ui.config.appearance.palette = cnde_config::Palette::Adwaita;
+        ui.config.appearance.color_scheme = cnde_config::ColorScheme::Light;
+        render(&ui, "Sound-light");
+        ui.sound.as_mut().unwrap().apps.clear();
+        render(&ui, "Sound-empty");
     }
 
     #[test]
