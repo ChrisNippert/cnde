@@ -181,6 +181,26 @@ impl State {
                 }
             }
             Request::OpenScreenshot => self.start_screenshot(),
+            Request::MinimizeWindows { ids } => {
+                let windows: Vec<_> = self
+                    .workspaces
+                    .list
+                    .iter()
+                    .flat_map(|ws| &ws.windows)
+                    .filter(|w| ids.contains(&crate::window::with_state(w, |s| s.id)))
+                    .cloned()
+                    .collect();
+                for window in &windows {
+                    self.minimize(window);
+                }
+            }
+            Request::DockPreview {
+                output,
+                windows,
+                cell,
+                side,
+            } => self.dock_preview(&output, &windows, cell, side),
+            Request::DockPreviewHide => self.dock_preview_hide(),
             Request::CloseWindow { id } => {
                 let window = self
                     .workspaces
@@ -362,14 +382,19 @@ impl State {
         if let Some((id, hidden)) = self.desktop_shown.take()
             && id == ws_id
             && windows.iter().all(|(_, _, minimized)| *minimized)
-            && hidden.iter().all(|h| windows.iter().any(|(_, id, _)| id == h))
+            && hidden
+                .iter()
+                .all(|h| windows.iter().any(|(_, id, _)| id == h))
         {
             for id in hidden {
                 self.activate_window(id);
             }
             return;
         }
-        let shown: Vec<_> = windows.into_iter().filter(|(_, _, minimized)| !minimized).collect();
+        let shown: Vec<_> = windows
+            .into_iter()
+            .filter(|(_, _, minimized)| !minimized)
+            .collect();
         if shown.is_empty() {
             return;
         }

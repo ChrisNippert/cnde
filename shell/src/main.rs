@@ -7,7 +7,9 @@ mod actions;
 mod apps;
 mod config;
 mod context_menus;
+mod badges;
 mod dock;
+mod dock_preview;
 mod edit_mode;
 mod ipc;
 mod launcher;
@@ -233,6 +235,9 @@ pub struct App {
     polkit: polkit::Polkit,
     notifications: notifications::Notifications,
     tray: tray::Tray,
+    /// Dock icon badges apps report over D-Bus.
+    badges: badges::Badges,
+    preview: dock_preview::Preview,
     /// The low-battery warning has been shown for this discharge.
     low_battery_warned: bool,
 }
@@ -364,6 +369,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         polkit: polkit::Polkit::default(),
         notifications: notifications::Notifications::default(),
         tray: tray::Tray::default(),
+        badges: Default::default(),
+        preview: Default::default(),
         low_battery_warned: false,
     };
     app.rescan_apps_if_changed();
@@ -402,6 +409,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     status::start(status_tx);
     app.polkit = polkit::start(&event_loop.handle());
     app.notifications = notifications::setup(&event_loop.handle());
+    app.badges = badges::setup(&event_loop.handle());
     app.sync_notification_server();
     app.tray = tray::setup(&event_loop.handle());
     app.sync_tray();
@@ -540,6 +548,8 @@ impl App {
                 self.redraw_panels();
                 self.sync_dock();
             }
+            cnde_ipc::Event::DockPreviewHover { inside } => self.dock_preview_inside(inside),
+            cnde_ipc::Event::DockPreviewGone => self.dock_preview_gone(),
             cnde_ipc::Event::Windows { windows } => {
                 self.windows = windows;
                 self.sync_dock();
@@ -888,7 +898,8 @@ impl App {
                 scale,
             ));
         }
-        let items = dock::items(&self.config.dock.favorites, &self.apps, &self.windows);
+        let mut items = dock::items(&self.config.dock.favorites, &self.apps, &self.windows);
+        self.badges.apply(&mut items);
         let icon = self.config.dock.icon_size as f32;
         for i in 0..self.docks.len() {
             let dock = &self.docks[i];
@@ -939,6 +950,7 @@ impl App {
             dock.mode = self.config.dock.mode;
             dock.edge_length = edge_length;
             dock.pad = self.config.dock.padding;
+            dock.click_minimizes = self.config.dock.click_minimizes;
             dock.launcher = dock::LauncherPlace {
                 first: self.config.dock.launcher == cnde_config::LauncherSide::Start,
                 gap: self.config.dock.launcher_gap,
@@ -946,6 +958,7 @@ impl App {
             dock.update(items.clone(), icon);
         }
         self.draw_dock();
+        self.dock_preview_sync();
         // A dock that grew (bigger icons, edit mode) pushes the grid up.
         if self
             .launcher
@@ -979,6 +992,7 @@ impl App {
             Click::Activate(id) => {
                 self.ipc.send(&cnde_ipc::Request::ActivateWindow { id });
             }
+            Click::Minimize(ids) => self.ipc.send(&cnde_ipc::Request::MinimizeWindows { ids }),
             Click::AppGrid => self.ipc.send(&cnde_ipc::Request::ShowAppGrid),
         }
     }
@@ -989,7 +1003,7 @@ impl App {
                 &self.qh,
                 &mut self.pool,
                 self.shm_format,
-                &mut self.icons,
+                (&mut self.icons, &mut self.fonts),
                 &self.theme,
                 self.config.dock.icon_size as f32,
             );
@@ -1698,6 +1712,9 @@ impl PointerHandler for App {
                         ..
                     }
                 );
+                if matches!(event.kind, PointerEventKind::Press { .. }) {
+                    self.dock_preview_press();
+                }
                 // Editing and dragging are the first dock's.
                 if i == 0 {
                     let dock = &self.docks[0];
@@ -1718,12 +1735,14 @@ impl PointerHandler for App {
                         if dock.hover(Some(event.position), icon) {
                             self.draw_dock();
                         }
+                        self.dock_preview_pointer(i, Some(event.position));
                         continue;
                     }
                     PointerEventKind::Leave { .. } => {
                         if dock.hover(None, icon) {
                             self.draw_dock();
                         }
+                        self.dock_preview_pointer(i, None);
                         continue;
                     }
                     PointerEventKind::Press { button, .. } if button == BTN_LEFT => {

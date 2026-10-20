@@ -649,6 +649,9 @@ pub struct Dock {
     pub reserve: bool,
     /// Icons and the dock itself can't be dragged, and edit mode is off.
     pub locked: bool,
+    /// Clicking the icon of the app whose window is focused minimizes its
+    /// windows; clicking again brings them back.
+    pub click_minimizes: bool,
     /// Run by "System Monitor" in the dock's menu; empty hides the item.
     pub system_monitor: String,
 }
@@ -676,6 +679,7 @@ impl Default for Dock {
             adaptive_color: DockAdaptive::Bar,
             reserve: true,
             locked: false,
+            click_minimizes: false,
             system_monitor: "gnome-system-monitor".into(),
         }
     }

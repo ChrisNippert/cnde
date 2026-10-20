@@ -521,6 +521,7 @@ impl State {
         );
         pointer.frame(self);
         if !self.lock.is_locked() {
+            self.preview_motion(location);
             self.overview_motion(location);
             self.bar_motion(location);
             self.check_hot_corner(location);
@@ -551,6 +552,14 @@ impl State {
                 },
             );
             pointer.frame(self);
+            return;
+        }
+        // The dock's window preview takes clicks on it.
+        if self.preview_button(
+            pointer.current_location(),
+            button_state == ButtonState::Pressed,
+            button == BTN_LEFT,
+        ) {
             return;
         }
         // The window switcher swallows clicks; one on a thumbnail picks it.

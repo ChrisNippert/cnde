@@ -401,6 +401,7 @@ impl State {
             return;
         }
         debug!(open, "overview");
+        self.dock_preview_hide();
         self.overview.grab = None;
         // The overview zooms each window from (and back to) its position
         // local to its monitor, saved otherwise only when it opened or a

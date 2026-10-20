@@ -451,6 +451,10 @@ impl State {
         if self.lock.is_locked() {
             return self.lock_surface_under(pos);
         }
+        // The dock's window preview is drawn over everything.
+        if self.preview_covers(pos) {
+            return None;
+        }
         if let Some((_, surface, loc)) =
             self.layer_surface_under(self.layers_above_windows(pos), pos)
         {
