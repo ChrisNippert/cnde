@@ -6,6 +6,8 @@
 //! vanish live and external changes show up. `pactl` is an optional
 //! dependency: without it the page says so.
 
+use std::os::unix::process::CommandExt as _;
+
 use std::{
     io::{BufRead, BufReader},
     process::{Child, Command as Process, Stdio},
@@ -148,8 +150,17 @@ pub fn start(tx: Sender<State>) -> Handle {
 /// start it again if the audio server restarts.
 fn subscribe(tx: &mpsc::Sender<Msg>, stop: &AtomicBool, slot: &Mutex<Option<Child>>) {
     while !stop.load(Ordering::SeqCst) {
-        let spawned = Process::new("pactl")
-            .arg("subscribe")
+        let mut cmd = Process::new("pactl");
+        cmd.arg("subscribe");
+        // Dies with Settings, even when Settings is killed outright.
+        // SAFETY: prctl is async-signal-safe and touches no shared state.
+        unsafe {
+            cmd.pre_exec(|| {
+                rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))
+                    .map_err(std::io::Error::from)
+            });
+        }
+        let spawned = cmd
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

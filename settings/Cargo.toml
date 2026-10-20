@@ -13,7 +13,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "xkbcommon"] }
 # inotify for following hand edits of the config.
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["fs", "process"] }
 # Wallpaper thumbnails; the same formats the compositor can show.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 # Wi-Fi through NetworkManager or iwd.

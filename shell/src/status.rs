@@ -7,6 +7,8 @@
 //! polling), and sends `Update`s to the main loop only when its value
 //! actually changes. A missing service just means that item isn't shown.
 
+use std::os::unix::process::CommandExt as _;
+
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader},
@@ -396,8 +398,18 @@ fn dbm_to_percent(dbm: f64) -> u8 {
 fn volume(tx: &Sender<Update>) -> zbus::Result<()> {
     let mut out = Dedup::new(tx);
     loop {
-        if let Ok(mut child) = Command::new("pactl")
-            .arg("subscribe")
+        let mut cmd = Command::new("pactl");
+        cmd.arg("subscribe");
+        // Dies with the shell: a crashed or killed shell would otherwise
+        // leave it running forever.
+        // SAFETY: prctl is async-signal-safe and touches no shared state.
+        unsafe {
+            cmd.pre_exec(|| {
+                rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))
+                    .map_err(std::io::Error::from)
+            });
+        }
+        if let Ok(mut child) = cmd
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
