@@ -30,13 +30,16 @@ use crate::{
     panel::volume_icon,
 };
 
-mod audio_page;
+mod audio_list;
 
-/// An audio device list, shown in place of the card.
-struct Page {
-    kind: Kind,
-    lines: Vec<audio_page::Row>,
-    layout: audio_page::PageLayout,
+use audio_list::{ListLayout, ListState};
+
+/// Where a kind's list is in the per-kind arrays.
+fn slot(kind: Kind) -> usize {
+    match kind {
+        Kind::Output => 0,
+        Kind::Input => 1,
+    }
 }
 
 /// What a point in the card does.
@@ -47,8 +50,10 @@ pub enum Hit {
     /// The input slider (the microphone's gain) and its mute end.
     Input,
     MicMute,
-    /// The arrow beside a slider: opens that device list.
-    AudioPage(Kind),
+    /// The arrow beside a slider: drops that device list down (or folds it up).
+    AudioList(Kind),
+    /// A device or port in a dropped-down list.
+    AudioRow(Kind, audio_list::Row),
     Brightness,
     /// Index into the available power profiles.
     PowerProfile(usize),
@@ -102,6 +107,9 @@ pub struct Layout {
     pub volume_arrow: Rect,
     /// The microphone slider and its arrow, when there's a microphone.
     pub input: Option<(Rect, Rect)>,
+    /// The output and input lists under their sliders, while open (or
+    /// opening or closing).
+    pub lists: [Option<ListLayout>; 2],
     pub brightness: Option<Rect>,
     /// The power mode tile and its segments.
     pub power_profiles: Option<(Rect, Vec<Rect>)>,
@@ -187,6 +195,24 @@ pub fn layout(
     devices_open: bool,
     features: Features,
 ) -> Layout {
+    layout_with(
+        theme,
+        power_menu_open,
+        devices_open,
+        features,
+        &[ListState::default(), ListState::default()],
+    )
+}
+
+/// [`layout`] with the audio lists as far open as `lists` says: the rows
+/// below them sit lower by as much, so the card's height follows.
+pub fn layout_with(
+    theme: &Theme,
+    power_menu_open: bool,
+    devices_open: bool,
+    features: Features,
+    lists: &[ListState; 2],
+) -> Layout {
     // No ways into cnde-settings when it isn't installed.
     let settings = cfg!(test) || crate::apps::settings_installed();
     let mut settings_links = Vec::new();
@@ -254,7 +280,18 @@ pub fn layout(
         list
     });
 
-    // Each audio slider has a round arrow at its end, to the device list.
+    // Each audio slider has a round arrow at its end, to the device list,
+    // which drops down under the slider.
+    let mut dropped = [None, None];
+    let mut drop_list = |kind: Kind, y: &mut f32| {
+        let state = &lists[slot(kind)];
+        if state.progress <= 0.0 {
+            return;
+        }
+        let list = audio_list::place(state, pad, *y, inner);
+        *y += list.list.h + theme.qs_gap * list.progress;
+        dropped[slot(kind)] = Some(list);
+    };
     let audio_row = |y: f32| {
         let slider = Rect {
             x: pad,
@@ -271,9 +308,11 @@ pub fn layout(
     };
     let (volume, volume_arrow) = audio_row(y);
     y += SLIDER_HEIGHT + theme.qs_gap;
+    drop_list(Kind::Output, &mut y);
     let input = features.input.then(|| {
         let row = audio_row(y);
         y += SLIDER_HEIGHT + theme.qs_gap;
+        drop_list(Kind::Input, &mut y);
         row
     });
 
@@ -375,6 +414,7 @@ pub fn layout(
         volume,
         volume_arrow,
         input,
+        lists: dropped,
         brightness,
         power_profiles,
         footer_y,
@@ -387,12 +427,19 @@ pub fn layout(
 
 impl Layout {
     pub fn hit(&self, point: (f64, f64)) -> Option<Hit> {
+        for kind in [Kind::Output, Kind::Input] {
+            if let Some(list) = &self.lists[slot(kind)]
+                && let Some(row) = list.hit(point)
+            {
+                return Some(Hit::AudioRow(kind, row));
+            }
+        }
         if self.volume_arrow.contains(point) {
-            return Some(Hit::AudioPage(Kind::Output));
+            return Some(Hit::AudioList(Kind::Output));
         }
         if let Some((input, arrow)) = self.input {
             if arrow.contains(point) {
-                return Some(Hit::AudioPage(Kind::Input));
+                return Some(Hit::AudioList(Kind::Input));
             }
             if input.contains(point) {
                 let icon_zone = Rect {
@@ -464,6 +511,12 @@ impl Layout {
     }
 }
 
+/// Which list is down after `clicked`'s arrow is pressed: that one, or none
+/// if it already was. Never both.
+fn next_open(open: Option<Kind>, clicked: Kind) -> Option<Kind> {
+    (open != Some(clicked)).then_some(clicked)
+}
+
 fn percent_along(rect: Rect, x: f64) -> u32 {
     (((x as f32 - rect.x) / rect.w).clamp(0.0, 1.0) * 100.0).round() as u32
 }
@@ -478,6 +531,8 @@ pub enum Moving {
     Profile,
     /// The power row opening (1) or closing (0).
     PowerMenu,
+    /// An audio list dropping down (1) or folding up (0).
+    List(Kind),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -508,8 +563,15 @@ pub struct QuickSettings {
     /// back (so the slider tracks the pointer with no lag).
     volume_override: Option<(u32, Instant)>,
     input_override: Option<(u32, Instant)>,
-    /// An output or input list is open in place of the card.
-    page: Option<Page>,
+    /// The audio list that's dropped down (or dropping): only one is.
+    open_list: Option<Kind>,
+    /// Both lists' lines and how far open they are, as last drawn.
+    lists: [ListState; 2],
+    /// The height the popup is sized to. Lists open and close inside it
+    /// (the card is drawn shorter and the window geometry says so), so
+    /// the surface changes size only when they start and when they've
+    /// settled, not every frame.
+    surface_height: f32,
     /// Toggles show their new state as soon as they're pressed; if the
     /// system hasn't confirmed it within `CONFIRM_WITHIN`, they snap back
     /// (the change was refused or failed).
@@ -533,8 +595,8 @@ pub struct QuickSettings {
     dirty: bool,
     anim: Animator<Moving>,
     /// The power row is sliding shut: the open layout to keep painting
-    /// until it's gone, then the smaller size to shrink the popup to.
-    collapsing: Option<(Layout, XdgPositioner)>,
+    /// until it's gone, then the popup shrinks to fit.
+    collapsing: Option<Layout>,
 }
 
 impl QuickSettings {
@@ -555,6 +617,7 @@ impl QuickSettings {
         let features = Features::of(status);
         let layout = layout(theme, false, false, features);
         let positioner = positioner(xdg_shell, &layout, anchor)?;
+        let surface_height = layout.height;
         let surface = compositor.create_surface(qh);
         let popup = Popup::from_surface(None, &positioner, qh, surface, xdg_shell)
             .map_err(|err| warn!(?err, "can't create quick settings popup"))
@@ -573,7 +636,9 @@ impl QuickSettings {
             dragging: None,
             volume_override: None,
             input_override: None,
-            page: None,
+            open_list: None,
+            lists: [ListState::default(), ListState::default()],
+            surface_height,
             wifi_override: None,
             bluetooth_override: None,
             device_override: None,
@@ -606,78 +671,81 @@ impl QuickSettings {
     /// Show or hide the power row. Opening grows the popup at once and the
     /// row slides out into the room; closing slides it away first and
     /// shrinks the popup once it's gone (see `draw`).
-    fn toggle_power_menu(
-        &mut self,
-        xdg_shell: &XdgShell,
-        theme: &Theme,
-        anchor: (i32, i32, i32, i32),
-    ) {
+    fn toggle_power_menu(&mut self, xdg_shell: &XdgShell, theme: &Theme) {
         let open = self.layout.power_menu.is_none();
-        let new = layout(theme, open, self.devices_open, self.features);
-        let positioner = positioner(xdg_shell, &new, anchor);
+        let new = layout_with(theme, open, self.devices_open, self.features, &self.lists);
         let old = std::mem::replace(&mut self.layout, new);
         if open {
             self.collapsing = None;
-            if let Some(positioner) = positioner {
-                self.popup.reposition(&positioner, 0);
-            }
-        } else if let Some(positioner) = positioner {
-            self.collapsing = Some((old, positioner));
+            self.grow_surface(xdg_shell, theme);
+        } else {
+            self.collapsing = Some(old);
+        }
+    }
+
+    /// The popup's size with the power row as it is and every list that's
+    /// open or moving all the way open: the most the card will need.
+    fn room_needed(&self, theme: &Theme) -> f32 {
+        let mut lists = self.lists.clone();
+        for kind in [Kind::Output, Kind::Input] {
+            let list = &mut lists[slot(kind)];
+            let moving = self.open_list == Some(kind) || list.progress > 0.0;
+            list.progress = if moving { 1.0 } else { 0.0 };
+        }
+        let open = self.layout.power_menu.is_some() || self.collapsing.is_some();
+        layout_with(theme, open, self.devices_open, self.features, &lists).height
+    }
+
+    /// Make the popup big enough for what's about to open.
+    fn grow_surface(&mut self, xdg_shell: &XdgShell, theme: &Theme) {
+        let needed = self.room_needed(theme).max(self.layout.height);
+        if needed > self.surface_height + 0.5 {
+            self.surface_height = needed;
+            self.resize_surface(xdg_shell);
+        }
+        self.dirty = true;
+    }
+
+    fn resize_surface(&mut self, xdg_shell: &XdgShell) {
+        if let Some(positioner) = sized_positioner(
+            xdg_shell,
+            (self.layout.width, self.surface_height),
+            self.anchor,
+        ) {
+            self.popup.reposition(&positioner, 0);
         }
     }
 
     /// Lay the card out again (a list opened or closed, or what the
     /// machine offers changed), resizing the popup at once.
     fn relayout(&mut self, xdg_shell: &XdgShell, theme: &Theme) {
-        let new = layout(
+        let new = layout_with(
             theme,
             self.layout.power_menu.is_some(),
             self.devices_open,
             self.features,
+            &self.lists,
         );
         if new == self.layout {
             return;
         }
         self.layout = new;
         self.collapsing = None;
-        if self.page.is_none()
-            && let Some(positioner) = positioner(xdg_shell, &self.layout, self.anchor)
-        {
-            self.popup.reposition(&positioner, 0);
+        self.grow_surface(xdg_shell, theme);
+        // Smaller, with nothing moving: shrink now.
+        if !self.anim.running() && self.surface_height > self.layout.height + 0.5 {
+            self.surface_height = self.layout.height;
+            self.resize_surface(xdg_shell);
         }
     }
 
-    /// Open the list of outputs or inputs in place of the card.
-    fn open_page(&mut self, kind: Kind, xdg_shell: &XdgShell, theme: &Theme, status: &Status) {
-        let lines = audio_page::rows(status.audio.devices(kind));
-        let layout = audio_page::layout(theme, &lines);
-        self.page = Some(Page {
-            kind,
-            lines,
-            layout,
-        });
-        self.resize_to_page(xdg_shell);
-    }
-
-    /// Back to the card.
-    fn close_page(&mut self, xdg_shell: &XdgShell) {
-        self.page = None;
-        self.dragging = None;
-        if let Some(positioner) = positioner(xdg_shell, &self.layout, self.anchor) {
-            self.popup.reposition(&positioner, 0);
-        }
-        self.dirty = true;
-    }
-
-    fn resize_to_page(&mut self, xdg_shell: &XdgShell) {
-        if let Some(page) = &self.page
-            && let Some(positioner) = sized_positioner(
-                xdg_shell,
-                (page.layout.width, page.layout.height),
-                self.anchor,
-            )
-        {
-            self.popup.reposition(&positioner, 0);
+    /// Drop `kind`'s list down, or fold it up if it's down. Opening one
+    /// folds the other, so each moves at the same time.
+    fn toggle_list(&mut self, kind: Kind, xdg_shell: &XdgShell, theme: &Theme, status: &Status) {
+        self.open_list = next_open(self.open_list, kind);
+        if self.open_list.is_some() {
+            self.lists[slot(kind)].rows = audio_list::rows(status.audio.devices(kind));
+            self.grow_surface(xdg_shell, theme);
         }
         self.dirty = true;
     }
@@ -695,13 +763,19 @@ impl QuickSettings {
             self.relayout(xdg_shell, theme);
         }
         // Devices came or went (a headset plugged in) or gained ports.
-        if let Some(page) = &mut self.page {
-            let lines = audio_page::rows(status.audio.devices(page.kind));
-            if lines != page.lines {
-                page.layout = audio_page::layout(theme, &lines);
-                page.lines = lines;
-                self.resize_to_page(xdg_shell);
+        let mut changed = false;
+        for kind in [Kind::Output, Kind::Input] {
+            let list = &mut self.lists[slot(kind)];
+            if self.open_list == Some(kind) || list.progress > 0.0 {
+                let rows = audio_list::rows(status.audio.devices(kind));
+                if rows != list.rows {
+                    list.rows = rows;
+                    changed = true;
+                }
             }
+        }
+        if changed {
+            self.grow_surface(xdg_shell, theme);
         }
     }
 
@@ -732,37 +806,16 @@ impl QuickSettings {
         actions: &Actions,
         xdg_shell: &XdgShell,
         theme: &Theme,
-        anchor: (i32, i32, i32, i32),
+        _anchor: (i32, i32, i32, i32),
     ) -> bool {
-        if let Some(page) = &self.page {
-            let kind = page.kind;
-            let slider = match kind {
-                Kind::Output => Slider::Volume,
-                Kind::Input => Slider::Input,
-            };
-            match page.layout.hit(point) {
-                Some(audio_page::PageHit::Back) => self.close_page(xdg_shell),
-                Some(audio_page::PageHit::Mute) => actions.run(match kind {
-                    Kind::Output => Action::ToggleMute,
-                    Kind::Input => Action::ToggleMicMute,
-                }),
-                Some(audio_page::PageHit::Slider) => {
-                    self.dragging = Some(slider);
-                    self.slide(slider, point.0, actions);
-                }
-                Some(audio_page::PageHit::Row(row)) => {
-                    if let Some(action) =
-                        audio_page::row_action(kind, status.audio.devices(kind), row)
-                    {
-                        actions.run(action);
-                    }
-                }
-                None => {}
-            }
-            return false;
-        }
         match self.layout.hit(point) {
-            Some(Hit::AudioPage(kind)) => self.open_page(kind, xdg_shell, theme, status),
+            Some(Hit::AudioList(kind)) => self.toggle_list(kind, xdg_shell, theme, status),
+            Some(Hit::AudioRow(kind, row)) => {
+                if let Some(action) = audio_list::row_action(kind, status.audio.devices(kind), row)
+                {
+                    actions.run(action);
+                }
+            }
             Some(Hit::Input) => {
                 self.dragging = Some(Slider::Input);
                 self.slide(Slider::Input, point.0, actions);
@@ -826,7 +879,7 @@ impl QuickSettings {
                     actions.run(Action::ConnectBluetooth(device.address.clone(), connect));
                 }
             }
-            Some(Hit::Power) => self.toggle_power_menu(xdg_shell, theme, anchor),
+            Some(Hit::Power) => self.toggle_power_menu(xdg_shell, theme),
             Some(Hit::Settings) => {
                 crate::apps::open_settings(None);
                 return true;
@@ -866,13 +919,7 @@ impl QuickSettings {
     }
 
     fn slide(&mut self, slider: Slider, x: f64, actions: &Actions) {
-        let percent = match (&self.page, slider) {
-            (Some(page), Slider::Volume | Slider::Input) => {
-                Some(percent_along(page.layout.slider, x))
-            }
-            _ => self.layout.slider_at(slider, x),
-        };
-        let Some(percent) = percent else {
+        let Some(percent) = self.layout.slider_at(slider, x) else {
             return;
         };
         match slider {
@@ -901,6 +948,7 @@ impl QuickSettings {
     pub fn draw(
         &mut self,
         qh: &QueueHandle<App>,
+        xdg_shell: &XdgShell,
         pool: &mut SlotPool,
         format: wl_shm::Format,
         fonts: &mut Fonts,
@@ -913,15 +961,35 @@ impl QuickSettings {
             return;
         }
         self.dirty = false;
+        // The lists' progress this frame: the card follows it, inside a
+        // popup already big enough.
+        self.anim.begin();
+        for kind in [Kind::Output, Kind::Input] {
+            let target = if self.open_list == Some(kind) {
+                1.0
+            } else {
+                0.0
+            };
+            let progress = self.anim.get(Moving::List(kind), target, MEDIUM);
+            let list = &mut self.lists[slot(kind)];
+            list.progress = progress;
+            if progress <= 0.0 && target == 0.0 {
+                list.rows.clear();
+            }
+        }
+        if self.collapsing.is_none() {
+            self.layout = layout_with(
+                theme,
+                self.layout.power_menu.is_some(),
+                self.devices_open,
+                self.features,
+                &self.lists,
+            );
+        }
         // While the power row closes, the popup keeps its open size.
-        let layout = self.collapsing.as_ref().map_or(&self.layout, |(l, _)| l);
+        let layout = self.collapsing.as_ref().unwrap_or(&self.layout);
         let scale = self.scale;
-        let (width, height) = self
-            .page
-            .as_ref()
-            .map_or((layout.width, layout.height), |p| {
-                (p.layout.width, p.layout.height)
-            });
+        let (width, height) = (layout.width, self.surface_height.max(layout.height));
         let (w, h) = (
             (width * scale as f32) as i32,
             (height * scale as f32) as i32,
@@ -1002,52 +1070,44 @@ impl QuickSettings {
             (None, Some(current)) => Some((current.percent, current.muted)),
             (None, None) => None,
         };
-        if let Some(page) = &self.page {
-            let shown = match page.kind {
-                Kind::Output => volume,
-                Kind::Input => input.unwrap_or((0, true)),
-            };
-            audio_page::paint(
-                &mut canvas,
-                &page.layout,
-                page.kind,
-                shown,
-                status,
-                fonts,
-                icons,
-                theme,
-                scale as f32,
-                &mut self.anim,
-                self.dragging,
-            );
-        } else {
-            paint(
-                &mut canvas,
-                layout,
-                self.layout.power_menu.is_some(),
-                fonts,
-                icons,
-                theme,
-                status,
-                volume,
-                input,
-                self.brightness,
-                scale as f32,
-                &mut self.anim,
-                self.dragging,
-                self.device_override
-                    .as_ref()
-                    .map(|(address, connect, _)| (address.as_str(), *connect)),
-            );
-        }
+        let card_height = paint(
+            &mut canvas,
+            layout,
+            self.layout.power_menu.is_some(),
+            fonts,
+            icons,
+            theme,
+            status,
+            volume,
+            input,
+            self.brightness,
+            scale as f32,
+            &mut self.anim,
+            self.dragging,
+            self.device_override
+                .as_ref()
+                .map(|(address, connect, _)| (address.as_str(), *connect)),
+        );
         // Still moving: draw again when this frame is shown.
         if self.anim.running() {
             self.dirty = true;
-        } else if let Some((_, positioner)) = self.collapsing.take() {
-            // The power row is gone: shrink to fit, drawn next frame.
-            self.popup.reposition(&positioner, 0);
+        } else if self.collapsing.take().is_some() || self.surface_height > self.layout.height + 0.5
+        {
+            // The power row or a list is gone: shrink to fit, drawn next
+            // frame.
+            self.surface_height = self.layout.height;
+            self.resize_surface(xdg_shell);
             self.dirty = true;
         }
+
+        // Only the card itself counts as the popup (for the compositor's
+        // frost behind it), not the room kept below it for what's opening.
+        self.popup.xdg_surface().set_window_geometry(
+            0,
+            0,
+            width.ceil() as i32,
+            card_height.ceil() as i32,
+        );
 
         let surface = self.popup.wl_surface();
         surface.damage_buffer(0, 0, w, h);
@@ -1082,7 +1142,7 @@ fn paint(
     dragging: Option<Slider>,
     // A Bluetooth device being connected (true) or disconnected.
     pending: Option<(&str, bool)>,
-) {
+) -> f32 {
     anim.begin();
     // Sliders glide to a clicked spot, but follow the pointer while dragged.
     let mut slide = |slider: Slider, value: f32| {
@@ -1108,11 +1168,12 @@ fn paint(
         0.0
     };
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
+    let card_height = layout.height - shift;
     canvas.rounded_rect(
         0.0,
         0.0,
         layout.width,
-        layout.height - shift,
+        card_height,
         theme.qs_radius,
         theme.qs_background,
     );
@@ -1273,7 +1334,18 @@ fn paint(
         muted,
         name,
     );
-    paint_arrow(canvas, icons, theme, layout.volume_arrow);
+    let opened = |kind: Kind| {
+        layout.lists[slot(kind)]
+            .as_ref()
+            .map_or(0.0, |l| l.progress)
+    };
+    paint_arrow(
+        canvas,
+        icons,
+        theme,
+        layout.volume_arrow,
+        opened(Kind::Output),
+    );
     if let (Some((rect, arrow)), Some((_, muted)), Some(shown)) = (layout.input, input, input_shown)
     {
         let name = if muted {
@@ -1282,7 +1354,12 @@ fn paint(
             "audio-input-microphone-symbolic"
         };
         paint_volume_row(canvas, icons, theme, rect, shown, muted, name);
-        paint_arrow(canvas, icons, theme, arrow);
+        paint_arrow(canvas, icons, theme, arrow, opened(Kind::Input));
+    }
+    for kind in [Kind::Output, Kind::Input] {
+        if let Some(list) = &layout.lists[slot(kind)] {
+            audio_list::paint(canvas, list, kind, status, fonts, icons, theme, s);
+        }
     }
 
     // Brightness: the same fat slider, a sun inside.
@@ -1517,6 +1594,7 @@ fn paint(
         18.0,
         theme.popup_text.mix(theme.on_accent, reveal),
     );
+    card_height
 }
 
 /// A fat slider with `icon` at its start; the icon is dark where the bright
@@ -1564,7 +1642,9 @@ fn paint_volume_row(
 }
 
 /// The round arrow at a slider's end.
-fn paint_arrow(canvas: &mut Canvas<'_>, icons: &mut Icons, theme: &Theme, rect: Rect) {
+/// The round button at a slider's end: a chevron that swings from
+/// pointing right to pointing down as its list (`open`, 0-1) drops.
+fn paint_arrow(canvas: &mut Canvas<'_>, icons: &mut Icons, theme: &Theme, rect: Rect, open: f32) {
     canvas.rounded_rect(
         rect.x,
         rect.y,
@@ -1573,13 +1653,14 @@ fn paint_arrow(canvas: &mut Canvas<'_>, icons: &mut Icons, theme: &Theme, rect: 
         theme.qs_tile_radius,
         theme.qs_slider_track,
     );
-    canvas.icon(
+    canvas.icon_rotated(
         icons,
         "go-next-symbolic",
         rect.x + (rect.w - 16.0) / 2.0,
         rect.y + (rect.h - 16.0) / 2.0,
         16.0,
         theme.popup_text,
+        open * std::f32::consts::FRAC_PI_2,
     );
 }
 
@@ -1743,6 +1824,94 @@ mod tests {
         assert_eq!(l.hit(centre(l.power_button)), Some(Hit::Power));
         assert_eq!(l.hit(centre(l.settings_button)), Some(Hit::Settings));
         assert!(l.power_menu.is_none());
+    }
+
+    fn lists(output: f32, input: f32) -> [ListState; 2] {
+        let rows = |n| (0..n).map(audio_list::Row::Device).collect();
+        [
+            ListState {
+                rows: rows(3),
+                progress: output,
+            },
+            ListState {
+                rows: rows(2),
+                progress: input,
+            },
+        ]
+    }
+
+    #[test]
+    fn audio_lists_push_the_rows_below_down() {
+        let theme = Theme::dark();
+        let features = Features {
+            input: true,
+            ..Features::default()
+        };
+        let at = |output, input| layout_with(&theme, false, false, features, &lists(output, input));
+        let closed = at(0.0, 0.0);
+        assert_eq!(closed, layout(&theme, false, false, features));
+        assert!(closed.lists.iter().all(Option::is_none));
+        let full = audio_list::full_height(&lists(1.0, 0.0)[0].rows);
+        let (half, open) = (at(0.5, 0.0), at(1.0, 0.0));
+        let grew = |l: &Layout| l.height - closed.height;
+        assert!((grew(&half) - (full / 2.0 + theme.qs_gap / 2.0)).abs() < 0.01);
+        assert!((grew(&open) - (full + theme.qs_gap)).abs() < 0.01);
+        // The input slider rides down with it; the output one stays.
+        assert_eq!(open.volume, closed.volume);
+        assert_eq!(
+            open.input.unwrap().0.y - closed.input.unwrap().0.y,
+            grew(&open)
+        );
+        // Both open: the input list hangs under the moved input slider.
+        let both = at(1.0, 1.0);
+        let input_list = both.lists[1].as_ref().unwrap().list;
+        assert_eq!(
+            input_list.y,
+            both.input.unwrap().0.y + SLIDER_HEIGHT + theme.qs_gap
+        );
+    }
+
+    #[test]
+    fn audio_list_rows_are_hit_inside_the_open_part() {
+        let theme = Theme::dark();
+        let features = Features {
+            input: true,
+            ..Features::default()
+        };
+        let open = layout_with(&theme, false, false, features, &lists(1.0, 0.0));
+        let list = open.lists[0].as_ref().unwrap();
+        let (rect, row) = list.rows[1];
+        let centre = (
+            (rect.x + rect.w / 2.0) as f64,
+            (rect.y + rect.h / 2.0) as f64,
+        );
+        assert_eq!(open.hit(centre), Some(Hit::AudioRow(Kind::Output, row)));
+        // The arrows still toggle their lists.
+        let arrow = open.volume_arrow;
+        let at = ((arrow.x + 4.0) as f64, (arrow.y + 4.0) as f64);
+        assert_eq!(open.hit(at), Some(Hit::AudioList(Kind::Output)));
+        let (_, input_arrow) = open.input.unwrap();
+        let at = ((input_arrow.x + 4.0) as f64, (input_arrow.y + 4.0) as f64);
+        assert_eq!(open.hit(at), Some(Hit::AudioList(Kind::Input)));
+        // Half open, the last row isn't there yet, so it can't be hit.
+        let half = layout_with(&theme, false, false, features, &lists(0.4, 0.0));
+        let (last, _) = half.lists[0].as_ref().unwrap().rows[2];
+        let at = ((last.x + 4.0) as f64, (last.y + last.h - 4.0) as f64);
+        assert!(!matches!(half.hit(at), Some(Hit::AudioRow(..))));
+    }
+
+    #[test]
+    fn only_one_list_is_down_at_a_time() {
+        assert_eq!(next_open(None, Kind::Output), Some(Kind::Output));
+        assert_eq!(next_open(Some(Kind::Output), Kind::Output), None);
+        assert_eq!(
+            next_open(Some(Kind::Output), Kind::Input),
+            Some(Kind::Input)
+        );
+        assert_eq!(
+            next_open(Some(Kind::Input), Kind::Output),
+            Some(Kind::Output)
+        );
     }
 
     #[test]

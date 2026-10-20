@@ -1077,6 +1077,7 @@ impl App {
         if let Some((qs, _)) = &mut self.quick_settings {
             qs.draw(
                 &self.qh,
+                &self.xdg_shell,
                 &mut self.pool,
                 self.shm_format,
                 &mut self.fonts,
