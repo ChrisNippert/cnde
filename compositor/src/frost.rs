@@ -16,9 +16,9 @@ use std::{
 
 use smithay::{
     backend::renderer::{
-        element::{Element, Id, Kind, RenderElement},
+        element::{Element, Id, Kind, RenderElement, texture::TextureRenderElement},
         gles::{
-            GlesError, GlesFrame, GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform,
+            GlesError, GlesFrame, GlesPixelProgram, GlesRenderer, GlesTexProgram, GlesTexture, Uniform,
             element::{PixelShaderElement, TextureShaderElement},
         },
         utils::{CommitCounter, DamageSet, OpaqueRegions},
@@ -80,7 +80,7 @@ impl Behind {
     }
 
     /// The topmost window under `rect`.
-    fn under(&self, rect: Rectangle<i32, Logical>) -> Option<&Window> {
+    pub fn under(&self, rect: Rectangle<i32, Logical>) -> Option<&Window> {
         self.windows
             .iter()
             .rev()
@@ -406,6 +406,21 @@ impl DockFrost {
         radius: f64,
         alpha: f32,
     ) -> Option<Frost> {
+        let source = wallpapers.blurred_crop(output, area, alpha)?;
+        self.frost_from(renderer, output, namespace, area, radius, source)
+    }
+
+    /// Frost shaped from `source`, a blurred texture and where `area` sits
+    /// in it (see `Wallpapers::blurred_crop`).
+    fn frost_from(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        namespace: &str,
+        area: Rectangle<i32, smithay::utils::Logical>,
+        radius: f64,
+        source: (TextureRenderElement<GlesTexture>, [f32; 4]),
+    ) -> Option<Frost> {
         if self.shader.is_none() && !self.broken {
             match renderer.compile_custom_texture_shader(
                 crate::shaders::ROUNDED_TEXTURE,
@@ -420,7 +435,7 @@ impl DockFrost {
         }
         let shader = self.shader.as_ref()?;
         let scale = output.current_scale().fractional_scale();
-        let (texture, crop) = wallpapers.blurred_crop(output, area, alpha)?;
+        let (texture, crop) = source;
         let inner = TextureShaderElement::new(
             texture,
             shader.clone(),
@@ -451,6 +466,9 @@ pub struct WindowFrost<'a> {
     pub radius: f64,
     /// Over another window: their sidebars' colour.
     pub solid: cnde_ui::Color,
+    /// What popups are tinted (the switcher's panel too), and their corners.
+    pub panel: cnde_ui::Color,
+    pub panel_radius: f64,
     pub now: Instant,
 }
 
@@ -465,6 +483,23 @@ impl WindowFrost<'_> {
         alpha: f32,
         under: Option<&Window>,
     ) -> Vec<OutputElement> {
+        self.elements_from(renderer, key, rect, self.radius, alpha, under, None)
+    }
+
+    /// The same, with its corners at `radius`, and the frost cut from
+    /// `source` (a blurred texture and where `rect` sits in it) instead of
+    /// the wallpaper.
+    #[allow(clippy::too_many_arguments)]
+    pub fn elements_from(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        key: &str,
+        rect: Rectangle<f64, Logical>,
+        radius: f64,
+        alpha: f32,
+        under: Option<&Window>,
+        source: Option<(TextureRenderElement<GlesTexture>, [f32; 4])>,
+    ) -> Vec<OutputElement> {
         let namespace = format!("window/{key}");
         let rect = rect.to_i32_round();
         let target = under.map(|_| ([self.solid.r, self.solid.g, self.solid.b], 1.0));
@@ -473,24 +508,30 @@ impl WindowFrost<'_> {
             self.output,
             &namespace,
             rect,
-            self.radius,
+            radius,
             target,
             alpha,
             self.now,
         );
         let mut elements: Vec<OutputElement> =
             solid.map(OutputElement::Shader).into_iter().collect();
-        if solidity < 1.0
-            && let Some(frost) = self.frost.frost(
+        let frost = if solidity >= 1.0 {
+            None
+        } else if let Some(source) = source {
+            self.frost
+                .frost_from(renderer, self.output, &namespace, rect, radius, source)
+        } else {
+            self.frost.frost(
                 renderer,
                 self.wallpapers,
                 self.output,
                 &namespace,
                 rect,
-                self.radius,
+                radius,
                 alpha,
             )
-        {
+        };
+        if let Some(frost) = frost {
             elements.push(OutputElement::Frost(frost));
         }
         elements
@@ -538,6 +579,8 @@ pub fn window_frost<'a>(
         output,
         radius: theme.window_radius as f64,
         solid: theme.window_sidebar,
+        panel: theme.qs_background.with_alpha(0.74),
+        panel_radius: theme.qs_radius.max(theme.menu_radius) as f64,
         now,
     })
 }

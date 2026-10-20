@@ -26,7 +26,7 @@ use smithay::{
     output::Output,
     utils::{Logical, Point, Rectangle, Scale, Size, Transform},
 };
-use tracing::warn;
+use tracing::{debug, warn};
 
 use cnde_ipc::Side;
 use cnde_ui::{Canvas, Color, Fonts, Icons, Weight};
@@ -46,8 +46,10 @@ const SHOW_AFTER: Duration = Duration::from_millis(150);
 const FADE: Duration = Duration::from_millis(150);
 /// The panel grows from this scale as it appears.
 const PANEL_START_SCALE: f64 = 0.96;
-/// How dark the rest of the screen goes behind the panel.
+/// How dark the rest of the screen goes behind the panel: all of it when
+/// the scene can't be blurred, a touch over the blur when it can.
 const DIM: f32 = 0.45;
+const DIM_BLURRED: f32 = 0.22;
 
 const CELL_W: f64 = 216.0;
 const CELL_H: f64 = 180.0;
@@ -138,6 +140,8 @@ pub struct Switcher {
     leaving: Option<Leaving>,
     /// Darkens everything behind the panel.
     dim: Option<SolidColorBuffer>,
+    /// The scene behind it, blurred when it opened.
+    blur: crate::scene_blur::SceneBlur,
     /// The selection highlight: one cell, drawn on its own so it can slide.
     highlight: Option<(u64, MemoryRenderBuffer)>,
 }
@@ -164,6 +168,8 @@ struct Key {
     scale: u64,
     size: (i32, i32),
     appearance: cnde_config::Appearance,
+    /// Frosted: the tint the panel takes over its frost, and its corners.
+    frosted: Option<(Color, u64)>,
 }
 
 /// Where everything sits: cells relative to the panel's top-left, the panel
@@ -328,14 +334,22 @@ impl Switcher {
     /// The panel and thumbnails for `output`, front first; empty unless the
     /// switcher (or the dock's preview) is showing there. The switcher also
     /// dims the screen, with the selected window lifted back out of the dim.
+    ///
+    /// `scene` is what's drawn on the output below the switcher (top
+    /// first), blurred once for its backdrop; `frost` is the frost to put
+    /// under the panel (`None`: solid).
+    #[allow(clippy::too_many_arguments)]
     pub fn elements(
         &mut self,
         renderer: &mut GlesRenderer,
         decorations: &mut crate::decorations::Decorations,
         space: &Space<Window>,
         output: &Output,
+        scene: &[OutputElement],
+        mut frost: Option<crate::frost::WindowFrost<'_>>,
         now: Instant,
     ) -> Vec<OutputElement> {
+        let started = Instant::now();
         if self.leaving.as_ref().is_some_and(|l| {
             now.saturating_duration_since(l.since) >= FADE || self.session.is_some()
         }) {
@@ -346,6 +360,9 @@ impl Switcher {
         };
         let open = self.session.is_some();
         let fading = self.leaving.is_some() && !open;
+        if !open && self.leaving.is_none() {
+            self.blur.release();
+        }
         if open || fading {
             let (session, level, live, kept) = match (&self.session, &self.leaving) {
                 (Some(s), _) => (s, open_level(s, now), true, None),
@@ -359,6 +376,9 @@ impl Switcher {
             };
             if &session.output != output || level <= 0.0 {
                 return Vec::new();
+            }
+            if frost.is_some() && !self.blur.has(output) {
+                self.blur.capture(renderer, output, scene);
             }
             let windows = session.windows.clone();
             let selected = session.selected;
@@ -411,6 +431,8 @@ impl Switcher {
                 Some(selected),
                 None,
                 &look,
+                &mut frost,
+                true,
                 now,
             );
             let scale = Scale::from(output.current_scale().fractional_scale());
@@ -447,13 +469,20 @@ impl Switcher {
             let size = size.to_i32_round::<i32>();
             let size = Size::from((size.w.max(1), size.h.max(1)));
             dim.resize(size);
+            let blurred = self.blur.element(output, level as f32);
             elements.push(OutputElement::Solid(SolidColorRenderElement::from_buffer(
                 dim,
                 (0, 0),
                 scale,
-                DIM * level as f32,
+                if blurred.is_some() { DIM_BLURRED } else { DIM } * level as f32,
                 Kind::Unspecified,
             )));
+            elements.extend(blurred.map(OutputElement::Wallpaper));
+            debug!(
+                ms = started.elapsed().as_secs_f64() * 1000.0,
+                blurred = self.blur.has(output),
+                "switcher frame built (cpu side)"
+            );
             return elements;
         }
         let Some(preview) = self.preview.as_ref().filter(|p| &p.output == output) else {
@@ -488,6 +517,8 @@ impl Switcher {
             hover,
             Some(close_hot),
             &look,
+            &mut frost,
+            false,
             now,
         )
     }
@@ -507,6 +538,8 @@ impl Switcher {
         selected: Option<usize>,
         closable: Option<bool>,
         look: &Look,
+        frost: &mut Option<crate::frost::WindowFrost<'_>>,
+        backdrop: bool,
         now: Instant,
     ) -> Vec<OutputElement> {
         let Some(output_geo) = space.output_geometry(output) else {
@@ -596,6 +629,9 @@ impl Switcher {
             scale: scale.x.to_bits(),
             size: (geometry.panel.size.w as i32, geometry.panel.size.h as i32),
             appearance: decorations.appearance.clone(),
+            frosted: frost
+                .as_ref()
+                .map(|f| (f.panel, f.panel_radius.to_bits())),
         };
         if self.panel.as_ref().is_none_or(|(k, _)| *k != key) {
             let Some(buffer) = self.paint(&key) else {
@@ -649,6 +685,31 @@ impl Switcher {
                 )),
                 Err(err) => warn!(?err, "can't upload the window switcher"),
             }
+        }
+        // Behind the panel: the frost it's tinted over. The switcher's
+        // has the blurred scene to cut it from; a dock preview, the
+        // wallpaper, or a solid backing over a window.
+        if let Some(frost) = frost {
+            let panel = geometry.panel;
+            let rect = about_middle(Rectangle::new(panel.loc + output_loc, panel.size));
+            let rect = Rectangle::new(rect.loc - output_loc, rect.size);
+            let (source, under) = if backdrop {
+                (self.blur.crop(output, rect.to_i32_round(), alpha), None)
+            } else {
+                let behind = crate::frost::Behind::new(space, output, None);
+                (None, behind.under(rect.to_i32_round()).cloned())
+            };
+            frost.solid = frost.panel;
+            let radius = frost.panel_radius;
+            elements.extend(frost.elements_from(
+                renderer,
+                if backdrop { "switcher" } else { "preview" },
+                rect,
+                radius,
+                alpha,
+                under.as_ref(),
+                source,
+            ));
         }
         elements
     }
@@ -726,15 +787,14 @@ impl Switcher {
             let mut canvas = Canvas::new(&mut pixels, w, h, scale as f32)?;
             canvas.clear(Color::rgba(0, 0, 0, 0.0));
             let (pw, ph) = (key.size.0 as f32, key.size.1 as f32);
-            let radius = theme.window_radius.max(10.0) + 6.0;
-            canvas.rounded_rect(
-                0.0,
-                0.0,
-                pw,
-                ph,
-                radius,
-                theme.window_background.with_alpha(0.93),
-            );
+            let (background, radius) = match key.frosted {
+                Some((tint, radius)) => (tint, f64::from_bits(radius) as f32),
+                None => (
+                    theme.window_background.with_alpha(0.93),
+                    theme.window_radius.max(10.0) + 6.0,
+                ),
+            };
+            canvas.rounded_rect(0.0, 0.0, pw, ph, radius, background);
             canvas.stroke_rounded_rect(
                 0.0,
                 0.0,

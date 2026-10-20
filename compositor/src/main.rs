@@ -26,6 +26,7 @@ mod popup_anim;
 mod portals;
 mod power;
 mod render;
+mod scene_blur;
 mod schedule;
 mod screenshot;
 mod shaders;

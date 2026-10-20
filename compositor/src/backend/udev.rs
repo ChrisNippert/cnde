@@ -956,6 +956,14 @@ impl State {
                 &mut self.decorations,
                 &self.space,
                 &output,
+                &elements[cursor_count..],
+                crate::frost::window_frost(
+                    &mut self.dock_frost,
+                    &self.wallpapers,
+                    &output,
+                    &self.config,
+                    now,
+                ),
                 now,
             );
             for (i, element) in switcher.into_iter().enumerate() {

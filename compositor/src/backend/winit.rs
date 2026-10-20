@@ -277,25 +277,38 @@ impl State {
                     now,
                 )
             };
+            if self.screenshot.frozen_element(&backend.output).is_none()
+                && !locked
+                && let Some(wallpaper) = wallpaper
+            {
+                elements.push(render::OutputElement::Wallpaper(wallpaper));
+            }
             if !locked {
+                // After the wallpaper: the switcher blurs the scene below it.
                 let switcher = self.switcher.elements(
                     renderer,
                     &mut self.decorations,
                     &self.space,
                     &backend.output,
+                    &elements,
+                    crate::frost::window_frost(
+                        &mut self.dock_frost,
+                        &self.wallpapers,
+                        &backend.output,
+                        &self.config,
+                        now,
+                    ),
                     now,
                 );
                 for (i, element) in switcher.into_iter().enumerate() {
                     elements.insert(i, element);
                 }
             }
-            if self.screenshot.frozen_element(&backend.output).is_none() && !locked {
-                if let Some(wallpaper) = wallpaper {
-                    elements.push(render::OutputElement::Wallpaper(wallpaper));
-                }
-                if self.screenshot.wants_freeze(&backend.output) {
-                    self.screenshot.freeze(renderer, &backend.output, &elements);
-                }
+            if self.screenshot.frozen_element(&backend.output).is_none()
+                && !locked
+                && self.screenshot.wants_freeze(&backend.output)
+            {
+                self.screenshot.freeze(renderer, &backend.output, &elements);
             }
             // A style or wallpaper change: the old look, fading out on top.
             if self.crossfade.wants_capture(&backend.output) && !locked {
