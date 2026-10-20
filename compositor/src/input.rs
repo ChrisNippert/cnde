@@ -212,6 +212,19 @@ impl State {
                     state.suppressed_keys.push(keycode);
                     return FilterResult::Intercept(Some(Action::CloseOverview));
                 }
+                // The switcher: Escape cancels, arrows step.
+                if state.switcher.is_open() {
+                    let step = match sym.raw() {
+                        keysyms::KEY_Escape => Some(Action::CancelSwitcher),
+                        keysyms::KEY_Left => Some(Action::Switcher { back: true }),
+                        keysyms::KEY_Right => Some(Action::Switcher { back: false }),
+                        _ => None,
+                    };
+                    if step.is_some() {
+                        state.suppressed_keys.push(keycode);
+                        return FilterResult::Intercept(step);
+                    }
+                }
                 match keybinds::action_for(mod_key, mods, sym) {
                     Some(action) => {
                         state.suppressed_keys.push(keycode);
@@ -224,6 +237,17 @@ impl State {
 
         if let Some(Some(action)) = action {
             self.run_action(action);
+        }
+        // Letting go of the modifier that opened the switcher picks.
+        if let Some(held) = self.switcher.held() {
+            let mods = keyboard.modifier_state();
+            let still = match held {
+                crate::switcher::Held::Alt => mods.alt,
+                crate::switcher::Held::Logo => mods.logo,
+            };
+            if !still {
+                self.switcher_commit();
+            }
         }
         if std::mem::take(&mut self.mod_tapped) {
             self.run_action(Action::Launcher);
@@ -297,6 +321,17 @@ impl State {
             }
         }
         let sym = smithay::input::keyboard::Keysym::from(sym);
+        // With the switcher up (nothing to release): Return picks, Escape cancels.
+        if self.switcher.is_open() {
+            match sym.raw() {
+                keysyms::KEY_Return => self.switcher_commit(),
+                keysyms::KEY_Escape => self.switcher_cancel(),
+                _ => {}
+            }
+            if sym.raw() != keysyms::KEY_Tab {
+                return;
+            }
+        }
         if let Some(action) = keybinds::action_for(self.mod_key, &mods, sym) {
             self.run_action(action);
         }
@@ -316,6 +351,20 @@ impl State {
             return;
         }
         match action {
+            Action::Switcher { back } => {
+                let held = self.seat.get_keyboard().and_then(|k| {
+                    let mods = k.modifier_state();
+                    if mods.alt {
+                        Some(crate::switcher::Held::Alt)
+                    } else if mods.logo {
+                        Some(crate::switcher::Held::Logo)
+                    } else {
+                        None
+                    }
+                });
+                self.switcher_step(back, held);
+            }
+            Action::CancelSwitcher => self.switcher_cancel(),
             Action::Lock => self.lock_screen(),
             Action::Quit => self.loop_signal.stop(),
             Action::SpawnTerminal => spawn::spawn_terminal(&self.client_env(), &self.config.apps.terminal),
@@ -489,6 +538,14 @@ impl State {
                 },
             );
             pointer.frame(self);
+            return;
+        }
+        // The window switcher swallows clicks; one on a thumbnail picks it.
+        if self.switcher.is_open() {
+            if button_state == ButtonState::Pressed {
+                let location = pointer.current_location();
+                self.switcher_click(location);
+            }
             return;
         }
         // Framing a screenshot: only its overlay gets clicks. Releases always

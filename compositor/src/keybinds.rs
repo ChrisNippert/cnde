@@ -55,6 +55,11 @@ pub enum Action {
     /// Super+Shift+arrow on a tiling workspace: swap the focused tile with
     /// its neighbour that way, or move it to the next monitor's tiles.
     MoveTile(Direction),
+    /// Alt+Tab / Super+Tab (Shift: backwards): the window switcher, which
+    /// stays up while the modifier is held.
+    Switcher { back: bool },
+    /// Escape while the switcher is up.
+    CancelSwitcher,
 }
 
 /// An arrow key's direction.
@@ -109,6 +114,17 @@ pub fn action_for(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> Option
     }
     if sym == keysyms::KEY_Print && !mods.ctrl && !mods.alt {
         return Some(Action::Screenshot);
+    }
+
+    // Alt+Tab and Super+Tab, on real hardware and nested alike (nested the
+    // mod key is Alt, which would otherwise be the only way to reach it).
+    if matches!(sym, keysyms::KEY_Tab | keysyms::KEY_ISO_Left_Tab)
+        && (mods.alt || mods.logo)
+        && !mods.ctrl
+    {
+        return Some(Action::Switcher {
+            back: mods.shift || sym == keysyms::KEY_ISO_Left_Tab,
+        });
     }
 
     // Workspaces: Super+Alt+Left/Right (+Shift carries the window). Nested,
@@ -218,6 +234,25 @@ mod tests {
             action_for(ModKey::Super, &m, Keysym::from(keysyms::KEY_q)),
             None
         );
+    }
+
+    #[test]
+    fn tab_opens_the_switcher() {
+        let at = |mod_key, m: &ModifiersState, key| action_for(mod_key, m, Keysym::from(key));
+        let alt = mods(false, true, false, false);
+        assert_eq!(
+            at(ModKey::Super, &alt, keysyms::KEY_Tab),
+            Some(Action::Switcher { back: false })
+        );
+        assert_eq!(
+            at(ModKey::Alt, &mods(false, true, false, true), keysyms::KEY_Tab),
+            Some(Action::Switcher { back: true })
+        );
+        assert_eq!(
+            at(ModKey::Super, &mods(true, false, false, false), keysyms::KEY_Tab),
+            Some(Action::Switcher { back: false })
+        );
+        assert_eq!(at(ModKey::Super, &mods(false, false, false, false), keysyms::KEY_Tab), None);
     }
 
     #[test]

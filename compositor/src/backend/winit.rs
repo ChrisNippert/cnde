@@ -277,6 +277,18 @@ impl State {
                     now,
                 )
             };
+            if !locked {
+                let switcher = self.switcher.elements(
+                    renderer,
+                    &mut self.decorations,
+                    &self.space,
+                    &backend.output,
+                    now,
+                );
+                for (i, element) in switcher.into_iter().enumerate() {
+                    elements.insert(i, element);
+                }
+            }
             if self.screenshot.frozen_element(&backend.output).is_none() && !locked {
                 if let Some(wallpaper) = wallpaper {
                     elements.push(render::OutputElement::Wallpaper(wallpaper));
@@ -352,6 +364,7 @@ impl State {
             self.snap_preview.as_ref(),
             self.workspaces.is_moving()
                 || self.overview.is_animating(now)
+                || self.switcher.is_animating(now)
                 || self.popup_anims.is_animating(now)
                 || self.dock_frost.is_animating(now)
                 || self.crossfade.is_animating()

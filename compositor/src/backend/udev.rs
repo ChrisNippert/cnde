@@ -950,6 +950,17 @@ impl State {
             if let Some(wallpaper) = wallpaper {
                 elements.push(render::OutputElement::Wallpaper(wallpaper));
             }
+            // The window switcher goes over everything, under the pointer.
+            let switcher = self.switcher.elements(
+                &mut gpu.renderer,
+                &mut self.decorations,
+                &self.space,
+                &output,
+                now,
+            );
+            for (i, element) in switcher.into_iter().enumerate() {
+                elements.insert(cursor_count + i, element);
+            }
             if self.screenshot.wants_freeze(&output) {
                 self.screenshot
                     .freeze(&mut gpu.renderer, &output, &elements[cursor_count..]);
@@ -1051,6 +1062,7 @@ impl State {
             self.snap_preview.as_ref(),
             self.workspaces.is_moving()
                 || self.overview.is_animating(now)
+                || self.switcher.is_animating(now)
                 || self.popup_anims.is_animating(now)
                 || self.dock_frost.is_animating(now)
                 || self.crossfade.is_animating()

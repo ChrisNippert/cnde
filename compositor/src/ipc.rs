@@ -343,7 +343,7 @@ impl State {
 
     /// The dock picked a window: show its workspace (on the main monitor,
     /// unless it's already on screen) and focus it.
-    fn activate_window(&mut self, id: u64) {
+    pub(crate) fn activate_window(&mut self, id: u64) {
         let Some((index, window)) = self.workspaces.list.iter().enumerate().find_map(|(i, ws)| {
             ws.windows
                 .iter()

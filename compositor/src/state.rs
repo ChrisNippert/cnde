@@ -108,6 +108,9 @@ pub struct State {
     pub decorations: crate::decorations::Decorations,
     pub bar_input: crate::decorations::BarInput,
     pub overview: crate::overview::Overview,
+    /// The Alt+Tab switcher, and windows by last focus, newest first.
+    pub switcher: crate::switcher::Switcher,
+    pub mru: Vec<smithay::desktop::Window>,
     pub ipc: crate::ipc::IpcClients,
     pub popup_anims: crate::popup_anim::PopupAnims,
     pub capture: crate::capture::CaptureState,
@@ -234,6 +237,8 @@ impl State {
             decorations: Default::default(),
             bar_input: Default::default(),
             overview: crate::overview::Overview::new(),
+            switcher: Default::default(),
+            mru: Vec::new(),
             ipc: Default::default(),
             popup_anims: Default::default(),
             capture,
