@@ -109,6 +109,22 @@ pub fn items(favorites: &[String], apps: &[AppEntry], windows: &[WindowInfo]) ->
     out
 }
 
+/// A plain click on an app with open windows. Focused already: minimize
+/// it, or cycle to its next window; otherwise bring up its first (which
+/// also restores a minimized one, so a second click undoes the minimize).
+fn running_click(item: &Item, click_minimizes: bool) -> Click {
+    let Some(&first) = item.windows.first() else {
+        return Click::Nothing;
+    };
+    if item.focused && click_minimizes {
+        return Click::Minimize(item.windows.clone());
+    }
+    match item.windows.get(1) {
+        Some(&second) if item.focused => Click::Activate(second),
+        _ => Click::Activate(first),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
     pub x: f32,
@@ -504,7 +520,7 @@ impl Dock {
             left_at: None,
             zone: 0,
             pad: 8.0,
-            click_minimizes: false,
+            click_minimizes: true,
             launcher: LauncherPlace::default(),
             surface_size: (0, 0),
             scale: scale.max(1),
@@ -850,16 +866,7 @@ impl Dock {
         if new_window || item.windows.is_empty() {
             return item.app.clone().map_or(Click::Nothing, Click::Launch);
         }
-        // Focused already: minimize it, or cycle to its next window.
-        if item.focused && self.click_minimizes {
-            return Click::Minimize(item.windows.clone());
-        }
-        let next = if item.focused && item.windows.len() > 1 {
-            item.windows[1]
-        } else {
-            item.windows[0]
-        };
-        Click::Activate(next)
+        running_click(item, self.click_minimizes)
     }
 
     pub fn draw(
@@ -1457,6 +1464,41 @@ mod tests {
             title: String::new(),
             focused,
         }
+    }
+
+    #[test]
+    fn clicking_a_running_app() {
+        let item = |windows: Vec<u64>, focused| Item {
+            app: Some("a.desktop".into()),
+            icon: "a".into(),
+            favorite: false,
+            windows,
+            focused,
+            badge: Badge::default(),
+        };
+        // Not focused: bring up the first window (restoring a minimized one).
+        assert!(matches!(
+            running_click(&item(vec![3, 4], false), true),
+            Click::Activate(3)
+        ));
+        // Focused with click-to-minimize: minimize all of them.
+        assert!(matches!(
+            running_click(&item(vec![3, 4], true), true),
+            Click::Minimize(ids) if ids == [3, 4]
+        ));
+        // Focused without it: cycle to the next window, or stay.
+        assert!(matches!(
+            running_click(&item(vec![3, 4], true), false),
+            Click::Activate(4)
+        ));
+        assert!(matches!(
+            running_click(&item(vec![3], true), false),
+            Click::Activate(3)
+        ));
+        assert!(matches!(
+            running_click(&item(vec![], true), true),
+            Click::Nothing
+        ));
     }
 
     #[test]
