@@ -171,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         spawn::supervise_shell(&state.client_env(), &state.config.autostart.shell);
     }
     if !nested {
-        portals::setup(&state.client_env());
+        portals::setup(&state.client_env(), state.config.portal.share_picker);
         // Unless autostart starts it too: two launchers at once kill each
         // other's daemons and leave two wireplumbers fighting over the card.
         let autostarted = state
@@ -183,6 +183,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if state.config.autostart.audio && !autostarted {
             audio::ensure_running();
         }
+    } else {
+        info!("nested: not exporting the environment or restarting the host's portals");
     }
     for command in &state.config.autostart.commands {
         spawn::spawn_command_line(command, &state.client_env());

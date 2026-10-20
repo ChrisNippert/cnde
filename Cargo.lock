@@ -511,6 +511,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cnde-share-picker"
+version = "0.1.0"
+dependencies = [
+ "cnde-config",
+ "cnde-ui",
+ "smithay-client-toolkit 0.21.1",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-protocols",
+]
+
+[[package]]
 name = "cnde-shell"
 version = "0.1.0"
 dependencies = [

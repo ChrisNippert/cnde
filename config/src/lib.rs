@@ -36,6 +36,8 @@ pub struct Config {
     pub launcher: Launcher,
     pub autostart: Autostart,
     pub lock: Lock,
+    /// Screen sharing through xdg-desktop-portal.
+    pub portal: Portal,
     pub tiling: Tiling,
     /// Switching to the dark style and back by the time of day.
     pub dark_mode: DarkMode,
@@ -887,6 +889,23 @@ impl Default for Lock {
             command: "cnde-lock".into(),
         }
     }
+}
+
+/// Which window picks the screen to share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SharePicker {
+    /// `cnde-share-picker`: cards with a preview of each monitor.
+    #[default]
+    Cnde,
+    /// Leave xdg-desktop-portal-wlr's settings alone.
+    Keep,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Portal {
+    pub share_picker: SharePicker,
 }
 
 impl Default for Autostart {
