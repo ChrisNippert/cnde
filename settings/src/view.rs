@@ -125,6 +125,8 @@ pub struct Ui {
     pub power_mode: Option<crate::power_mode::State>,
     /// The installed apps and defaults (once the page has been opened).
     pub default_apps: Option<crate::defaults::State>,
+    /// The Sound page's playing apps (once the page has been opened).
+    pub sound: Option<crate::sound::State>,
     /// Where the arrangement shows each display while one's dragged (and
     /// until the compositor reports the result).
     pub arranged: Option<Vec<(i32, i32)>>,
@@ -457,6 +459,7 @@ fn page(
         ui.brightness,
         ui.power_mode.as_ref(),
         ui.default_apps.as_ref(),
+        ui.sound.as_ref(),
     );
     let show_advanced = ui.advanced.contains(&ui.page);
     let has_advanced = groups.iter().flat_map(|g| &g.rows).any(|r| r.advanced);
@@ -1343,6 +1346,7 @@ mod tests {
             brightness: Some(50),
             power_mode: None,
             default_apps: None,
+            sound: None,
             arranged: None,
             arranging: None,
         }

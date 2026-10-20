@@ -10,6 +10,7 @@ pub enum Page {
     Displays,
     Wifi,
     Bluetooth,
+    Sound,
     Mouse,
     Keyboard,
     Windows,
@@ -22,7 +23,7 @@ pub enum Page {
 
 impl Page {
     /// In sidebar order: each section's pages run together.
-    pub const ALL: [Page; 12] = [
+    pub const ALL: [Page; 13] = [
         Page::Appearance,
         Page::Panel,
         Page::Dock,
@@ -30,6 +31,7 @@ impl Page {
         Page::Wifi,
         Page::Bluetooth,
         Page::Displays,
+        Page::Sound,
         Page::Mouse,
         Page::Keyboard,
         Page::Power,
@@ -42,7 +44,7 @@ impl Page {
         match self {
             Page::Appearance | Page::Panel | Page::Dock | Page::Windows => "Personalize",
             Page::Wifi | Page::Bluetooth => "Connections",
-            Page::Displays | Page::Mouse | Page::Keyboard | Page::Power => "Devices",
+            Page::Displays | Page::Sound | Page::Mouse | Page::Keyboard | Page::Power => "Devices",
             Page::DefaultApps | Page::Accessibility => "System",
         }
     }
@@ -62,6 +64,7 @@ impl Page {
             Page::Displays => "Displays",
             Page::Wifi => "Wi-Fi",
             Page::Bluetooth => "Bluetooth",
+            Page::Sound => "Sound",
             Page::Mouse => "Mouse & Touchpad",
             Page::Keyboard => "Keyboard",
             Page::Windows => "Windows",
@@ -79,6 +82,7 @@ impl Page {
             Page::Displays => "video-display-symbolic",
             Page::Wifi => "network-wireless-symbolic",
             Page::Bluetooth => "bluetooth-active-symbolic",
+            Page::Sound => "audio-volume-high-symbolic",
             Page::Mouse => "input-mouse-symbolic",
             Page::Keyboard => "input-keyboard-symbolic",
             Page::Windows => "window-restore-symbolic",
@@ -173,6 +177,8 @@ pub enum Key {
     Wifi(WifiKey),
     /// Not in the config: Bluetooth, done through BlueZ.
     Bluetooth(BluetoothKey),
+    /// Not in the config: an app's volume, mute or output, through `pactl`.
+    Sound(SoundKey),
     /// Not in the config: the panel's backlight, set directly.
     Brightness,
     /// Not in the config: the power mode, set through the power daemon.
@@ -191,6 +197,14 @@ pub enum BluetoothKey {
     Device(String),
     /// The code to type on the device being paired.
     Code,
+}
+
+/// A row of the Sound page's app list, by the app's key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SoundKey {
+    Volume(String),
+    Mute(String),
+    Output(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -291,7 +305,12 @@ impl Key {
             }
             // Not the config's business: the window sends these to the
             // Wi-Fi and Bluetooth workers instead.
-            Key::Wifi(_) | Key::Bluetooth(_) | Key::Brightness | Key::PowerMode | Key::DefaultApp(_) => {}
+            Key::Wifi(_)
+            | Key::Bluetooth(_)
+            | Key::Sound(_)
+            | Key::Brightness
+            | Key::PowerMode
+            | Key::DefaultApp(_) => {}
             Key::OutputPosition { name, axis } => {
                 let old = config.output(name).and_then(|o| o.position);
                 let Some(v) = value.as_f64() else {
@@ -614,6 +633,7 @@ pub fn build(
     brightness: Option<u32>,
     power_mode: Option<&crate::power_mode::State>,
     default_apps: Option<&crate::defaults::State>,
+    sound: Option<&crate::sound::State>,
 ) -> Vec<Group> {
     let d = Config::default();
     match page {
@@ -621,6 +641,7 @@ pub fn build(
         Page::Displays => displays_page(c, displays, brightness),
         Page::Wifi => wifi_page(wifi),
         Page::Bluetooth => bluetooth_page(bluetooth),
+        Page::Sound => sound_page(c, &d, sound),
         Page::Mouse => mouse(c, &d),
         Page::Keyboard => keyboard(c, &d),
         Page::Windows => windows(c, &d),
@@ -1175,6 +1196,94 @@ fn bluetooth_page(state: Option<&crate::bluetooth::State>) -> Vec<Group> {
         rows: nearby,
     });
     groups
+}
+
+// --- Sound
+
+fn sound_row(key: SoundKey, title: &str, control: Control, value: Value) -> Row {
+    Row {
+        key: Key::Sound(key),
+        ..wifi_row(WifiKey::Hidden, title, control, value)
+    }
+}
+
+/// The Sound page: the event sounds switch, and a slider, mute switch and
+/// (with several outputs) output choice for each app playing sound.
+fn sound_page(c: &Config, d: &Config, state: Option<&crate::sound::State>) -> Vec<Group> {
+    use crate::sound::Availability;
+    let mut apps = Group {
+        title: "Applications".into(),
+        description: String::new(),
+        rows: Vec::new(),
+    };
+    match state {
+        Some(st) if st.availability == Availability::Ready => {
+            if st.apps.is_empty() {
+                apps.description = "No apps are playing sound".into();
+            }
+            let outputs = choices(
+                &st.sinks
+                    .iter()
+                    .map(|s| (s.description.as_str(), Value::Str(s.name.clone())))
+                    .collect::<Vec<_>>(),
+            );
+            for app in &st.apps {
+                let sub = match app.streams {
+                    1 => app.media.clone(),
+                    n => format!("{n} streams"),
+                };
+                let mut volume = sound_row(
+                    SoundKey::Volume(app.key.clone()),
+                    &app.name,
+                    Control::Slider {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        int: true,
+                        format: |v| format!("{}%", v as i64),
+                    },
+                    Value::Int(i64::from(app.volume.min(100))),
+                );
+                volume.subtitle = sub;
+                apps.rows.push(volume);
+                apps.rows.push(sound_row(
+                    SoundKey::Mute(app.key.clone()),
+                    "Mute",
+                    Control::switch(),
+                    Value::Bool(app.muted),
+                ));
+                if outputs.len() > 1 && st.sinks.iter().any(|s| s.name == app.sink) {
+                    apps.rows.push(sound_row(
+                        SoundKey::Output(app.key.clone()),
+                        "Output",
+                        Control::Dropdown(outputs.clone()),
+                        Value::Str(app.sink.clone()),
+                    ));
+                }
+            }
+        }
+        Some(st) if st.availability == Availability::Unavailable => {
+            apps.description =
+                "App volumes need pactl (PipeWire or PulseAudio), and it isn't answering.".into();
+        }
+        _ => apps.description = "Looking for the audio server…".into(),
+    }
+    vec![
+        group(
+            "Sound",
+            vec![
+                Row::new(
+                    "sound.event_sounds",
+                    "Event sounds",
+                    Control::switch(),
+                    Value::Bool(c.sound.event_sounds),
+                    Value::Bool(d.sound.event_sounds),
+                )
+                .sub("Volume keys, screenshots, low battery, plugging in"),
+            ],
+        ),
+        apps,
+    ]
 }
 
 fn speed(v: f64) -> String {
@@ -2992,19 +3101,6 @@ fn accessibility(c: &Config, d: &Config) -> Vec<Group> {
         ],
     ),
     group(
-        "Sound",
-        vec![
-            Row::new(
-                "sound.event_sounds",
-                "Event sounds",
-                Control::switch(),
-                Value::Bool(c.sound.event_sounds),
-                Value::Bool(d.sound.event_sounds),
-            )
-            .sub("Volume keys, screenshots, low battery, plugging in"),
-        ],
-    ),
-    group(
         "Notifications",
         vec![
             Row::new(
@@ -3061,6 +3157,7 @@ mod tests {
                 WifiView::default(),
                 None,
                 Some(50),
+                None,
                 None,
                 None,
             ) {
@@ -3237,6 +3334,44 @@ mod tests {
         let mut adaptive = Config::default();
         adaptive.appearance.palette = cnde_config::Palette::Adaptive;
         assert!(titles(&adaptive).iter().any(|t| t == "Dock colour"));
+    }
+
+    #[test]
+    fn sound_page_lists_apps() {
+        use crate::sound::{App, Availability, Sink, State};
+        let sink = |i: u32, n: &str| Sink {
+            index: i,
+            name: n.into(),
+            description: n.into(),
+        };
+        let app = |key: &str, ids: Vec<u32>| App {
+            key: key.into(),
+            name: key.into(),
+            streams: ids.len(),
+            ids,
+            volume: 140,
+            muted: false,
+            sink: "a".into(),
+            media: String::new(),
+        };
+        let c = Config::default();
+        let rows = |state: Option<&State>| sound_page(&c, &c, state);
+        assert!(rows(None)[1].rows.is_empty());
+        let mut state = State {
+            availability: Availability::Ready,
+            sinks: vec![sink(1, "a")],
+            apps: Vec::new(),
+        };
+        let groups = rows(Some(&state));
+        assert_eq!(groups[1].description, "No apps are playing sound");
+        state.apps = vec![app("mpv", vec![3]), app("firefox", vec![4, 5])];
+        // One output: no choice of it. Volume and mute for each app.
+        let groups = rows(Some(&state));
+        assert_eq!(groups[1].rows.len(), 4);
+        assert_eq!(groups[1].rows[0].value, Value::Int(100));
+        assert_eq!(groups[1].rows[2].subtitle, "2 streams");
+        state.sinks.push(sink(2, "b"));
+        assert_eq!(rows(Some(&state))[1].rows.len(), 6);
     }
 
     #[test]

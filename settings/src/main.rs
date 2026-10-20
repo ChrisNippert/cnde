@@ -10,6 +10,7 @@ mod bluetooth;
 mod defaults;
 mod pages;
 mod power_mode;
+mod sound;
 mod view;
 mod wallpapers;
 mod wifi;
@@ -77,7 +78,7 @@ use smithay_client_toolkit::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    pages::{BluetoothKey, Control, Display, JoinField, Key, Page, Value, WifiKey},
+    pages::{BluetoothKey, Control, Display, JoinField, Key, Page, SoundKey, Value, WifiKey},
     view::{Edit, Painted, Res, Target, Ui},
 };
 
@@ -149,6 +150,10 @@ struct App {
     power_mode: Option<std::sync::mpsc::Sender<power_mode::Command>>,
     /// Where the app index built when the Default Apps page opens arrives.
     default_apps: Option<channel::Sender<defaults::State>>,
+    /// Where the Sound worker reports; made when the page first opens.
+    sound_tx: Option<channel::Sender<sound::State>>,
+    /// The Sound worker, running only while its page shows.
+    sound: Option<sound::Handle>,
     /// Where a picture chosen through "Add" arrives.
     picked: Option<channel::Sender<Result<Option<wallpapers::Thumb>, String>>>,
     /// The colour on screen, for the adaptive palette (from the compositor).
@@ -321,6 +326,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             bluetooth: None,
             power_mode: None,
             default_apps: None,
+            sound: None,
             brightness: backlight::read(),
             arranged: None,
             arranging: None,
@@ -358,6 +364,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bluetooth: None,
         power_mode: None,
         default_apps: None,
+        sound_tx: None,
+        sound: None,
         picked: Some(picked_tx),
         screen: None,
         no_vrr: HashSet::new(),
@@ -372,6 +380,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if app.ui.page == Page::Power {
         app.open_power();
+    }
+    if app.ui.page == Page::Sound {
+        app.open_sound();
     }
     if app.ui.page == Page::DefaultApps {
         app.open_default_apps();
@@ -479,6 +490,84 @@ impl App {
             }
         } else if let Some(tx) = &self.power_mode {
             let _ = tx.send(power_mode::Command::Refresh);
+        }
+    }
+
+    /// The Sound page is showing: start the worker, which lists the
+    /// playing apps and follows them until the page is left.
+    fn open_sound(&mut self) {
+        if self.sound_tx.is_none() {
+            let (tx, rx) = channel::channel::<sound::State>();
+            let inserted = self
+                .loop_handle
+                .insert_source(rx, |event, _, app: &mut App| {
+                    if let channel::Event::Msg(mut state) = event {
+                        // Leave an app alone while its slider is being dragged.
+                        if let Some(Key::Sound(SoundKey::Volume(key))) = &app.ui.dragging
+                            && let Some(old) = app
+                                .ui
+                                .sound
+                                .as_ref()
+                                .and_then(|s| s.apps.iter().find(|a| a.key == *key))
+                            && let Some(new) = state.apps.iter_mut().find(|a| a.key == *key)
+                        {
+                            new.volume = old.volume;
+                        }
+                        // A worker that was stopped can still have one report in flight.
+                        if app.sound.is_some() {
+                            app.ui.sound = Some(state);
+                            if app.ui.page == Page::Sound {
+                                app.redraw();
+                            }
+                        }
+                    }
+                });
+            if inserted.is_ok() {
+                self.sound_tx = Some(tx);
+            }
+        }
+        if self.sound.is_none()
+            && let Some(tx) = self.sound_tx.clone()
+        {
+            self.sound = Some(sound::start(tx));
+        }
+    }
+
+    /// Left the Sound page: stop the worker (and its `pactl subscribe`).
+    fn close_sound(&mut self) {
+        self.sound = None;
+        self.ui.sound = None;
+    }
+
+    /// The Sound page's sliders, switches and dropdowns go to the worker.
+    fn write_sound(&mut self, key: &SoundKey, value: &Value) {
+        let (SoundKey::Volume(app) | SoundKey::Mute(app) | SoundKey::Output(app)) = key;
+        let Some(state) = &mut self.ui.sound else {
+            return;
+        };
+        let Some(entry) = state.apps.iter_mut().find(|a| a.key == *app) else {
+            return;
+        };
+        let ids = entry.ids.clone();
+        // Show it at once; the worker confirms (or corrects) shortly.
+        let command = match (key, value) {
+            (SoundKey::Volume(_), v) => {
+                let percent = v.as_f64().unwrap_or(0.0).clamp(0.0, 100.0) as u32;
+                entry.volume = percent;
+                sound::Command::Volume(ids, percent)
+            }
+            (SoundKey::Mute(_), Value::Bool(mute)) => {
+                entry.muted = *mute;
+                sound::Command::Mute(ids, *mute)
+            }
+            (SoundKey::Output(_), Value::Str(sink)) => {
+                entry.sink = sink.clone();
+                sound::Command::Output(ids, sink.clone())
+            }
+            _ => return,
+        };
+        if let Some(handle) = &self.sound {
+            handle.command(command);
         }
     }
 
@@ -810,6 +899,7 @@ impl App {
                 Key::Bluetooth(key) => self.write_bluetooth(key, value),
                 Key::Brightness => self.write_brightness(value),
                 Key::PowerMode => self.write_power_mode(value),
+                Key::Sound(key) => self.write_sound(key, value),
                 Key::DefaultApp(cat) => self.write_default_app(cat, value),
                 _ => config_changes.push((key.clone(), value.clone())),
             }
@@ -1003,6 +1093,9 @@ impl App {
                     if self.ui.page == Page::Bluetooth {
                         self.bluetooth_command(bluetooth::Command::Discover(false));
                     }
+                    if self.ui.page == Page::Sound {
+                        self.close_sound();
+                    }
                     self.ui.page = page;
                     self.ui.wifi_details = None;
                     self.res
@@ -1017,6 +1110,9 @@ impl App {
                     }
                     if page == Page::Power {
                         self.open_power();
+                    }
+                    if page == Page::Sound {
+                        self.open_sound();
                     }
                     if page == Page::DefaultApps {
                         self.open_default_apps();
