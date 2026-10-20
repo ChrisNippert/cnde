@@ -112,6 +112,7 @@
 # all_monitors = false     # true: a panel on every monitor, not just the main one
 # tray = "collapsed"       # "collapsed" (a chevron next to the status button opens a popover of icons), "inline" (each icon in the bar), "off"; true/false still work
 # power_icon = true        # a power icon at the end of the status button (power options live in quick settings)
+# media_controls = true    # the clock's popover shows the playing song (any MPRIS player) with prev/play/next
 # height = 32
 # rounded = false          # rounded bottom corners and a soft shadow
 # frosted = true           # just the bar, overriding appearance.material
@@ -172,6 +173,9 @@
 # another notification daemon (mako, dunst); one already running wins anyway.
 # enabled = true
 # do_not_disturb = false     # only urgent ones show; quick settings toggles it
+# history = true             # the clock's popover lists past notifications (kept until cleared, last 100)
+# Another daemon (dunst, mako, swaync --replace) can take over while this runs;
+# when it exits, the shell takes the notifications back.
 
 [lock]
 # The program that locks the screen (Super+L). Any locker using the

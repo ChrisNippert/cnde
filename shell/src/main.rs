@@ -5,21 +5,23 @@
 
 mod actions;
 mod apps;
+mod badges;
+mod calendar;
 mod config;
 mod context_menus;
-mod badges;
 mod dock;
 mod dock_preview;
 mod edit_mode;
+mod history;
 mod ipc;
 mod launcher;
+mod media;
 mod menu;
 mod notifications;
 mod osd;
 mod panel;
 mod polkit;
 mod quick_settings;
-mod calendar;
 mod screenshot;
 mod sounds;
 mod status;
@@ -243,6 +245,9 @@ pub struct App {
     /// The polkit agent's password dialog.
     polkit: polkit::Polkit,
     notifications: notifications::Notifications,
+    /// Past notifications, for the clock's popover.
+    history: history::History,
+    media: media::Media,
     tray: tray::Tray,
     /// Dock icon badges apps report over D-Bus.
     badges: badges::Badges,
@@ -381,6 +386,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         osd: None,
         polkit: polkit::Polkit::default(),
         notifications: notifications::Notifications::default(),
+        history: history::History::default(),
+        media: media::Media::default(),
         tray: tray::Tray::default(),
         badges: Default::default(),
         preview: Default::default(),
@@ -422,6 +429,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     status::start(status_tx);
     app.polkit = polkit::start(&event_loop.handle());
     app.notifications = notifications::setup(&event_loop.handle());
+    app.media = media::setup(&event_loop.handle());
+    app.sync_media();
     app.badges = badges::setup(&event_loop.handle());
     app.sync_notification_server();
     app.tray = tray::setup(&event_loop.handle());
@@ -869,7 +878,10 @@ impl App {
         let placement = (
             self.config.dock.extend && position != DockPosition::Overview,
             self.config.dock.align,
-            self.config.dock.float_align.unwrap_or(self.config.dock.align),
+            self.config
+                .dock
+                .float_align
+                .unwrap_or(self.config.dock.align),
             self.config.dock.reserve,
         );
         // Each dock in its place: the same monitor at the same index.
@@ -883,9 +895,7 @@ impl App {
                 .iter()
                 .zip(&wanted)
                 .take_while(|(d, output)| {
-                    &d.output == *output
-                        && d.position() == position
-                        && d.placement() == placement
+                    &d.output == *output && d.position() == position && d.placement() == placement
                 })
                 .count();
             self.docks.truncate(keep);
@@ -908,7 +918,10 @@ impl App {
                 position,
                 self.config.dock.extend,
                 self.config.dock.align,
-                self.config.dock.float_align.unwrap_or(self.config.dock.align),
+                self.config
+                    .dock
+                    .float_align
+                    .unwrap_or(self.config.dock.align),
                 self.config.dock.reserve,
                 scale,
             ));
@@ -1073,6 +1086,15 @@ impl App {
 
     fn draw_calendar(&mut self) {
         let theme = self.popup_theme();
+        if self.calendar.is_none() {
+            return;
+        }
+        let view = calendar::View {
+            history: self.config.notifications.history.then_some(&self.history),
+            dnd: self.status.do_not_disturb,
+            media: self.config.panel.media_controls.then_some(&self.media),
+            now: history::now(),
+        };
         if let Some(calendar) = &mut self.calendar {
             calendar.draw(
                 &self.qh,
@@ -1081,6 +1103,7 @@ impl App {
                 &mut self.fonts,
                 &mut self.icons,
                 &theme,
+                &view,
             );
         }
     }
@@ -1101,6 +1124,7 @@ impl App {
             .take()
             .is_some_and(|at| at.elapsed() < Duration::from_millis(300));
         if self.calendar.take().is_some() || just_dismissed {
+            self.media.visible(false);
             self.redraw_panels();
             return;
         }
@@ -1114,6 +1138,11 @@ impl App {
         self.menu = None;
         self.quick_settings = None;
         self.tray_popover = None;
+        let layout = calendar::Layout {
+            history: self.config.notifications.history,
+            // Room for the song if one's on; it isn't made later.
+            media: self.config.panel.media_controls && self.media.current().is_some(),
+        };
         self.calendar = calendar::Calendar::open(
             &self.compositor,
             &self.xdg_shell,
@@ -1123,7 +1152,10 @@ impl App {
             serial,
             anchor,
             panel.scale(),
+            layout,
         );
+        self.history.mark_read();
+        self.media.visible(true);
         self.redraw_panels();
     }
 
@@ -1131,6 +1163,7 @@ impl App {
         let Some(calendar) = &mut self.calendar else {
             return;
         };
+        let mut action = None;
         let redraw = match event.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                 calendar.motion(event.position)
@@ -1138,10 +1171,11 @@ impl App {
             PointerEventKind::Leave { .. } => calendar.motion((-1.0, -1.0)),
             PointerEventKind::Press {
                 button: BTN_LEFT, ..
-            } => calendar.press(event.position),
-            PointerEventKind::Axis {
-                vertical, ..
             } => {
+                action = calendar.press(event.position);
+                true
+            }
+            PointerEventKind::Axis { vertical, .. } => {
                 let steps = if vertical.discrete != 0 {
                     vertical.discrete
                 } else if vertical.value120 != 0 {
@@ -1150,11 +1184,14 @@ impl App {
                     // Touchpads: a page per decent swipe.
                     (vertical.absolute / 40.0) as i32
                 };
-                calendar.scroll(steps)
+                calendar.scroll(event.position, steps)
             }
             _ => false,
         };
-        if redraw {
+        if let Some(target) = action {
+            // Redraws.
+            self.centre_action(target);
+        } else if redraw {
             self.draw_calendar();
         }
     }
@@ -1290,6 +1327,7 @@ impl App {
                 overview_open: self.overview_open,
                 quick_settings_open: self.quick_settings.is_some(),
                 calendar_open: self.calendar.is_some(),
+                unread: self.config.notifications.history && self.history.unread(),
                 clock_position: self.config.panel.clock_position,
                 battery_percent: self.config.power.battery_percent,
                 battery_low: self

@@ -36,13 +36,18 @@ use smithay_client_toolkit::{
         wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerSurface},
     },
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use zbus::{
     fdo::{RequestNameFlags, RequestNameReply},
     zvariant::{OwnedValue, Structure},
 };
 
-use crate::App;
+use crate::{
+    App,
+    calendar::Target,
+    history::{self, Entry},
+    media::Op,
+};
 
 const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
@@ -74,7 +79,7 @@ pub enum Event {
     Ready(zbus::blocking::Connection),
     /// Another server took the name from us.
     Lost,
-    Notify(Note),
+    Notify(Box<Note>),
     Close(u32),
 }
 
@@ -93,6 +98,9 @@ pub struct Note {
     timeout: Option<Duration>,
     /// Stays after an action is chosen.
     resident: bool,
+    /// Not worth keeping in the history (volume and the like).
+    transient: bool,
+    desktop_entry: Option<String>,
     sound: Option<String>,
 }
 
@@ -174,7 +182,7 @@ enum Signal {
 enum Step {
     Nothing,
     /// Clear our cards and stop answering.
-    StepBack,
+    GiveWay,
     /// Ask for the name.
     Request,
 }
@@ -182,7 +190,7 @@ enum Step {
 /// What a bus signal about the name means for us.
 fn hand_off(own: Ownership, signal: Signal) -> (Ownership, Step) {
     match (own, signal) {
-        (Ownership::Owner, Signal::Lost) => (Ownership::Out, Step::StepBack),
+        (Ownership::Owner, Signal::Lost) => (Ownership::Out, Step::GiveWay),
         (Ownership::Out, Signal::Free) => (Ownership::Out, Step::Request),
         _ => (own, Step::Nothing),
     }
@@ -246,7 +254,7 @@ fn serve(tx: Sender<Event>, stop: Arc<AtomicBool>) -> zbus::Result<()> {
         own = next;
         match step {
             Step::Nothing => {}
-            Step::StepBack => {
+            Step::GiveWay => {
                 info!("another notification server took over");
                 let _ = tx.send(Event::Lost);
             }
@@ -338,11 +346,13 @@ impl Server {
             critical,
             timeout,
             resident: hint_bool("resident"),
+            transient: hint_bool("transient"),
+            desktop_entry: hint_str(&["desktop-entry"]),
             sound: (!hint_bool("suppress-sound"))
                 .then(|| hint_str(&["sound-name"]))
                 .flatten(),
         };
-        let _ = self.tx.send(Event::Notify(note));
+        let _ = self.tx.send(Event::Notify(Box::new(note)));
         id
     }
 
@@ -488,12 +498,38 @@ impl App {
                 self.sync_notification_server();
                 self.redraw_all();
             }
-            Event::Notify(note) => self.notify(note),
+            Event::Notify(note) => self.notify(*note),
             Event::Close(id) => self.close_notification(id, Reason::Closed),
         }
     }
 
     fn notify(&mut self, note: Note) {
+        if self.config.notifications.history {
+            self.history.push(
+                Entry {
+                    seq: 0,
+                    id: note.id,
+                    app_name: note.app_name.clone(),
+                    icon: note.icon.clone(),
+                    summary: note.summary.clone(),
+                    body: note.body.clone(),
+                    at: history::now(),
+                    actions: note.actions.clone(),
+                    desktop_entry: note.desktop_entry.clone(),
+                },
+                note.transient,
+            );
+            // Looking at the list as it arrives: nothing's unread.
+            if self.calendar.is_some() {
+                self.history.mark_read();
+            }
+            // Looking at the list as it arrives: nothing's unread.
+            if self.calendar.is_some() {
+                self.history.mark_read();
+            }
+            self.draw_calendar();
+            self.redraw_panels();
+        }
         if self.config.notifications.do_not_disturb && !note.critical {
             // Not kept anywhere yet: as if it had timed out.
             self.notification_closed(note.id, Reason::Expired);
@@ -689,6 +725,53 @@ impl App {
             stack.hover = hover;
             self.draw_notifications();
         }
+    }
+
+    /// A click in the clock's popover that isn't about the month.
+    pub fn centre_action(&mut self, target: Target) {
+        debug!(?target, "notification centre click");
+        match target {
+            Target::Item(seq) => {
+                let Some(entry) = self.history.get(seq) else {
+                    return;
+                };
+                // The app hears about the click; it raises itself.
+                if entry.has_default() {
+                    let id = entry.id;
+                    self.notification_signal("ActionInvoked", &(id, "default"));
+                    self.history.remove(seq);
+                }
+            }
+            Target::Dismiss(seq) => self.history.remove(seq),
+            Target::ClearApp(i) => {
+                if let Some(app) = self.calendar.as_ref().and_then(|c| c.app_name(i)) {
+                    let app = app.to_string();
+                    self.history.clear_app(&app);
+                }
+            }
+            Target::ClearAll => self.history.clear(),
+            Target::DoNotDisturb => {
+                crate::config::set_do_not_disturb(!self.config.notifications.do_not_disturb)
+            }
+            Target::PlayPause | Target::Next | Target::Previous => {
+                if let Some(bus) = self.media.current().map(|p| p.bus.clone()) {
+                    let op = match target {
+                        Target::Next => Op::Next,
+                        Target::Previous => Op::Previous,
+                        _ => Op::PlayPause,
+                    };
+                    self.media.control(&bus, op);
+                }
+            }
+            Target::Pick(i) => {
+                let bus = self.media.live().get(i).map(|p| p.bus.clone());
+                if bus.is_some() {
+                    self.media.selected = bus;
+                }
+            }
+            Target::Month(_) => {}
+        }
+        self.draw_calendar();
     }
 
     /// A click: `secondary` (right button) dismisses.
@@ -941,7 +1024,7 @@ mod tests {
     fn name_hand_off() {
         use {Ownership::*, Signal::*, Step::*};
         // Replaced while serving: step back, then take it again when free.
-        assert_eq!(hand_off(Owner, Lost), (Out, StepBack));
+        assert_eq!(hand_off(Owner, Lost), (Out, GiveWay));
         assert_eq!(hand_off(Out, Free), (Out, Request));
         // Another server was there from the start: wait for it to go.
         assert_eq!(hand_off(Out, Lost), (Out, Nothing));

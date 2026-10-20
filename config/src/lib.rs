@@ -536,6 +536,8 @@ pub struct Panel {
     pub tray: TrayMode,
     /// A power icon at the end of the status button.
     pub power_icon: bool,
+    /// Media controls (MPRIS players) in the clock's popover.
+    pub media_controls: bool,
     /// Logical pixels.
     pub height: u32,
     /// Rounded bottom corners and a soft shadow; off, a flat strip.
@@ -572,6 +574,7 @@ impl Default for Panel {
             all_monitors: false,
             tray: TrayMode::Collapsed,
             power_icon: true,
+            media_controls: true,
             height: 32,
             rounded: false,
             frosted: None,
@@ -853,6 +856,8 @@ pub struct Notifications {
     pub enabled: bool,
     /// Only urgent notifications show (quick settings toggles it).
     pub do_not_disturb: bool,
+    /// The clock's popover lists the notifications received, grouped by app.
+    pub history: bool,
 }
 
 impl Default for Notifications {
@@ -860,6 +865,7 @@ impl Default for Notifications {
         Self {
             enabled: true,
             do_not_disturb: false,
+            history: true,
         }
     }
 }
