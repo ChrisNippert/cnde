@@ -15,7 +15,7 @@ use std::{
 use smithay_client_toolkit::reexports::calloop::channel::Sender as UpdateSender;
 use tracing::warn;
 
-use crate::status::Update;
+use crate::{audio::Kind, status::Update};
 use zbus::blocking::{Connection, fdo::PropertiesProxy};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +24,12 @@ pub enum Action {
     SetVolume(u32),
     ToggleMute,
     ToggleMicMute,
+    /// Percent of the default input (its gain).
+    SetMicVolume(u32),
+    /// Make an output or input the default and bring its streams along.
+    SelectDevice(Kind, String),
+    /// Switch a device to a port (headphones, speakers) and select it.
+    SelectPort(Kind, String, String),
     SetWifi(bool),
     /// Percent of the panel's maximum brightness.
     SetBrightness(u32),
@@ -67,6 +73,9 @@ fn worker(rx: Receiver<Action>, updates: UpdateSender<Update>) {
             // A later value for the same slider makes this one pointless.
             let superseded = match action {
                 Action::SetVolume(_) => queue.iter().any(|a| matches!(a, Action::SetVolume(_))),
+                Action::SetMicVolume(_) => {
+                    queue.iter().any(|a| matches!(a, Action::SetMicVolume(_)))
+                }
                 Action::SetBrightness(_) => {
                     queue.iter().any(|a| matches!(a, Action::SetBrightness(_)))
                 }
@@ -87,6 +96,13 @@ fn perform(action: Action, updates: &UpdateSender<Update>) {
         }
         Action::ToggleMute => pactl(&["set-sink-mute", "@DEFAULT_SINK@", "toggle"]),
         Action::ToggleMicMute => pactl(&["set-source-mute", "@DEFAULT_SOURCE@", "toggle"]),
+        Action::SetMicVolume(percent) => pactl(&[
+            "set-source-volume",
+            "@DEFAULT_SOURCE@",
+            &format!("{percent}%"),
+        ]),
+        Action::SelectDevice(kind, name) => crate::audio::select(*kind, name),
+        Action::SelectPort(kind, device, port) => crate::audio::select_port(*kind, device, port),
         Action::SetWifi(enabled) => set_wifi(*enabled),
         Action::SetBrightness(percent) => set_brightness(*percent),
         Action::SetPowerProfile(profile) => set_power_profile(*profile),

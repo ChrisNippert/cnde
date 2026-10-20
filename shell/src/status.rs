@@ -13,6 +13,7 @@ use std::{
     collections::HashMap,
     io::{BufRead, BufReader},
     process::{Command, Stdio},
+    sync::mpsc,
     thread,
     time::Duration,
 };
@@ -35,6 +36,8 @@ pub enum Update {
     /// Whether the Wi-Fi radio is on; `None` if we can't switch it.
     WifiEnabled(Option<bool>),
     Volume(Option<Volume>),
+    /// The outputs and inputs, and whether something is recording.
+    Audio(crate::audio::Audio),
     PowerProfiles(Option<PowerProfiles>),
     /// The mode last chosen through `power.profile_command`.
     CustomProfile(PowerProfile),
@@ -396,7 +399,8 @@ fn dbm_to_percent(dbm: f64) -> u8 {
 // --- Volume: PipeWire has no D-Bus API; `pactl subscribe` reports changes.
 
 fn volume(tx: &Sender<Update>) -> zbus::Result<()> {
-    let mut out = Dedup::new(tx);
+    let mut volume = Dedup::new(tx);
+    let mut devices = Dedup::new(tx);
     loop {
         let mut cmd = Command::new("pactl");
         cmd.arg("subscribe");
@@ -405,8 +409,10 @@ fn volume(tx: &Sender<Update>) -> zbus::Result<()> {
         // SAFETY: prctl is async-signal-safe and touches no shared state.
         unsafe {
             cmd.pre_exec(|| {
-                rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM))
-                    .map_err(std::io::Error::from)
+                rustix::process::set_parent_process_death_signal(Some(
+                    rustix::process::Signal::TERM,
+                ))
+                .map_err(std::io::Error::from)
             });
         }
         if let Ok(mut child) = cmd
@@ -415,23 +421,53 @@ fn volume(tx: &Sender<Update>) -> zbus::Result<()> {
             .stderr(Stdio::null())
             .spawn()
         {
-            out.send(Update::Volume(read_volume()));
+            let mut publish = || {
+                let audio = crate::audio::read();
+                let default = audio
+                    .as_ref()
+                    .and_then(|a| a.default_device(crate::audio::Kind::Output));
+                volume.send(Update::Volume(default.map(|d| Volume {
+                    percent: d.percent,
+                    muted: d.muted,
+                })));
+                devices.send(Update::Audio(audio.unwrap_or_default()));
+            };
+            publish();
             if let Some(stdout) = child.stdout.take() {
-                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                    // "Event 'change' on sink #56", "... on server", ...
-                    if line.contains("sink") || line.contains("server") {
-                        out.send(Update::Volume(read_volume()));
-                    }
+                let (events_tx, events) = mpsc::channel();
+                let _ = thread::Builder::new()
+                    .name("status-volume-events".into())
+                    .spawn(move || {
+                        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                            // "Event 'change' on sink #56", "... on server", ...
+                            if ["sink", "source", "card", "server"]
+                                .iter()
+                                .any(|word| line.contains(word))
+                            {
+                                let _ = events_tx.send(());
+                            }
+                        }
+                    });
+                while events.recv().is_ok() {
+                    // A burst of events (a stream starting touches several
+                    // objects) costs one listing.
+                    thread::sleep(AUDIO_DEBOUNCE);
+                    while events.try_recv().is_ok() {}
+                    publish();
                 }
             }
             let _ = child.wait();
         }
         // No audio server (yet, e.g. PipeWire still starting at login, or it
         // restarted): hide the icon and try again shortly.
-        out.send(Update::Volume(None));
+        volume.send(Update::Volume(None));
+        devices.send(Update::Audio(crate::audio::Audio::default()));
         thread::sleep(Duration::from_secs(3));
     }
 }
+
+/// Wait this long after an audio event before listing the devices again.
+const AUDIO_DEBOUNCE: Duration = Duration::from_millis(100);
 
 // --- Power mode: power-profiles-daemon.
 
@@ -649,28 +685,6 @@ pub fn read_backlight() -> Option<Backlight> {
         current: number("brightness")?,
         path,
     })
-}
-
-fn read_volume() -> Option<Volume> {
-    let run = |args: &[&str]| -> Option<String> {
-        let output = Command::new("pactl")
-            .args(args)
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
-    };
-    // "Volume: front-left: 26214 /  40% / -23.88 dB,   front-right: ..."
-    let volume = run(&["get-sink-volume", "@DEFAULT_SINK@"])?;
-    let percent = volume
-        .split('/')
-        .nth(1)
-        .and_then(|part| part.trim().trim_end_matches('%').parse().ok())?;
-    let muted = run(&["get-sink-mute", "@DEFAULT_SINK@"]).is_some_and(|m| m.contains("yes"));
-    Some(Volume { percent, muted })
 }
 
 #[cfg(test)]
