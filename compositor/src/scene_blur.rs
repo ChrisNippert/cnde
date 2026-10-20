@@ -131,12 +131,15 @@ fn resample(
     to: Size<i32, Physical>,
     shader: Option<(&GlesTexProgram, [f32; 2])>,
 ) -> Option<GlesTexture> {
+    let from = smithay::backend::renderer::Texture::size(&texture);
     let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
+    // An explicit source, or the size override crops instead of scaling.
+    let src = Rectangle::from_size(Size::<f64, Logical>::from((from.w as f64, from.h as f64)));
     let source = TextureRenderElement::from_texture_buffer(
         (0.0, 0.0),
         &buffer,
         Some(1.0),
-        None,
+        Some(src),
         Some(Size::from((to.w, to.h))),
         Kind::Unspecified,
     );
