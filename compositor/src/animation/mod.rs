@@ -26,6 +26,7 @@ fn speed() -> f64 {
 #[derive(Debug, Clone, Copy)]
 pub enum Curve {
     Linear,
+    EaseInCubic,
     EaseOutCubic,
     EaseOutExpo,
 }
@@ -36,6 +37,7 @@ impl Curve {
         let t = t.clamp(0.0, 1.0);
         match self {
             Curve::Linear => t,
+            Curve::EaseInCubic => t.powi(3),
             Curve::EaseOutCubic => 1.0 - (1.0 - t).powi(3),
             Curve::EaseOutExpo => {
                 if t >= 1.0 {
@@ -113,7 +115,7 @@ mod tests {
 
     #[test]
     fn curves_hit_endpoints() {
-        for curve in [Curve::Linear, Curve::EaseOutCubic, Curve::EaseOutExpo] {
+        for curve in [Curve::Linear, Curve::EaseInCubic, Curve::EaseOutCubic, Curve::EaseOutExpo] {
             assert_eq!(curve.apply(0.0), 0.0);
             assert!((curve.apply(1.0) - 1.0).abs() < 1e-9);
         }

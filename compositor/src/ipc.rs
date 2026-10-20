@@ -201,6 +201,14 @@ impl State {
                 side,
             } => self.dock_preview(&output, &windows, cell, side),
             Request::DockPreviewHide => self.dock_preview_hide(),
+            Request::DockIcons { output, icons } => {
+                self.dock_icons.retain(|_, (o, _)| *o != output);
+                for icon in icons {
+                    for id in icon.windows {
+                        self.dock_icons.insert(id, (output.clone(), icon.cell));
+                    }
+                }
+            }
             Request::CloseWindow { id } => {
                 let window = self
                     .workspaces
@@ -416,6 +424,22 @@ impl State {
             return;
         };
         let minimized = crate::window::with_state(&window, |s| std::mem::take(&mut s.minimized));
+        if minimized {
+            // Grows out of its dock icon (set before the layout, which
+            // leaves opening windows to their own animation).
+            let from = self.dock_icon_rect(&window);
+            tracing::debug!(?from, "restoring minimized window");
+            crate::window::with_state(&window, |s| {
+                s.open_from = from;
+                if from.is_some() {
+                    s.open_anim = Some(crate::animation::Animation::new(
+                        0.0,
+                        1.0,
+                        crate::animation::presets::WINDOW_RESTORE,
+                    ));
+                }
+            });
+        }
         let visible = self.space.elements().any(|w| w == &window);
         if !visible {
             let current = self

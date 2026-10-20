@@ -44,6 +44,9 @@ pub struct WindowState {
     /// fullscreen returns to, instead of floating.
     pub before_fullscreen: Option<Placement>,
     pub open_anim: Option<Animation>,
+    /// With `open_anim`: the dock icon (global coordinates) it grows out of,
+    /// when restored from minimized.
+    pub open_from: Option<Rectangle<f64, Logical>>,
     pub resize_anim: Option<ResizeAnim>,
     pub pending_size: Option<PendingSize>,
     /// Position relative to its monitor's origin; kept for hidden windows
@@ -162,6 +165,12 @@ impl State {
     /// Keep showing a destroyed window as a fading, shrinking snapshot. Must
     /// run before the window is unmapped, while its buffers still exist.
     pub fn start_close_animation(&mut self, window: &Window) {
+        self.start_close_animation_to(window, None);
+    }
+
+    /// [`start_close_animation`](Self::start_close_animation), flying into
+    /// the dock icon `icon` (global coordinates) if given.
+    fn start_close_animation_to(&mut self, window: &Window, icon: Option<Rectangle<f64, Logical>>) {
         let Some(below) = self.space.elements().position(|w| w == window) else {
             return;
         };
@@ -185,9 +194,15 @@ impl State {
         };
         let snapshot = if alive { self.snapshot(window) } else { None }
             .or_else(|| Snapshot::from_last_frame(self.backend.renderer()?, last_frame?));
-        debug!(captured = snapshot.is_some(), "window closing");
+        debug!(
+            captured = snapshot.is_some(),
+            ?rect,
+            ?icon,
+            "window closing"
+        );
         if let Some(snapshot) = snapshot {
-            self.closing.push(ClosingWindow::new(snapshot, rect, below));
+            self.closing
+                .push(ClosingWindow::new(snapshot, rect, icon, below));
             self.queue_redraw();
         }
     }
@@ -418,13 +433,44 @@ impl State {
         self.queue_redraw();
     }
 
-    /// Hide `window` until it's activated again; it shrinks away like a
-    /// closing one.
+    /// Where `window`'s dock icon is on screen (global coordinates), if the
+    /// dock told us, it's on the monitor showing the window's workspace and
+    /// fully in view (an autohidden dock isn't).
+    pub(crate) fn dock_icon_rect(&self, window: &Window) -> Option<Rectangle<f64, Logical>> {
+        let id = with_state(window, |s| s.id);
+        let (output_name, cell) = self.dock_icons.get(&id)?;
+        let output = self.space.outputs().find(|o| o.name() == *output_name)?;
+        let shown = self
+            .workspaces
+            .list
+            .iter()
+            .position(|ws| ws.windows.contains(window))
+            == self.workspace_on(output);
+        let output_geo = self.space.output_geometry(output)?.to_f64();
+        let area = {
+            let map = smithay::desktop::layer_map_for_output(output);
+            map.layers()
+                .find(|l| l.namespace() == cnde_ipc::dock::NAMESPACE)
+                .and_then(|l| map.layer_geometry(l))?
+        };
+        let rect = Rectangle::new(
+            Point::from((
+                output_geo.loc.x + area.loc.x as f64 + cell[0],
+                output_geo.loc.y + area.loc.y as f64 + cell[1],
+            )),
+            Size::from((cell[2], cell[3])),
+        );
+        (shown && output_geo.contains_rect(rect)).then_some(rect)
+    }
+
+    /// Hide `window` until it's activated again; it flies into its dock
+    /// icon, or shrinks away like a closing one without it.
     pub fn minimize(&mut self, window: &Window) {
         if !self.space.elements().any(|w| w == window) {
             return;
         }
-        self.start_close_animation(window);
+        let icon = self.dock_icon_rect(window);
+        self.start_close_animation_to(window, icon);
         with_state(window, |s| s.minimized = true);
         self.space.unmap_elem(window);
         self.relayout_visible(true);

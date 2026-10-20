@@ -135,16 +135,29 @@ pub struct ClosingWindow {
     /// Where the window geometry was drawn when it closed.
     rect: Rectangle<f64, Logical>,
     anim: Animation,
+    /// A dock icon it flies into (minimizing), instead of shrinking away.
+    icon: Option<Rectangle<f64, Logical>>,
     /// Stacking position: how many windows were below it.
     pub below: usize,
 }
 
 impl ClosingWindow {
-    pub fn new(snapshot: Snapshot, rect: Rectangle<f64, Logical>, below: usize) -> Self {
+    pub fn new(
+        snapshot: Snapshot,
+        rect: Rectangle<f64, Logical>,
+        icon: Option<Rectangle<f64, Logical>>,
+        below: usize,
+    ) -> Self {
+        let params = if icon.is_some() {
+            presets::WINDOW_MINIMIZE
+        } else {
+            presets::WINDOW_CLOSE
+        };
         Self {
             snapshot,
             rect,
-            anim: Animation::new(0.0, 1.0, presets::WINDOW_CLOSE),
+            anim: Animation::new(0.0, 1.0, params),
+            icon,
             below,
         }
     }
@@ -156,6 +169,14 @@ impl ClosingWindow {
     /// The snapshot to draw, where (space coordinates) and how opaque.
     pub fn frame(&self, now: Instant) -> (&Snapshot, Rectangle<f64, Logical>, f32) {
         let progress = self.anim.value_at(now);
+        if let Some(icon) = self.icon {
+            let to = fit_into(icon, self.rect.size);
+            return (
+                &self.snapshot,
+                lerp_rect(self.rect, to, progress),
+                dock_fade(progress),
+            );
+        }
         let scale = 1.0 - (1.0 - presets::WINDOW_CLOSE_END_SCALE) * progress;
         (
             &self.snapshot,
@@ -230,11 +251,18 @@ pub fn window_frame(
 
     if let Some(open) = &state.open_anim {
         let progress = open.value_at(now);
-        let start = presets::WINDOW_OPEN_START_SCALE;
-        frame.rect = scale_about_centre(frame.rect, start + (1.0 - start) * progress);
-        frame.alpha = progress as f32;
+        if let Some(icon) = state.open_from {
+            // Restoring: grows out of its dock icon.
+            frame.rect = lerp_rect(fit_into(icon, frame.rect.size), frame.rect, progress);
+            frame.alpha = dock_fade(1.0 - progress);
+        } else {
+            let start = presets::WINDOW_OPEN_START_SCALE;
+            frame.rect = scale_about_centre(frame.rect, start + (1.0 - start) * progress);
+            frame.alpha = progress as f32;
+        }
         if open.is_done(now) {
             state.open_anim = None;
+            state.open_from = None;
         }
     }
 
@@ -267,6 +295,27 @@ pub fn lerp_rect(
         Point::from((lerp(a.loc.x, b.loc.x, t), lerp(a.loc.y, b.loc.y, t))),
         Size::from((lerp(a.size.w, b.size.w, t), lerp(a.size.h, b.size.h, t))),
     )
+}
+
+/// `size` shrunk to fit inside `icon` (keeping its shape), centred on it:
+/// where a window sits fully in the dock.
+fn fit_into(icon: Rectangle<f64, Logical>, size: Size<f64, Logical>) -> Rectangle<f64, Logical> {
+    let scale = (icon.size.w / size.w.max(1.0)).min(icon.size.h / size.h.max(1.0));
+    let size = size.upscale(scale);
+    Rectangle::new(
+        Point::from((
+            icon.loc.x + (icon.size.w - size.w) / 2.0,
+            icon.loc.y + (icon.size.h - size.h) / 2.0,
+        )),
+        size,
+    )
+}
+
+/// Opacity on the way into the dock (`progress` 0 to 1): solid for most of
+/// it, a slight fade at the end.
+fn dock_fade(progress: f64) -> f32 {
+    let t = ((progress - 0.6) / 0.4).clamp(0.0, 1.0);
+    (1.0 - 0.5 * t) as f32
 }
 
 fn scale_about_centre(rect: Rectangle<f64, Logical>, scale: f64) -> Rectangle<f64, Logical> {

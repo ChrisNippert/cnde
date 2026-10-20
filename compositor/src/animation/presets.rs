@@ -32,6 +32,17 @@ pub const WINDOW_CLOSE: Params = Params {
 /// Closing windows shrink to this scale while fading out.
 pub const WINDOW_CLOSE_END_SCALE: f64 = 0.9;
 
+/// Minimizing flies the window into its dock icon; restoring grows it back
+/// out. Both only when the icon is known and on screen.
+pub const WINDOW_MINIMIZE: Params = Params {
+    duration: Duration::from_millis(280),
+    curve: Curve::EaseInCubic,
+};
+pub const WINDOW_RESTORE: Params = Params {
+    duration: Duration::from_millis(280),
+    curve: Curve::EaseOutCubic,
+};
+
 /// Sliding the workspace strip by one (keys, or settling after a swipe).
 pub const WORKSPACE_SWITCH: Params = Params {
     duration: Duration::from_millis(300),

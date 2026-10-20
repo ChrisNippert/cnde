@@ -93,6 +93,9 @@ pub struct State {
     pub shell_popup_grab: bool,
     /// Snapshots of destroyed windows, still animating out.
     pub closing: Vec<ClosingWindow>,
+    /// Window id to the dock icon holding it: its output and cell within
+    /// the dock's surface (see `Request::DockIcons`).
+    pub dock_icons: std::collections::HashMap<u64, (String, [f64; 4])>,
     pub wallpapers: crate::wallpaper::Wallpapers,
     pub dock_frost: crate::frost::DockFrost,
     /// Window colours for the adaptive palette.
@@ -230,6 +233,7 @@ impl State {
             unmapped: Vec::new(),
             shell_popup_grab: false,
             closing: Vec::new(),
+            dock_icons: Default::default(),
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
             dock_frost: Default::default(),
             tints: Default::default(),
