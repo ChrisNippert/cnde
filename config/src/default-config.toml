@@ -188,3 +188,44 @@
 # The terminal for Super+Q, "Open in Terminal" and terminal apps, as a
 # desktop file ID. "" looks for $TERMINAL, then common terminals.
 # terminal = "foot.desktop"
+
+[shortcuts]
+# Each action takes a combo or a list of them; "" or [] turns it off. Modifiers:
+# Super (also Mod4, Logo), Alt, Ctrl, Shift; keys are xkb names (Q, Return,
+# Left, bracketleft, F5...). Case doesn't matter. Nested in another desktop
+# Super is Alt instead, and Super+Alt becomes Alt+Ctrl. A later binding wins
+# a clash (logged). Fixed: Ctrl+Alt+Backspace quits, Ctrl+Alt+F1..F12 switch
+# VT, the volume/brightness keys, and tapping Super (see [launcher]).
+# terminal = "Super+Q"                      # open a terminal
+# browser = "Super+F"                       # open the web browser
+# files = "Super+E"                         # open the default file manager
+# system_monitor = "Ctrl+Shift+Escape"      # open the system monitor (dock.system_monitor)
+# close = ["Super+C", "Alt+F4"]             # close the window
+# lock = "Super+L"                          # lock the screen
+# app_grid = "Super+A"                      # show the app grid
+# show_desktop = "Super+D"                  # minimize everything here; again brings them back
+# screenshot = ["Super+Shift+S", "Print"]   # take a screenshot
+# switcher = ["Alt+Tab", "Super+Tab"]       # switch windows
+# switcher_back = ["Alt+Shift+Tab", "Super+Shift+Tab"]  # switch windows, backwards
+# maximize = "Super+Up"                     # maximize (tiling: focus up)
+# restore = "Super+Down"                    # restore (tiling: focus down)
+# snap_left = "Super+Left"                  # snap left (tiling: focus left)
+# snap_right = "Super+Right"                # snap right (tiling: focus right)
+# fullscreen = "Super+Shift+F"              # toggle fullscreen
+# toggle_tiling = "Super+T"                 # tile or float this workspace
+# toggle_floating = "Super+Shift+T"         # float or tile the focused window
+# swap_master = ["Super+Return", "Super+KP_Enter"]              # swap with the main tile
+# master_wider = "Super+bracketright"       # widen the main tile
+# master_narrower = "Super+bracketleft"     # narrow the main tile
+# move_tile_left = "Super+Shift+Left"       # move the tile left (or to the next monitor)
+# move_tile_right = "Super+Shift+Right"     # move the tile right
+# move_tile_up = "Super+Shift+Up"           # move the tile up
+# move_tile_down = "Super+Shift+Down"       # move the tile down
+# workspace_prev = "Super+Alt+Left"         # previous workspace
+# workspace_next = "Super+Alt+Right"        # next workspace
+# workspace_prev_carry = "Super+Alt+Shift+Left"   # previous workspace, with the window
+# workspace_next_carry = "Super+Alt+Shift+Right"  # next workspace, with the window
+# Your own keys run a command:
+# [[shortcuts.custom]]
+# keys = "Super+B"
+# command = "firefox --private-window"

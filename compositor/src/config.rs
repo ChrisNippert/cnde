@@ -122,6 +122,9 @@ impl State {
     /// Push config values into the running compositor. `old` is `None` at
     /// startup, when everything is applied.
     pub fn apply_config(&mut self, old: Option<&Config>) {
+        if old.is_none_or(|old| old.shortcuts != self.config.shortcuts) {
+            self.shortcuts = crate::keybinds::Shortcuts::build(&self.config.shortcuts, self.mod_key);
+        }
         animation::set_speed(self.config.animations.speed);
         self.decorations.appearance = self.config.appearance.clone();
         self.decorations.all_buttons =

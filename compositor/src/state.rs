@@ -126,6 +126,10 @@ pub struct State {
     /// What the pointer should look like, as last requested by a client.
     pub cursor_status: CursorImageStatus,
     pub mod_key: ModKey,
+    /// `[shortcuts]`, compiled; rebuilt on config changes.
+    pub shortcuts: crate::keybinds::Shortcuts,
+    /// Show Desktop: the workspace and windows it minimized, to bring back.
+    pub desktop_shown: Option<(u64, Vec<u64>)>,
     /// The mod key went down alone; releasing it without anything else
     /// happening in between counts as a tap (opens the launcher).
     pub mod_tap_armed: bool,
@@ -251,6 +255,8 @@ impl State {
             seat,
             cursor_status: CursorImageStatus::default_named(),
             mod_key,
+            shortcuts: Default::default(),
+            desktop_shown: None,
             mod_tap_armed: false,
             mod_tapped: false,
             mod_tap_opened: None,

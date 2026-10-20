@@ -341,6 +341,44 @@ impl State {
         touching
     }
 
+    /// Show Desktop: minimize every window on the current workspace and
+    /// remember them; pressed again, bring those back, but only while
+    /// nothing else was opened or restored in between.
+    pub(crate) fn toggle_show_desktop(&mut self) {
+        use crate::window::with_state;
+        let Some(ws) = self.workspaces.list.get(self.workspaces.active) else {
+            return;
+        };
+        let ws_id = ws.id;
+        // Bottom to top, with whether each is minimized.
+        let windows: Vec<(smithay::desktop::Window, u64, bool)> = ws
+            .windows
+            .iter()
+            .map(|w| {
+                let (id, minimized) = with_state(w, |s| (s.id, s.minimized));
+                (w.clone(), id, minimized)
+            })
+            .collect();
+        if let Some((id, hidden)) = self.desktop_shown.take()
+            && id == ws_id
+            && windows.iter().all(|(_, _, minimized)| *minimized)
+            && hidden.iter().all(|h| windows.iter().any(|(_, id, _)| id == h))
+        {
+            for id in hidden {
+                self.activate_window(id);
+            }
+            return;
+        }
+        let shown: Vec<_> = windows.into_iter().filter(|(_, _, minimized)| !minimized).collect();
+        if shown.is_empty() {
+            return;
+        }
+        self.desktop_shown = Some((ws_id, shown.iter().map(|(_, id, _)| *id).collect()));
+        for (window, _, _) in &shown {
+            self.minimize(window);
+        }
+    }
+
     /// The dock picked a window: show its workspace (on the main monitor,
     /// unless it's already on screen) and focus it.
     pub(crate) fn activate_window(&mut self, id: u64) {

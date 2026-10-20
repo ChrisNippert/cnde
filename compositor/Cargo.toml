@@ -9,6 +9,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 bitflags = "2"
 xcursor = "0.3"
+cnde-apps = { path = "../apps" }
 cnde-config = { path = "../config" }
 cnde-ipc = { path = "../ipc" }
 # Title bars for apps that let the compositor draw them: same text and

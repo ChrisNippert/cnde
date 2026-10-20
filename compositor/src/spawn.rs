@@ -124,6 +124,25 @@ fn prefer_sibling(argv: &mut [String]) {
     }
 }
 
+/// The default file manager (the `inode/directory` handler) on the home
+/// folder; `cnde-files` if none is set.
+pub fn spawn_files(env: &ClientEnv) {
+    let env = env.clone();
+    thread::spawn(move || {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let index = cnde_apps::Index::build(cnde_apps::Env::from_env());
+        let mut candidates: Vec<Vec<String>> = Vec::new();
+        if let Some(i) = index.default_for("inode/directory") {
+            let files: Vec<PathBuf> = home.into_iter().collect();
+            candidates.extend(cnde_apps::commands(&index.apps[i], &files));
+        }
+        let mut fallback = vec!["cnde-files".to_string()];
+        prefer_sibling(&mut fallback);
+        candidates.push(fallback);
+        run_first_available(candidates, &env);
+    });
+}
+
 pub fn spawn_command_line(command: &str, env: &ClientEnv) {
     let env = env.clone();
     let mut argv = split_command_line(command);

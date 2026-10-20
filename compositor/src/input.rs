@@ -225,7 +225,7 @@ impl State {
                         return FilterResult::Intercept(step);
                     }
                 }
-                match keybinds::action_for(mod_key, mods, sym) {
+                match keybinds::action_for(&state.shortcuts, mods, sym) {
                     Some(action) => {
                         state.suppressed_keys.push(keycode);
                         FilterResult::Intercept(Some(action))
@@ -332,7 +332,7 @@ impl State {
                 return;
             }
         }
-        if let Some(action) = keybinds::action_for(self.mod_key, &mods, sym) {
+        if let Some(action) = keybinds::action_for(&self.shortcuts, &mods, sym) {
             self.run_action(action);
         }
     }
@@ -369,6 +369,19 @@ impl State {
             Action::Quit => self.loop_signal.stop(),
             Action::SpawnTerminal => spawn::spawn_terminal(&self.client_env(), &self.config.apps.terminal),
             Action::SpawnBrowser => spawn::spawn_browser(&self.client_env()),
+            Action::SpawnFiles => spawn::spawn_files(&self.client_env()),
+            Action::SpawnSystemMonitor => {
+                let command = self.config.dock.system_monitor.trim().to_string();
+                if !command.is_empty() {
+                    spawn::spawn_command_line(&command, &self.client_env());
+                }
+            }
+            Action::Custom(index) => {
+                if let Some(command) = self.shortcuts.command(index) {
+                    spawn::spawn_command_line(command, &self.client_env());
+                }
+            }
+            Action::ShowDesktop => self.toggle_show_desktop(),
             Action::CloseWindow => self.close_focused(),
             // On a tiling workspace the arrows move focus between tiles.
             Action::Maximize if self.tiling_here() => self.focus_direction(Direction::Up),

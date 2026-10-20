@@ -51,6 +51,8 @@ pub struct Config {
     pub files: Files,
     /// Which program does what.
     pub apps: Apps,
+    /// Keyboard shortcuts.
+    pub shortcuts: Shortcuts,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -388,6 +390,118 @@ pub struct Apps {
     /// The terminal emulator, as a desktop file ID (`foot.desktop`); ""
     /// looks for one (`$TERMINAL`, then common ones).
     pub terminal: String,
+}
+
+/// One shortcut action's value: a combo, or a list of them.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Combos {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl Combos {
+    /// The combos; "" counts as none, so it turns an action off like [].
+    fn into_vec(self) -> Vec<String> {
+        let all = match self {
+            Combos::One(k) => vec![k],
+            Combos::Many(k) => k,
+        };
+        all.into_iter().filter(|k| !k.trim().is_empty()).collect()
+    }
+}
+
+fn combos<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Vec<String>, D::Error> {
+    Combos::deserialize(de).map(Combos::into_vec)
+}
+
+/// Every bindable action: its config name, default combos and a label.
+/// "Super" is the compositor's mod key (Alt when nested). The escape hatch
+/// (Ctrl+Alt+Backspace), VT switching and the media keys are not listed:
+/// they are fixed.
+pub const SHORTCUT_DEFAULTS: &[(&str, &[&str], &str)] = &[
+    ("terminal", &["Super+Q"], "Open a terminal"),
+    ("browser", &["Super+F"], "Open the web browser"),
+    ("files", &["Super+E"], "Open the file manager"),
+    ("system_monitor", &["Ctrl+Shift+Escape"], "Open the system monitor"),
+    ("close", &["Super+C", "Alt+F4"], "Close the window"),
+    ("lock", &["Super+L"], "Lock the screen"),
+    ("app_grid", &["Super+A"], "Show the app grid"),
+    ("show_desktop", &["Super+D"], "Show the desktop, again to bring windows back"),
+    ("screenshot", &["Super+Shift+S", "Print"], "Take a screenshot"),
+    ("switcher", &["Alt+Tab", "Super+Tab"], "Switch windows"),
+    ("switcher_back", &["Alt+Shift+Tab", "Super+Shift+Tab"], "Switch windows, backwards"),
+    ("maximize", &["Super+Up"], "Maximize (tiling: focus up)"),
+    ("restore", &["Super+Down"], "Restore (tiling: focus down)"),
+    ("snap_left", &["Super+Left"], "Snap left (tiling: focus left)"),
+    ("snap_right", &["Super+Right"], "Snap right (tiling: focus right)"),
+    ("fullscreen", &["Super+Shift+F"], "Toggle fullscreen"),
+    ("toggle_tiling", &["Super+T"], "Tile or float this workspace"),
+    ("toggle_floating", &["Super+Shift+T"], "Float or tile the focused window"),
+    ("swap_master", &["Super+Return", "Super+KP_Enter"], "Swap with the main tile"),
+    ("master_wider", &["Super+bracketright"], "Widen the main tile"),
+    ("master_narrower", &["Super+bracketleft"], "Narrow the main tile"),
+    ("move_tile_left", &["Super+Shift+Left"], "Move the tile left"),
+    ("move_tile_right", &["Super+Shift+Right"], "Move the tile right"),
+    ("move_tile_up", &["Super+Shift+Up"], "Move the tile up"),
+    ("move_tile_down", &["Super+Shift+Down"], "Move the tile down"),
+    ("workspace_prev", &["Super+Alt+Left"], "Previous workspace"),
+    ("workspace_next", &["Super+Alt+Right"], "Next workspace"),
+    ("workspace_prev_carry", &["Super+Alt+Shift+Left"], "Previous workspace, with the window"),
+    ("workspace_next_carry", &["Super+Alt+Shift+Right"], "Next workspace, with the window"),
+];
+
+/// A key that runs a command.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomShortcut {
+    /// A combo like "Super+B", or a list of them.
+    #[serde(deserialize_with = "combos")]
+    pub keys: Vec<String>,
+    pub command: String,
+}
+
+/// `[shortcuts]`: action name to combos. Names this build doesn't know are
+/// kept (the compositor warns about them) so a typo never fails the load.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shortcuts {
+    /// Action name to combos, defaults filled in; empty = off.
+    pub bindings: std::collections::BTreeMap<String, Vec<String>>,
+    pub custom: Vec<CustomShortcut>,
+}
+
+impl Default for Shortcuts {
+    fn default() -> Self {
+        let owned = |keys: &[&str]| keys.iter().map(|k| k.to_string()).collect();
+        Self {
+            bindings: SHORTCUT_DEFAULTS
+                .iter()
+                .map(|(name, keys, _)| (name.to_string(), owned(keys)))
+                .collect(),
+            custom: Vec::new(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Shortcuts {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(default)]
+            custom: Vec<CustomShortcut>,
+            #[serde(flatten)]
+            rest: std::collections::BTreeMap<String, Combos>,
+        }
+        let raw = Raw::deserialize(de)?;
+        let mut out = Shortcuts {
+            custom: raw.custom,
+            ..Shortcuts::default()
+        };
+        for (name, value) in raw.rest {
+            out.bindings.insert(name, value.into_vec());
+        }
+        Ok(out)
+    }
 }
 
 /// The file manager's icon sizes, in logical pixels.
@@ -970,6 +1084,23 @@ mod tests {
     fn default_file_parses_to_defaults() {
         let parsed = Config::parse(DEFAULT_CONFIG).expect("default config must parse");
         assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn shortcuts_merge_over_defaults() {
+        let c = Config::parse(
+            "[shortcuts]\nterminal = \"Ctrl+T\"\nlock = \"\"\nclose = [\"Super+W\"]\nbogus = \"Super+Z\"\n\
+             [[shortcuts.custom]]\nkeys = \"Super+B\"\ncommand = \"firefox\"\n",
+        )
+        .unwrap();
+        let b = &c.shortcuts.bindings;
+        assert_eq!(b["terminal"], ["Ctrl+T"]);
+        assert!(b["lock"].is_empty());
+        assert_eq!(b["close"], ["Super+W"]);
+        assert_eq!(b["files"], ["Super+E"]);
+        assert!(b.contains_key("bogus"));
+        assert_eq!(c.shortcuts.custom[0].keys, ["Super+B"]);
+        assert_eq!(c.shortcuts.custom[0].command, "firefox");
     }
 
     #[test]

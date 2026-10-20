@@ -1989,7 +1989,41 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
                 .advanced(),
             ],
         ),
+        shortcuts_group(&c.shortcuts),
     ]
+}
+
+/// The shortcuts as set, read-only; they're edited in config.toml.
+fn shortcuts_group(shortcuts: &cnde_config::Shortcuts) -> Group {
+    let info = |title: &str, keys: &[String]| {
+        let text = if keys.is_empty() {
+            "Off".to_string()
+        } else {
+            keys.join(", ")
+        };
+        wifi_row(
+            WifiKey::Detail(title.to_string()),
+            title,
+            Control::Info,
+            Value::Str(text),
+        )
+    };
+    let mut rows: Vec<Row> = cnde_config::SHORTCUT_DEFAULTS
+        .iter()
+        .map(|(name, _, label)| info(label, shortcuts.bindings.get(*name).map_or(&[][..], |k| k)))
+        .collect();
+    rows.extend(
+        shortcuts
+            .custom
+            .iter()
+            .map(|custom| info(&custom.command, &custom.keys)),
+    );
+    Group {
+        title: "Shortcuts".into(),
+        description: "Edit in config.toml, under [shortcuts]. Super is Alt when running nested."
+            .into(),
+        rows,
+    }
 }
 
 fn window_layout(v: cnde_config::WindowLayout) -> Value {
