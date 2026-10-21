@@ -201,6 +201,15 @@ impl State {
                 side,
             } => self.dock_preview(&output, &windows, cell, side),
             Request::DockPreviewHide => self.dock_preview_hide(),
+            Request::NotificationFrost { output, cards } => {
+                if cards.is_empty() {
+                    self.dock_frost.cards.remove(&output);
+                } else {
+                    self.dock_frost.cards.insert(output, cards);
+                }
+                self.queue_redraw();
+            }
+            Request::DockPreviewPin => self.dock_preview_pin(),
             Request::DockIcons { output, icons } => {
                 self.dock_icons.retain(|_, (o, _)| *o != output);
                 for icon in icons {

@@ -77,6 +77,14 @@ pub enum Side {
     Right,
 }
 
+/// One notification card, for the frost behind it: its rectangle within the
+/// notification stack's surface and how visible it is (0-1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CardFrost {
+    pub rect: [f64; 4],
+    pub alpha: f32,
+}
+
 /// One dock icon: its windows and its cell in the dock's surface.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DockIcon {
@@ -198,6 +206,15 @@ pub enum Request {
         side: Side,
     },
     DockPreviewHide,
+    /// Where the notification cards are on `output` right now (they animate,
+    /// so this is sent as they move), for the frost behind them. Empty: none.
+    NotificationFrost {
+        output: String,
+        cards: Vec<CardFrost>,
+    },
+    /// Keep the open dock preview up (a click on its icon) until a thumbnail
+    /// is picked, Escape, or a click elsewhere.
+    DockPreviewPin,
     /// Where the dock's icons are on `output`, so minimizing and restoring
     /// can fly windows to and from them. Each entry is an icon's windows
     /// and its (x, y, w, h) within the dock's surface. Sent when the layout

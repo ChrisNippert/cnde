@@ -203,6 +203,12 @@ impl State {
                     state.suppressed_keys.push(keycode);
                     return FilterResult::Intercept(Some(Action::CancelScreenshot));
                 }
+                // Escape puts away a dock preview opened by a click.
+                if sym.raw() == keysyms::KEY_Escape && state.preview_pinned() {
+                    state.suppressed_keys.push(keycode);
+                    state.dock_preview_dismiss();
+                    return FilterResult::Intercept(None);
+                }
                 // Escape leaves the overview, unless the shell's search box
                 // has the keyboard (it decides: clear the text, then close).
                 if sym.raw() == keysyms::KEY_Escape

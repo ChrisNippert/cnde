@@ -15,11 +15,11 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use cnde_ui::{
-    Canvas, Color, Painter, Rect, Weight,
+    Canvas, Painter, Rect, Weight,
     tiny_skia::{self, FilterQuality, Pixmap, PixmapPaint, Transform},
 };
 use smithay_client_toolkit::{
@@ -31,6 +31,7 @@ use smithay_client_toolkit::{
         },
         client::protocol::{wl_shm, wl_surface::WlSurface},
     },
+    compositor::FrameCallbackData,
     shell::{
         WaylandSurface,
         wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerSurface},
@@ -53,11 +54,17 @@ const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 
 const WIDTH: f32 = 380.0;
+/// How far a card slides in from (and out to) the right edge.
+const SLIDE: f32 = 40.0;
+/// Cards appear, leave and move over this long.
+const ANIM: Duration = Duration::from_millis(230);
 const MARGIN: i32 = 10;
 const PADDING: f32 = 14.0;
 const GAP: f32 = 8.0;
 const ICON: f32 = 40.0;
 const LINE: f32 = 19.0;
+/// The stack's surface: the cards and the margin they slide in over.
+const SURFACE_WIDTH: f32 = WIDTH + MARGIN as f32;
 const BODY_LINES: usize = 4;
 /// More than this wait their turn (still timing out).
 const SHOWN: usize = 4;
@@ -111,6 +118,76 @@ struct Card {
     /// Wrapped body, measured once.
     lines: Vec<String>,
     height: f32,
+    /// When it came into view (`None`: waiting its turn).
+    appear: Option<Instant>,
+    /// Dismissed or expired: fading out, then gone.
+    leaving: Option<Instant>,
+    /// Where it sits in the stack: (from, to, since), easing between.
+    y: Option<(f32, f32, Instant)>,
+}
+
+impl Card {
+    fn new(note: Note, expire: Option<RegistrationToken>, lines: Vec<String>, height: f32) -> Self {
+        Self {
+            note,
+            expire,
+            lines,
+            height,
+            appear: None,
+            leaving: None,
+            y: None,
+        }
+    }
+
+    /// 0-1: how far in view (it slides and fades with this).
+    fn presence(&self, now: Instant, duration: Duration) -> f32 {
+        use cnde_ui::anim::{ease_out, progress};
+        match (self.leaving, self.appear) {
+            (Some(at), _) => 1.0 - ease_out(progress(at, duration, now)),
+            (None, Some(at)) => ease_out(progress(at, duration, now)),
+            (None, None) => 0.0,
+        }
+    }
+
+    /// Its top edge in the stack now.
+    fn top(&self, now: Instant, duration: Duration) -> Option<f32> {
+        let (from, to, at) = self.y?;
+        let t = cnde_ui::anim::ease_out(cnde_ui::anim::progress(at, duration, now));
+        Some(from + (to - from) * t)
+    }
+
+    fn animating(&self, now: Instant, duration: Duration) -> bool {
+        let moving = |at: Instant| now < at + duration;
+        self.leaving.is_some()
+            || self.appear.is_some_and(moving)
+            || self.y.is_some_and(|(_, _, at)| moving(at))
+    }
+}
+
+/// Work out where each card wants to be (stacked from the top, newest
+/// first, `SHOWN` of them), starting a move for any that's changed.
+fn place_cards(cards: &mut [Card], now: Instant, duration: Duration) {
+    let mut y = 0.0;
+    let mut shown = 0;
+    for card in cards.iter_mut().filter(|c| c.leaving.is_none()) {
+        if shown == SHOWN {
+            // Pushed out of view by a newer one: back to waiting.
+            card.appear = None;
+            card.y = None;
+            continue;
+        }
+        shown += 1;
+        if card.appear.is_none() {
+            card.appear = Some(now);
+        }
+        let current = card.top(now, duration);
+        match (card.y, current) {
+            (Some((_, to, _)), Some(current)) if to != y => card.y = Some((current, y, now)),
+            (None, _) => card.y = Some((y, y, now)),
+            _ => {}
+        }
+        y += card.height + GAP;
+    }
 }
 
 #[derive(Default)]
@@ -123,10 +200,18 @@ pub struct Notifications {
     /// setting this ends it.
     stop: Option<Arc<AtomicBool>>,
     tx: Option<Sender<Event>>,
+    /// The output the compositor was last told card positions for (to
+    /// frost behind them), and what it was told.
+    frost_output: Option<String>,
+    frost_sent: Vec<cnde_ipc::CardFrost>,
 }
 
 pub struct Stack {
     pub layer: LayerSurface,
+    output: Option<String>,
+    /// A frame callback is out: draw again when it comes, if still moving.
+    frame_pending: bool,
+    animating: bool,
     scale: i32,
     configured: bool,
     height: u32,
@@ -479,7 +564,7 @@ impl App {
                 self.loop_handle.remove(timer);
             }
         }
-        self.notifications.stack = None;
+        self.drop_stack();
     }
 
     pub fn notification_event(&mut self, event: Event) {
@@ -563,16 +648,16 @@ impl App {
                 })
                 .ok()
         });
-        let card = Card {
-            note,
-            expire,
-            lines,
-            height,
-        };
+        let mut card = Card::new(note, expire, lines, height);
         let cards = &mut self.notifications.cards;
-        match cards.iter().position(|c| c.note.id == id) {
+        match cards
+            .iter()
+            .position(|c| c.note.id == id && c.leaving.is_none())
+        {
             // A replacement keeps its place.
             Some(i) => {
+                card.appear = cards[i].appear;
+                card.y = cards[i].y;
                 if let Some(timer) = std::mem::replace(&mut cards[i], card).expire {
                     self.loop_handle.remove(timer);
                 }
@@ -584,12 +669,21 @@ impl App {
 
     fn close_notification(&mut self, id: u32, reason: Reason) {
         let cards = &mut self.notifications.cards;
-        let Some(i) = cards.iter().position(|c| c.note.id == id) else {
+        let Some(i) = cards
+            .iter()
+            .position(|c| c.note.id == id && c.leaving.is_none())
+        else {
             return;
         };
-        let card = cards.remove(i);
-        if let Some(timer) = card.expire {
+        // It fades out where it is (see `draw_notifications`).
+        let card = &mut cards[i];
+        card.leaving = Some(Instant::now());
+        if let Some(timer) = card.expire.take() {
             self.loop_handle.remove(timer);
+        }
+        if card.appear.is_none() {
+            // Never shown: nothing to fade.
+            cards.remove(i);
         }
         self.notification_closed(id, reason);
         self.show_notifications();
@@ -642,7 +736,7 @@ impl App {
             return;
         }
         if covered {
-            self.notifications.stack = None;
+            self.drop_stack();
         } else {
             self.show_notifications();
         }
@@ -650,15 +744,27 @@ impl App {
 
     /// Size the stack to the cards (creating or dropping its surface).
     fn show_notifications(&mut self) {
-        let height = stack_height(&self.notifications.cards);
+        let mut height = stack_height(&self.notifications.cards);
+        let now = Instant::now();
+        let duration = cnde_ui::anim::scaled(ANIM);
+        // Cards still moving or leaving need the room they're in.
+        if let Some(stack) = &self.notifications.stack
+            && self
+                .notifications
+                .cards
+                .iter()
+                .any(|c| c.animating(now, duration))
+        {
+            height = height.max(stack.height);
+        }
         if height == 0 || self.notifications_covered() {
-            self.notifications.stack = None;
+            self.drop_stack();
             return;
         }
         if let Some(stack) = &mut self.notifications.stack {
             if stack.height != height {
                 stack.height = height;
-                stack.layer.set_size(WIDTH as u32, height);
+                stack.layer.set_size(SURFACE_WIDTH as u32, height);
                 stack.layer.commit();
                 // Drawn again when the compositor agrees to the size.
                 stack.configured = false;
@@ -671,6 +777,7 @@ impl App {
             return;
         };
         let (output, scale) = (panel.output.clone(), panel.scale());
+        let output_name = self.outputs.info(&output).and_then(|i| i.name);
         let surface = self.compositor.create_surface(&self.qh);
         let layer = self.layer_shell.create_layer_surface(
             &self.qh,
@@ -680,13 +787,18 @@ impl App {
             Some(&output),
         );
         layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
-        layer.set_margin(MARGIN, MARGIN, 0, 0);
-        layer.set_size(WIDTH as u32, height);
+        // The cards slide in over the margin, so the surface reaches the
+        // screen's edge.
+        layer.set_margin(MARGIN, 0, 0, 0);
+        layer.set_size(SURFACE_WIDTH as u32, height);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.wl_surface().set_buffer_scale(scale);
         layer.commit();
         self.notifications.stack = Some(Stack {
             layer,
+            output: output_name,
+            frame_pending: false,
+            animating: false,
             scale,
             configured: false,
             height,
@@ -711,7 +823,48 @@ impl App {
             .as_ref()
             .is_some_and(|s| s.owns(surface))
         {
-            self.notifications.stack = None;
+            self.drop_stack();
+        }
+    }
+
+    /// Take the stack down, and the frost behind it.
+    fn drop_stack(&mut self) {
+        self.notifications.stack = None;
+        self.send_card_frost(None, Vec::new());
+    }
+
+    /// Tell the compositor where the cards are (when that's changed), so it
+    /// frosts behind them.
+    fn send_card_frost(&mut self, output: Option<String>, cards: Vec<cnde_ipc::CardFrost>) {
+        let n = &mut self.notifications;
+        if cards == n.frost_sent && (output.is_none() || output == n.frost_output) {
+            return;
+        }
+        let was = n.frost_output.take();
+        n.frost_sent = cards.clone();
+        // Moving to another output, or going: clear the old one.
+        if let Some(old) = was.filter(|old| Some(old) != output.as_ref()) {
+            self.ipc.send(&cnde_ipc::Request::NotificationFrost {
+                output: old,
+                cards: Vec::new(),
+            });
+        }
+        if let Some(output) = output {
+            self.notifications.frost_output = Some(output.clone());
+            self.ipc
+                .send(&cnde_ipc::Request::NotificationFrost { output, cards });
+        }
+    }
+
+    /// The compositor is ready for a new frame.
+    pub fn notifications_frame(&mut self, surface: &WlSurface) {
+        if let Some(stack) = &mut self.notifications.stack
+            && stack.owns(surface)
+        {
+            stack.frame_pending = false;
+            if stack.animating {
+                self.draw_notifications();
+            }
         }
     }
 
@@ -814,9 +967,12 @@ impl App {
         if !stack.configured {
             return;
         }
+        let now = Instant::now();
+        let duration = cnde_ui::anim::scaled(ANIM);
+        place_cards(&mut self.notifications.cards, now, duration);
         let scale = stack.scale;
-        let (lw, lh) = (WIDTH, stack.height as f32);
-        let (w, h) = (lw as i32 * scale, stack.height as i32 * scale);
+        let lw = WIDTH;
+        let (w, h) = (SURFACE_WIDTH as i32 * scale, stack.height as i32 * scale);
         let (buffer, pixels) = match self.pool.create_buffer(w, h, w * 4, self.shm_format) {
             Ok(created) => created,
             Err(err) => {
@@ -824,15 +980,36 @@ impl App {
                 return;
             }
         };
+        pixels.fill(0);
         let mut hits = Vec::new();
-        if let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) {
+        let mut frost = Vec::new();
+        if let Some(mut target) = tiny_skia::PixmapMut::from_bytes(pixels, w as u32, h as u32) {
             let t = &self.theme;
-            canvas.clear(Color::rgba(0, 0, 0, 0.0));
-            let mut y = 0.0;
-            for card in self.notifications.cards.iter().take(SHOWN) {
+            for card in self.notifications.cards.iter() {
+                let presence = card.presence(now, duration);
+                let Some(top) = card.top(now, duration).filter(|_| presence > 0.0) else {
+                    continue;
+                };
                 let note = &card.note;
+                // Each card is drawn on its own and laid over the stack
+                // with its fade, sliding in from (or out to) the right.
+                let slide = (1.0 - presence) * SLIDE;
+                let size = (
+                    (lw * scale as f32).ceil() as u32,
+                    (card.height * scale as f32).ceil() as u32,
+                );
+                let Some(mut scratch) = Pixmap::new(size.0, size.1) else {
+                    continue;
+                };
+                let Some(mut canvas) =
+                    Canvas::new(scratch.data_mut(), size.0, size.1, scale as f32)
+                else {
+                    continue;
+                };
+                let y = 0.0;
+                let mut card_hits = Vec::new();
                 let rect = Rect::new(0.0, y, lw, card.height);
-                hits.push(Hit {
+                card_hits.push(Hit {
                     id: note.id,
                     part: Part::Card,
                     rect,
@@ -902,7 +1079,7 @@ impl App {
                         t.qs_dim,
                     );
                 }
-                hits.push(Hit {
+                card_hits.push(Hit {
                     id: note.id,
                     part: Part::Close,
                     rect: close,
@@ -969,18 +1146,49 @@ impl App {
                             Weight::Normal,
                             t.popup_text,
                         );
-                        hits.push(Hit {
+                        card_hits.push(Hit {
                             id: note.id,
                             part: Part::Action(key.clone()),
                             rect,
                         });
                     }
                 }
-                y += card.height + GAP;
+                target.draw_pixmap(
+                    (slide * scale as f32).round() as i32,
+                    (top * scale as f32).round() as i32,
+                    scratch.as_ref(),
+                    &PixmapPaint {
+                        opacity: presence,
+                        ..PixmapPaint::default()
+                    },
+                    Transform::identity(),
+                    None,
+                );
+                frost.push(cnde_ipc::CardFrost {
+                    rect: [slide.into(), top.into(), lw.into(), card.height.into()],
+                    alpha: presence,
+                });
+                // A card on its way out can't be clicked.
+                if card.leaving.is_none() {
+                    hits.extend(card_hits.into_iter().map(|mut hit| {
+                        hit.rect.x += slide;
+                        hit.rect.y += top;
+                        hit
+                    }));
+                }
             }
-            let _ = lh;
         }
+        self.notifications.cards.retain(|c| {
+            c.leaving
+                .is_none_or(|at| cnde_ui::anim::progress(at, duration, now) < 1.0)
+        });
+        let animating = self
+            .notifications
+            .cards
+            .iter()
+            .any(|c| c.animating(now, duration));
         stack.hits = hits;
+        stack.animating = animating;
         if self.shm_format == wl_shm::Format::Argb8888 {
             for pixel in pixels.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
@@ -990,7 +1198,18 @@ impl App {
         surface.set_buffer_scale(scale);
         surface.damage_buffer(0, 0, w, h);
         if buffer.attach_to(surface).is_ok() {
+            if animating && !stack.frame_pending {
+                surface.frame(&self.qh, FrameCallbackData(surface.clone()));
+                stack.frame_pending = true;
+            }
             surface.commit();
+        }
+        let output = stack.output.clone();
+        let settled = !animating && stack.height != stack_height(&self.notifications.cards);
+        self.send_card_frost(output, frost);
+        // Done moving: give back the room the cards needed on the way.
+        if settled {
+            self.show_notifications();
         }
     }
 }
@@ -1006,12 +1225,16 @@ fn card_height(note: &Note, body_lines: usize, button_height: f32) -> f32 {
 }
 
 fn stack_height(cards: &[Card]) -> u32 {
-    let shown = cards.iter().take(SHOWN);
+    let shown: Vec<_> = cards
+        .iter()
+        .filter(|c| c.leaving.is_none())
+        .take(SHOWN)
+        .collect();
     let count = shown.len();
     if count == 0 {
         return 0;
     }
-    let total: f32 = shown.map(|c| c.height).sum::<f32>() + GAP * (count - 1) as f32;
+    let total: f32 = shown.iter().map(|c| c.height).sum::<f32>() + GAP * (count - 1) as f32;
     total.ceil() as u32
 }
 
