@@ -50,6 +50,9 @@ pub struct DockFrost {
     solids: HashMap<String, (PixelShaderElement, [f32; 4], u32)>,
     /// How solid each backing is heading (from, to, since when).
     covered: HashMap<String, (f32, f32, Instant)>,
+    /// The shell's notification cards, per output name (see
+    /// `Request::NotificationFrost`).
+    pub cards: HashMap<String, Vec<cnde_ipc::CardFrost>>,
 }
 
 /// What's behind the shell's popups: the windows on the output
@@ -115,6 +118,9 @@ impl DockFrost {
         } else {
             Vec::new()
         };
+        if config.appearance.material == cnde_config::Material::Frosted {
+            elements.extend(self.card_elements(renderer, wallpapers, output, config, behind, now));
+        }
         let dock = &config.dock;
         // As the dock draws itself (the palette sets the shape).
         let dock_radius_full = cnde_ui::Theme::for_appearance(&config.appearance).dock_radius as f64;
@@ -290,6 +296,92 @@ impl DockFrost {
         }
         // Forget popups that are gone, or their ids pile up.
         let prefix = format!("{}/popup/", output.name());
+        self.ids
+            .retain(|key, _| !key.starts_with(&prefix) || drawn.contains(key));
+        self.solids
+            .retain(|key, _| !key.starts_with(&prefix) || drawn.contains(key));
+        self.covered
+            .retain(|key, _| !key.starts_with(&prefix) || drawn.contains(key));
+        elements
+    }
+
+    /// Frost under the shell's notification cards, wherever they are now.
+    #[allow(clippy::too_many_arguments)]
+    fn card_elements(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        wallpapers: &Wallpapers,
+        output: &Output,
+        config: &cnde_config::Config,
+        behind: &Behind,
+        now: Instant,
+    ) -> Vec<OutputElement> {
+        let prefix = format!("{}/note/", output.name());
+        let cards = self.cards.get(&output.name()).cloned().unwrap_or_default();
+        let origin = {
+            let map = layer_map_for_output(output);
+            map.layers()
+                .find(|l| l.namespace() == "cnde-notifications")
+                .and_then(|l| map.layer_geometry(l))
+                .map(|g| g.loc)
+        };
+        let mut elements = Vec::new();
+        let mut drawn = Vec::new();
+        if let Some(origin) = origin {
+            let theme = cnde_ui::Theme::for_screen(
+                &config.appearance,
+                screen_colour(config, wallpapers, output),
+            );
+            let card_colour = theme.qs_background;
+            let radius = theme.qs_radius as f64;
+            let scale = output.current_scale().fractional_scale();
+            for (i, card) in cards.iter().enumerate() {
+                if card.alpha <= 0.0 {
+                    continue;
+                }
+                let rect = Rectangle::<i32, Logical>::new(
+                    (origin.x + card.rect[0].round() as i32, origin.y + card.rect[1].round() as i32)
+                        .into(),
+                    (card.rect[2].round() as i32, card.rect[3].round() as i32).into(),
+                );
+                let namespace = format!("note/{i}");
+                drawn.push(format!("{}/{namespace}", output.name()));
+                let at = Point::<i32, Physical>::from((
+                    (rect.loc.x as f64 * scale).round() as i32,
+                    (rect.loc.y as f64 * scale).round() as i32,
+                ));
+                // Over a window: solid, as the popups are.
+                let target = behind.under(rect).map(|_| {
+                    let colour = match behind.bar {
+                        Some(bar) => bar.map(|c| c as f32 / 255.0),
+                        None => [card_colour.r, card_colour.g, card_colour.b],
+                    };
+                    (colour, 1.0)
+                });
+                let (solid, solidity) = self.backing(
+                    renderer, output, &namespace, rect, radius, target, card.alpha, now,
+                );
+                if let Some(solid) = solid {
+                    elements.push(OutputElement::PopupSolid(RescaleRenderElement::from_element(
+                        solid,
+                        at,
+                        Scale::from(1.0),
+                    )));
+                }
+                if solidity >= 1.0 {
+                    continue;
+                }
+                if let Some(frost) =
+                    self.frost(renderer, wallpapers, output, &namespace, rect, radius, card.alpha)
+                {
+                    elements.push(OutputElement::PopupFrost(RescaleRenderElement::from_element(
+                        frost,
+                        at,
+                        Scale::from(1.0),
+                    )));
+                }
+            }
+        }
         self.ids
             .retain(|key, _| !key.starts_with(&prefix) || drawn.contains(key));
         self.solids

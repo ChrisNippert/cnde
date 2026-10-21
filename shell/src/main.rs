@@ -1016,8 +1016,9 @@ impl App {
     }
 
     /// Act on a left or middle click on the dock.
-    fn dock_click(&mut self, click: Click) {
+    fn dock_click(&mut self, dock: usize, click: Click) {
         match click {
+            Click::Pick(item) => self.dock_preview_pin(dock, item),
             Click::Nothing => {}
             Click::Launch(id) => self.launch(&id),
             Click::Activate(id) => {
@@ -1464,6 +1465,7 @@ impl CompositorHandler for App {
         {
             self.draw_calendar();
         }
+        self.notifications_frame(surface);
         if let Some(popover) = &mut self.tray_popover
             && popover.popup.wl_surface() == surface
             && popover.frame_done()
@@ -1790,8 +1792,8 @@ impl PointerHandler for App {
                         ..
                     }
                 );
-                if matches!(event.kind, PointerEventKind::Press { .. }) {
-                    self.dock_preview_press();
+                if let PointerEventKind::Press { button, .. } = event.kind {
+                    self.dock_preview_press(button == BTN_LEFT);
                 }
                 // Editing and dragging are the first dock's.
                 if i == 0 {
@@ -1839,7 +1841,7 @@ impl PointerHandler for App {
                     }
                     _ => continue,
                 };
-                self.dock_click(click);
+                self.dock_click(i, click);
                 continue;
             }
             if let Some(launcher) = &mut self.launcher

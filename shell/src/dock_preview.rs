@@ -35,6 +35,9 @@ pub struct Preview {
     /// An icon that was just clicked: no preview until the pointer's been
     /// elsewhere.
     clicked: Option<Target>,
+    /// A click opened it (the compositor keeps it until a pick, Escape or a
+    /// click elsewhere): hovering no longer moves or hides it.
+    pinned: bool,
     show_timer: Option<(RegistrationToken, Target)>,
     hide_timer: Option<RegistrationToken>,
     /// The icon positions last sent to the compositor, per monitor.
@@ -72,6 +75,7 @@ impl App {
     pub fn dock_preview_gone(&mut self) {
         self.preview.shown = None;
         self.preview.inside = false;
+        self.preview.pinned = false;
         self.dock_preview_cancel_timers();
     }
 
@@ -96,7 +100,12 @@ impl App {
 
     /// A button went down on the dock: the panel goes, and doesn't come back
     /// for that icon until the pointer has left it.
-    pub fn dock_preview_press(&mut self) {
+    pub fn dock_preview_press(&mut self, left: bool) {
+        // A left click on an app with several windows opens the panel
+        // (or keeps it): the click itself decides, so leave it be.
+        if left && self.preview.hovered.is_some_and(|t| self.dock_preview_multi(t)) {
+            return;
+        }
         self.preview.clicked = self.preview.hovered;
         self.dock_preview_hide();
     }
@@ -105,8 +114,31 @@ impl App {
     pub fn dock_preview_hide(&mut self) {
         self.dock_preview_cancel_timers();
         self.preview.inside = false;
+        self.preview.pinned = false;
         if self.preview.shown.take().is_some() {
             self.ipc.send(&Request::DockPreviewHide);
+        }
+    }
+
+    fn dock_preview_multi(&self, (dock, item): Target) -> bool {
+        self.docks
+            .get(dock)
+            .and_then(|d| d.items().get(item))
+            .is_some_and(|i| i.windows.len() > 1)
+    }
+
+    /// A click on an icon with several windows: show its panel now and keep
+    /// it there until a window is picked, Escape, or a click elsewhere.
+    pub fn dock_preview_pin(&mut self, dock: usize, item: usize) {
+        if self.dock_preview_blocked() {
+            return;
+        }
+        self.dock_preview_cancel_timers();
+        self.dock_preview_show((dock, item));
+        if self.preview.shown == Some((dock, item)) {
+            self.preview.pinned = true;
+            self.preview.clicked = None;
+            self.ipc.send(&Request::DockPreviewPin);
         }
     }
 
@@ -114,6 +146,9 @@ impl App {
         if self.dock_preview_blocked() {
             self.preview.hovered = None;
             return self.dock_preview_hide();
+        }
+        if self.preview.pinned {
+            return;
         }
         if self.preview.clicked.is_some() && self.preview.clicked != self.preview.hovered {
             self.preview.clicked = None;

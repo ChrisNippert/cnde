@@ -127,6 +127,9 @@ struct Preview {
     inside: bool,
     /// When the panel first appeared, for fading in.
     since: Instant,
+    /// Opened by a click on the dock icon: it stays until a pick, Escape
+    /// or a click elsewhere, wherever the pointer goes.
+    pinned: bool,
 }
 
 #[derive(Default)]
@@ -1099,6 +1102,7 @@ impl State {
             return;
         }
         let inside = self.switcher.preview.as_ref().is_some_and(|p| p.inside);
+        let pinned = self.switcher.preview.as_ref().is_some_and(|p| p.pinned);
         // Moving between neighbours doesn't fade again.
         let since = self
             .switcher
@@ -1114,6 +1118,7 @@ impl State {
             hover: None,
             close_hot: false,
             inside,
+            pinned,
         });
         self.queue_redraw();
     }
@@ -1123,6 +1128,24 @@ impl State {
             self.queue_redraw();
             self.queue_pointer_refresh();
         }
+    }
+
+    /// The dock's click on a multi-window icon: keep the panel up.
+    pub fn dock_preview_pin(&mut self) {
+        if let Some(p) = &mut self.switcher.preview {
+            p.pinned = true;
+        }
+    }
+
+    /// Whether the panel is pinned open.
+    pub fn preview_pinned(&self) -> bool {
+        self.switcher.preview.as_ref().is_some_and(|p| p.pinned)
+    }
+
+    /// Close a pinned panel (Escape, a click elsewhere) and tell the shell.
+    pub fn dock_preview_dismiss(&mut self) {
+        self.dock_preview_hide();
+        self.ipc.broadcast(&cnde_ipc::Event::DockPreviewGone);
     }
 
     fn preview_hit(&self, pos: Point<f64, Logical>) -> Option<PreviewHit> {
@@ -1176,6 +1199,10 @@ impl State {
     /// it. Returns whether the event was the panel's.
     pub fn preview_button(&mut self, pos: Point<f64, Logical>, pressed: bool, left: bool) -> bool {
         let Some(hit) = self.preview_hit(pos).filter(|h| h.inside) else {
+            // A click anywhere else puts a pinned panel away, and goes on.
+            if pressed && self.preview_pinned() {
+                self.dock_preview_dismiss();
+            }
             return false;
         };
         if !pressed || !left {

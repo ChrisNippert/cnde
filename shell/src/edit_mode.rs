@@ -143,7 +143,7 @@ impl App {
                     return false;
                 };
                 let click = dock.click(start, icon, false);
-                self.dock_click(click);
+                self.dock_click(0, click);
                 true
             }
             _ => false,

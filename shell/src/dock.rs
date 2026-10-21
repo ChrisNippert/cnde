@@ -306,6 +306,8 @@ pub enum Click {
     Activate(u64),
     /// Minimize these windows (`dock.click_minimizes`).
     Minimize(Vec<u64>),
+    /// An app with several windows: pick one from the preview panel.
+    Pick(usize),
     AppGrid,
 }
 
@@ -865,6 +867,9 @@ impl Dock {
         };
         if new_window || item.windows.is_empty() {
             return item.app.clone().map_or(Click::Nothing, Click::Launch);
+        }
+        if item.windows.len() > 1 {
+            return Click::Pick(index);
         }
         running_click(item, self.click_minimizes)
     }
