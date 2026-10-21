@@ -8,6 +8,11 @@ license.workspace = true
 name = "cnde-files"
 path = "src/main.rs"
 
+# The xdg-desktop-portal FileChooser backend; runs cnde-files as the picker.
+[[bin]]
+name = "cnde-files-portal"
+path = "src/portal.rs"
+
 [dependencies]
 cnde-apps = { path = "../apps" }
 cnde-ui = { path = "../ui" }
@@ -17,7 +22,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "xkbcommon"] }
 # inotify for following hand edits of the config.
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["fs", "process"] }
 # Thumbnails and the preview PNGs.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 # org.freedesktop.FileManager1.
