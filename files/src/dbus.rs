@@ -81,10 +81,10 @@ struct FileManager {
 }
 
 impl FileManager {
-    fn send(&self, kind: Kind, uris: &[String]) {
+    fn send(&self, kind: Kind, uris: &[String], startup_id: String) {
         match plan(kind, uris) {
             Some(open) => {
-                let _ = self.tx.send(Event::Open(open));
+                let _ = self.tx.send(Event::Open(open, startup_id));
             }
             None => debug!(?uris, "nothing to show"),
         }
@@ -93,16 +93,16 @@ impl FileManager {
 
 #[interface(name = "org.freedesktop.FileManager1")]
 impl FileManager {
-    fn show_folders(&self, uris: Vec<String>, _startup_id: String) {
-        self.send(Kind::Folders, &uris);
+    fn show_folders(&self, uris: Vec<String>, startup_id: String) {
+        self.send(Kind::Folders, &uris, startup_id);
     }
 
-    fn show_items(&self, uris: Vec<String>, _startup_id: String) {
-        self.send(Kind::Items, &uris);
+    fn show_items(&self, uris: Vec<String>, startup_id: String) {
+        self.send(Kind::Items, &uris, startup_id);
     }
 
-    fn show_item_properties(&self, uris: Vec<String>, _startup_id: String) {
-        self.send(Kind::Properties, &uris);
+    fn show_item_properties(&self, uris: Vec<String>, startup_id: String) {
+        self.send(Kind::Properties, &uris, startup_id);
     }
 }
 
@@ -113,9 +113,9 @@ struct Instance {
 
 #[interface(name = "org.cnde.Files")]
 impl Instance {
-    fn open(&self, uris: Vec<String>, _startup_id: String) {
+    fn open(&self, uris: Vec<String>, startup_id: String) {
         if let Some(open) = plan(Kind::Folders, &uris) {
-            let _ = self.tx.send(Event::Open(open));
+            let _ = self.tx.send(Event::Open(open, startup_id));
         }
     }
 }
@@ -237,7 +237,7 @@ mod tests {
         assert!(forwarded);
         std::thread::sleep(std::time::Duration::from_millis(100));
         match crx.try_recv() {
-            Ok(Event::Open(open)) => assert_eq!(open.dir, Path::new("/tmp")),
+            Ok(Event::Open(open, _)) => assert_eq!(open.dir, Path::new("/tmp")),
             _ => panic!("no request arrived"),
         }
     }

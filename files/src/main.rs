@@ -48,6 +48,7 @@ use rustix::{
 };
 use smithay_client_toolkit::reexports::client::backend::WaylandError;
 use smithay_client_toolkit::{
+    activation::{ActivationHandler, ActivationState, RequestData},
     compositor::{CompositorHandler, CompositorState, FrameCallbackData},
     data_device_manager::DataDeviceManagerState,
     delegate_dispatch2, delegate_registry,
@@ -149,7 +150,8 @@ enum Event {
     /// A thumbnail arrived.
     Thumbs,
     /// Another program asked us to show something (D-Bus).
-    Open(dbus::Open),
+    /// With the activation token it came with (maybe empty).
+    Open(dbus::Open, String),
     /// Copy, move, clipboard, drop and undo work.
     Xfer(transfer::Msg),
 }
@@ -164,6 +166,7 @@ struct App {
     conn: Connection,
     shm_format: wl_shm::Format,
     window: Window,
+    activation: Option<ActivationState>,
     loop_handle: LoopHandle<'static, App>,
     exit: LoopSignal,
     events: channel::Sender<Event>,
@@ -396,6 +399,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         conn: conn.clone(),
         shm_format: wl_shm::Format::Argb8888,
         window,
+        activation: ActivationState::bind(&globals, &qh).ok(),
         loop_handle: event_loop.handle(),
         exit: event_loop.get_signal(),
         events: tx,
@@ -611,7 +615,10 @@ impl App {
             Event::Refreshed(..) => {}
             Event::Refresh => self.refresh_dir(),
             Event::Thumbs => self.redraw(),
-            Event::Open(open) => self.open_request(open),
+            Event::Open(open, token) => {
+                self.open_request(open);
+                self.raise(token);
+            }
             Event::Made(name) => {
                 self.ui.x.pending_rename = Some(name);
                 self.refresh_dir();
@@ -652,6 +659,28 @@ impl App {
             for name in std::mem::take(&mut self.reveal_more) {
                 self.ui.folder.selected.insert(name);
             }
+        }
+    }
+
+    /// Bring the window to the front with the caller's activation token, or
+    /// one asked for on our own surface when it passed none.
+    fn raise(&mut self, token: String) {
+        let Some(activation) = &self.activation else {
+            return;
+        };
+        let surface = self.window.wl_surface();
+        if token.is_empty() {
+            activation.request_token(
+                &self.qh,
+                RequestData {
+                    app_id: Some("cnde-files".into()),
+                    seat_and_serial: None,
+                    surface: Some(surface.clone()),
+                    udata: (),
+                },
+            );
+        } else {
+            activation.activate::<Self>(surface, token);
         }
     }
 
@@ -1724,6 +1753,16 @@ impl KeyboardHandler for App {
         _: u32,
     ) {
         self.modifiers = modifiers;
+    }
+}
+
+impl ActivationHandler for App {
+    type RequestUdata = ();
+
+    fn new_token(&mut self, token: String, data: &RequestData<()>) {
+        if let (Some(activation), Some(surface)) = (&self.activation, &data.surface) {
+            activation.activate::<Self>(surface, token);
+        }
     }
 }
 
