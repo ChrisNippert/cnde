@@ -50,7 +50,7 @@ use tracing::{debug, error, info, warn};
 use super::Backend;
 use cnde_config::Vrr;
 
-use crate::{cursor::Cursors, render, state::State, window::Placement};
+use crate::{cursor::Cursors, render, state::State};
 
 /// 10-bit first for less banding, 8-bit as the universal fallback.
 const COLOR_FORMATS: &[Fourcc] = &[
@@ -1001,12 +1001,7 @@ impl State {
         let wanted = match self.config.output(&output.name()).map(|c| c.vrr) {
             Some(Vrr::On) => true,
             Some(Vrr::Fullscreen) => {
-                !self.lock.is_locked()
-                    && self
-                        .space
-                        .elements_for_output(&output)
-                        .last()
-                        .is_some_and(|w| State::placement_of(w) == Placement::Fullscreen)
+                !self.lock.is_locked() && State::fullscreen_in(&self.space, &output)
             }
             Some(Vrr::Off) | None => false,
         };

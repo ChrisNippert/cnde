@@ -388,11 +388,26 @@ impl State {
         self.queue_pointer_refresh();
     }
 
-    /// Whether the topmost window on `output` is fullscreen.
+    /// Whether the topmost window on `output` is fullscreen. Only windows
+    /// centred on the monitor count, so a window reaching over from the next
+    /// one doesn't hide the fullscreen state.
     pub fn fullscreen_on(&self, output: &Output) -> bool {
-        self.space
+        Self::fullscreen_in(&self.space, output)
+    }
+
+    /// `fullscreen_on` for callers holding the space but not all of `self`.
+    pub fn fullscreen_in(space: &smithay::desktop::Space<Window>, output: &Output) -> bool {
+        let Some(geo) = space.output_geometry(output) else {
+            return false;
+        };
+        space
             .elements_for_output(output)
-            .last()
+            .filter(|w| {
+                space
+                    .element_geometry(w)
+                    .is_some_and(|g| geo.contains(g.loc + g.size.downscale(2).to_point()))
+            })
+            .next_back()
             .is_some_and(|w| Self::placement_of(w) == Placement::Fullscreen)
     }
 

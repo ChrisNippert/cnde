@@ -428,8 +428,8 @@ impl State {
         }
     }
 
-    /// The dock picked a window: show its workspace (on the main monitor,
-    /// unless it's already on screen) and focus it.
+    /// The dock picked a window: focus it where it is if its workspace is on
+    /// any monitor, otherwise slide its workspace in first.
     pub(crate) fn activate_window(&mut self, id: u64) {
         let Some((index, window)) = self.workspaces.list.iter().enumerate().find_map(|(i, ws)| {
             ws.windows
@@ -456,8 +456,21 @@ impl State {
                 }
             });
         }
-        let visible = self.space.elements().any(|w| w == &window);
-        if !visible {
+        // Shown on any monitor (a minimized window isn't in the space, so ask
+        // the workspaces): leave the strip alone and focus it where it is.
+        let (outputs, _) = self.strip_outputs();
+        let shown = outputs
+            .iter()
+            .any(|output| self.workspace_on(output) == Some(index));
+        if shown {
+            if minimized && self.is_tiled(&window) {
+                // Back into its tile; the others make room.
+                self.relayout_visible(true);
+            } else if minimized {
+                // On screen already: put it back where it was.
+                self.rebuild_space();
+            }
+        } else {
             let current = self
                 .workspaces
                 .motion
@@ -466,12 +479,6 @@ impl State {
             let step = index as isize - current;
             if step != 0 {
                 self.step_workspace(step, false);
-            } else if minimized && self.is_tiled(&window) {
-                // Back into its tile; the others make room.
-                self.relayout_visible(true);
-            } else if minimized {
-                // On screen already: put it back where it was.
-                self.rebuild_space();
             }
         }
         self.focus_window(Some(&window));

@@ -267,9 +267,13 @@ pub fn output_elements(
 
     // Layer-shell stacking (see layers.rs); a fullscreen window covers the panel.
     let overview = !backdrop.is_empty();
+    // Judged by the windows that sit on this monitor: one that merely reaches
+    // over from the next monitor must not un-fullscreen it.
     let fullscreen = !overview
         && windows
-            .last()
+            .iter()
+            .rev()
+            .find(|p| output_geo.to_f64().contains(p.rect.loc + p.rect.size.downscale(2.0).to_point()))
             .is_some_and(|p| with_state(&p.window, |s| s.placement == Placement::Fullscreen));
     let mut layer = |renderer: &mut GlesRenderer, which| {
         layer_elements(renderer, popups, output, output_loc, which, scale, now)
