@@ -7,6 +7,7 @@
 mod arrange;
 mod backlight;
 mod bluetooth;
+mod dbus;
 mod defaults;
 mod mixer;
 mod pages;
@@ -31,6 +32,7 @@ use rustix::{
 };
 use smithay_client_toolkit::reexports::client::backend::WaylandError;
 use smithay_client_toolkit::{
+    activation::{ActivationHandler, ActivationState, RequestData},
     compositor::{CompositorHandler, CompositorState, FrameCallbackData},
     delegate_dispatch2, delegate_registry,
     dispatch2::Dispatch2,
@@ -104,6 +106,7 @@ struct App {
     conn: Connection,
     shm_format: wl_shm::Format,
     window: Window,
+    activation: Option<ActivationState>,
     loop_handle: LoopHandle<'static, App>,
     exit: LoopSignal,
 
@@ -182,8 +185,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let page = std::env::args()
-        .nth(1)
+    let arg = std::env::args().nth(1);
+    // One window: a running Settings takes the page instead.
+    if dbus::forward(arg.as_deref()) {
+        return Ok(());
+    }
+    let page = arg
         .and_then(|name| {
             let page = Page::from_name(&name);
             if page.is_none() {
@@ -236,6 +243,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (None, None),
     };
     window.commit();
+
+    // A second launch asks this window to switch page and come forward.
+    let (show_tx, show_rx) = channel::channel::<dbus::Show>();
+    event_loop
+        .handle()
+        .insert_source(show_rx, |event, _, app: &mut App| {
+            if let channel::Event::Msg(show) = event {
+                if let Some(page) = show.page {
+                    app.show_page(page);
+                }
+                app.raise(show.token);
+                app.redraw();
+            }
+        })?;
+    dbus::serve(show_tx);
 
     // Wallpaper thumbnails, decoded off the main thread.
     let (thumb_tx, thumb_rx) = channel::channel();
@@ -305,6 +327,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         conn: conn.clone(),
         shm_format: wl_shm::Format::Argb8888,
         window,
+        activation: ActivationState::bind(&globals, &qh).ok(),
         loop_handle: event_loop.handle(),
         exit: event_loop.get_signal(),
         ui: Ui {
@@ -875,6 +898,66 @@ impl App {
         self.wifi_command(wifi::Command::Join(join));
     }
 
+    /// Switch to `page` (nothing happens if it's showing already).
+    fn show_page(&mut self, page: Page) {
+        if self.ui.page == page {
+            return;
+        }
+        // Stop looking for devices once their page is left.
+        if self.ui.page == Page::Bluetooth {
+            self.bluetooth_command(bluetooth::Command::Discover(false));
+        }
+        if self.ui.page == Page::Sound {
+            self.close_sound();
+        }
+        self.ui.page = page;
+        self.ui.wifi_details = None;
+        self.res
+            .anim
+            .restart(view::AnimKey::Page, 0.0, 1.0, cnde_ui::anim::MEDIUM);
+        self.ui.scroll = 0.0;
+        if page == Page::Wifi {
+            self.open_wifi();
+        }
+        if page == Page::Bluetooth {
+            self.open_bluetooth();
+        }
+        if page == Page::Power {
+            self.open_power();
+        }
+        if page == Page::Sound {
+            self.open_sound();
+        }
+        if page == Page::DefaultApps {
+            self.open_default_apps();
+        }
+        if page == Page::Displays {
+            self.ui.brightness = backlight::read();
+        }
+    }
+
+    /// Bring the window to the front with the caller's activation token, or
+    /// one asked for on our own surface when it passed none.
+    fn raise(&mut self, token: String) {
+        let Some(activation) = &self.activation else {
+            return;
+        };
+        let surface = self.window.wl_surface();
+        if token.is_empty() {
+            activation.request_token(
+                &self.qh,
+                RequestData {
+                    app_id: Some("cnde-settings".into()),
+                    seat_and_serial: None,
+                    surface: Some(surface.clone()),
+                    udata: (),
+                },
+            );
+        } else {
+            activation.activate::<Self>(surface, token);
+        }
+    }
+
     fn redraw(&mut self) {
         if !self.configured || self.frame_pending {
             self.dirty = true;
@@ -1160,39 +1243,7 @@ impl App {
         };
         match target {
             Target::Page(page) => {
-                if self.ui.page != page {
-                    // Stop looking for devices once their page is left.
-                    if self.ui.page == Page::Bluetooth {
-                        self.bluetooth_command(bluetooth::Command::Discover(false));
-                    }
-                    if self.ui.page == Page::Sound {
-                        self.close_sound();
-                    }
-                    self.ui.page = page;
-                    self.ui.wifi_details = None;
-                    self.res
-                        .anim
-                        .restart(view::AnimKey::Page, 0.0, 1.0, cnde_ui::anim::MEDIUM);
-                    self.ui.scroll = 0.0;
-                    if page == Page::Wifi {
-                        self.open_wifi();
-                    }
-                    if page == Page::Bluetooth {
-                        self.open_bluetooth();
-                    }
-                    if page == Page::Power {
-                        self.open_power();
-                    }
-                    if page == Page::Sound {
-                        self.open_sound();
-                    }
-                    if page == Page::DefaultApps {
-                        self.open_default_apps();
-                    }
-                    if page == Page::Displays {
-                        self.ui.brightness = backlight::read();
-                    }
-                }
+                self.show_page(page);
             }
             Target::Mixer(hit) => self.press_mixer(hit, position),
             Target::Back => self.open_sub_page(None),
@@ -2133,6 +2184,16 @@ impl KeyboardHandler for App {
         _: u32,
     ) {
         self.modifiers = modifiers;
+    }
+}
+
+impl ActivationHandler for App {
+    type RequestUdata = ();
+
+    fn new_token(&mut self, token: String, data: &RequestData<()>) {
+        if let (Some(activation), Some(surface)) = (&self.activation, &data.surface) {
+            activation.activate::<Self>(surface, token);
+        }
     }
 }
 
