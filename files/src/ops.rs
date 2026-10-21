@@ -646,6 +646,9 @@ impl App {
 
     /// Right-click: select the row under the pointer and show the menu.
     pub(crate) fn context_click(&mut self, position: (f64, f64)) {
+        if self.ui.picker.is_some() {
+            return;
+        }
         if self.ui.x.sheet.is_some() {
             return;
         }

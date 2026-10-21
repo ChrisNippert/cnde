@@ -1,7 +1,7 @@
 //! The folder on show: its entries, order, selection and cursor. Pure
 //! in-memory state; the listing itself arrives from a background thread.
 
-use std::{collections::HashSet, path::PathBuf};
+use std::{collections::HashSet, path::PathBuf, rc::Rc};
 
 use crate::model::{self, Entry, SortKey};
 
@@ -12,6 +12,9 @@ pub enum Location {
     Recent,
     Dir(PathBuf),
 }
+
+/// Picker mode: whether a file shows.
+pub type Shown = Rc<dyn Fn(&Entry) -> bool>;
 
 pub struct Folder {
     /// In sort order.
@@ -32,6 +35,10 @@ pub struct Folder {
     pub cursor: Option<usize>,
     /// Where a Shift range starts.
     pub anchor: Option<usize>,
+    /// Picker mode: which files show (folders always do).
+    pub shown: Option<Shown>,
+    /// Picker mode: one selected item at most.
+    pub single: bool,
 }
 
 impl Folder {
@@ -49,6 +56,8 @@ impl Folder {
             selected: HashSet::new(),
             cursor: None,
             anchor: None,
+            shown: None,
+            single: false,
         }
     }
 
@@ -76,6 +85,11 @@ impl Folder {
             self.descending = false;
         }
         self.resort();
+    }
+
+    pub fn set_shown(&mut self, shown: Option<Shown>) {
+        self.shown = shown;
+        self.rebuild();
     }
 
     pub fn set_hidden(&mut self, show: bool) {
@@ -114,6 +128,7 @@ impl Folder {
             .iter()
             .enumerate()
             .filter(|(_, e)| show || !e.hidden)
+            .filter(|(_, e)| e.is_dir || self.shown.as_ref().is_none_or(|f| f(e)))
             .map(|(i, _)| i)
             .collect();
         crate::search::filter(&self.entries, &mut self.visible, &self.query);
@@ -152,6 +167,9 @@ impl Folder {
 
     /// Ctrl+click.
     pub fn toggle(&mut self, pos: usize) {
+        if self.single {
+            return self.select_only(pos);
+        }
         if let Some(name) = self.entry(pos).map(|e| e.name.clone())
             && !self.selected.remove(&name)
         {
@@ -163,6 +181,9 @@ impl Folder {
 
     /// Shift+click: from the anchor to `pos`.
     pub fn select_range(&mut self, pos: usize) {
+        if self.single {
+            return self.select_only(pos);
+        }
         let anchor = self.anchor.unwrap_or(pos);
         let (a, b) = (anchor.min(pos), anchor.max(pos));
         self.selected.clear();
@@ -176,6 +197,9 @@ impl Folder {
     }
 
     pub fn select_all(&mut self) {
+        if self.single {
+            return;
+        }
         self.selected = self
             .visible
             .iter()
