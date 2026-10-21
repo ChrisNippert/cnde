@@ -489,6 +489,42 @@ impl State {
     }
 }
 
+/// How long a token stays good for `request_activation`.
+const ACTIVATION_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl smithay::wayland::xdg_activation::XdgActivationHandler for State {
+    fn activation_state(&mut self) -> &mut smithay::wayland::xdg_activation::XdgActivationState {
+        &mut self.xdg_activation_state
+    }
+
+    /// Tokens are handed out freely; a recent one is enough to bring the
+    /// window forward. Stale ones are ignored (there is no per-window
+    /// urgency to flag).
+    fn request_activation(
+        &mut self,
+        token: smithay::wayland::xdg_activation::XdgActivationToken,
+        data: smithay::wayland::xdg_activation::XdgActivationTokenData,
+        surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
+        // One use each.
+        self.xdg_activation_state.remove_token(&token);
+        if data.timestamp.elapsed() > ACTIVATION_TOKEN_TTL {
+            tracing::debug!("ignoring stale activation token");
+            return;
+        }
+        // Minimized windows aren't in the space, so ask the workspaces.
+        let id = self.workspaces.list.iter().flat_map(|ws| &ws.windows).find_map(|w| {
+            w.toplevel()
+                .is_some_and(|t| t.wl_surface() == &surface)
+                .then(|| crate::window::with_state(w, |s| s.id))
+        });
+        if let Some(id) = id {
+            self.activate_window(id);
+        }
+    }
+}
+smithay::delegate_xdg_activation!(State);
+
 /// See `State::touching_edges`.
 #[derive(Default)]
 pub struct Touching {

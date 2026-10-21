@@ -35,6 +35,7 @@ use smithay::{
             xdg::{XdgShellState, decoration::XdgDecorationState},
         },
         shm::ShmState,
+        xdg_activation::XdgActivationState,
         socket::ListeningSocketSource,
         presentation::PresentationState,
         viewporter::ViewporterState,
@@ -152,6 +153,7 @@ pub struct State {
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub layer_shell_state: WlrLayerShellState,
+    pub xdg_activation_state: XdgActivationState,
     #[allow(dead_code)] // owns the global; dropping it removes the protocol
     pub xdg_decoration_state: XdgDecorationState,
     pub shm_state: ShmState,
@@ -180,6 +182,7 @@ impl State {
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(
             &dh,
@@ -277,6 +280,7 @@ impl State {
             compositor_state,
             xdg_shell_state,
             layer_shell_state,
+            xdg_activation_state,
             xdg_decoration_state,
             shm_state,
             output_manager_state,
