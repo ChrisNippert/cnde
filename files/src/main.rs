@@ -22,6 +22,8 @@ mod newfile;
 mod openwith;
 mod ops;
 mod pages;
+mod picker;
+mod request;
 mod scrollbar;
 mod search;
 mod thumbs;
@@ -235,7 +237,7 @@ fn connection_lost(conn: &Connection) -> Option<String> {
 /// made absolute (a file opens its folder).
 /// The folder named on the command line; none shows the Overview.
 fn start_path() -> Option<PathBuf> {
-    let arg = std::env::args().nth(1)?;
+    let arg = std::env::args().nth(1).filter(|a| a != "--pick")?;
     let arg = match arg.strip_prefix("file://") {
         Some(rest) => percent_decode(rest),
         None => arg,
@@ -277,12 +279,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
-    let start_dir = start_path();
+    // `--pick`: a file chooser for the portal, not the file manager.
+    let picking = std::env::args()
+        .nth(1)
+        .filter(|a| a == "--pick")
+        .and_then(|_| {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            let req = request::Request::from_args(&args);
+            if req.is_none() {
+                warn!("bad --pick arguments");
+            }
+            req
+        });
+    if std::env::args().nth(1).as_deref() == Some("--pick") && picking.is_none() {
+        std::process::exit(2);
+    }
+    let start_dir = match &picking {
+        Some(req) => req.folder.clone().filter(|f| f.is_dir()),
+        None => start_path(),
+    };
     // One window: a running cnde-files takes the folder instead.
-    if std::env::var_os("CNDE_FILES_NEW").is_none() && dbus::forward(start_dir.as_deref()) {
+    if picking.is_none()
+        && std::env::var_os("CNDE_FILES_NEW").is_none()
+        && dbus::forward(start_dir.as_deref())
+    {
         return Ok(());
     }
-    let start = start_dir.map_or(Location::Overview, Location::Dir);
+    let start = match start_dir {
+        Some(dir) => Location::Dir(dir),
+        None if picking.is_some() => Location::Dir(home.clone()),
+        None => Location::Overview,
+    };
 
     let conn = Connection::connect_to_env()?;
     let (globals, queue) = registry_queue_init(&conn)?;
@@ -310,8 +337,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cursor_surface = compositor.create_surface(&qh);
     let surface = compositor.create_surface(&qh);
     let window = xdg_shell.create_window(surface, WindowDecorations::RequestClient, &qh);
-    window.set_title("Files");
-    window.set_app_id("cnde-files");
+    match &picking {
+        Some(req) => {
+            window.set_title(picker::Picker::new(req.clone()).title());
+            window.set_app_id("cnde-files-picker");
+        }
+        None => {
+            window.set_title("Files");
+            window.set_app_id("cnde-files");
+        }
+    }
     window.set_min_size(Some(MIN_SIZE));
     // Fractional scale draws at the exact pixel size; without both globals,
     // integer scale.
@@ -336,7 +371,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })?;
     watch_screen(tx.clone());
-    dbus::serve(tx.clone());
+    if picking.is_none() {
+        dbus::serve(tx.clone());
+    }
     {
         let tx = std::sync::Mutex::new(tx.clone());
         thumbs::start(move || {
@@ -345,7 +382,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
-    apps::start();
+    if picking.is_none() {
+        apps::start();
+    }
     start_places(tx.clone(), home.clone());
     marks::start(tx.clone(), home.clone());
     start_drives(tx.clone());
@@ -380,6 +419,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pages: Pages::default(),
         search: Search::default(),
         x: ops::Extra::default(),
+        picker: picking.clone().map(picker::Picker::new),
     };
     let data = DataDeviceManagerState::bind(&globals, &qh)
         .ok()
@@ -406,7 +446,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui,
         res: Res::new(theme, icons),
         painted: Painted::default(),
-        config_path,
+        // A chooser leaves the file manager's saved sizes alone.
+        config_path: config_path.filter(|_| picking.is_none()),
         generation: 0,
         cancel: Arc::new(AtomicBool::new(false)),
         back: Vec::new(),
@@ -444,6 +485,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     WaylandSource::new(conn.clone(), queue).insert(event_loop.handle())?;
     watch_config(&mut app);
+    if app.ui.picker.is_some() {
+        app.ui.folder.single = !picking.as_ref().is_some_and(|r| r.multiple);
+        app.picker_refilter();
+    }
     app.show(start);
 
     let mut lost = None;
@@ -460,6 +505,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(err) = lost {
         return Err(err.into());
+    }
+    if let Some(picker) = &app.ui.picker {
+        // The portal reads the answer; no answer is a cancel.
+        let Some(answer) = &picker.done else {
+            std::process::exit(1);
+        };
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(answer.render().as_bytes());
+        let _ = out.flush();
     }
     Ok(())
 }
@@ -710,6 +765,8 @@ impl App {
         folder.descending = old.descending;
         folder.show_hidden = old.show_hidden;
         folder.query = old.query.clone();
+        folder.shown = old.shown.clone();
+        folder.single = old.single;
         self.ui.folder = folder;
         self.ui.hover_row = None;
         self.ui.x.rename = None;
@@ -751,7 +808,9 @@ impl App {
             _ => {
                 self.cancel.store(true, Ordering::Relaxed);
                 self.generation += 1;
-                self.ui.folder = Folder::new();
+                let old = std::mem::replace(&mut self.ui.folder, Folder::new());
+                self.ui.folder.shown = old.shown;
+                self.ui.folder.single = old.single;
                 self.ui.folder.loading = false;
                 self.unwatch();
             }
@@ -812,6 +871,8 @@ impl App {
     fn open_path(&mut self, path: PathBuf, is_dir: bool) {
         if is_dir {
             self.go(Location::Dir(path));
+        } else if self.ui.picker.is_some() {
+            self.picker_open_file(path);
         } else {
             let tx = self.events.clone();
             std::thread::spawn(move || {
@@ -1030,7 +1091,7 @@ impl App {
 
     fn press(&mut self, position: (f64, f64), serial: u32) {
         self.serial = serial;
-        if self.sheet_press(position) {
+        if self.sheet_press(position) || self.picker_press(position) {
             return;
         }
         if self.menu_press(position) {
@@ -1116,6 +1177,7 @@ impl App {
             Target::Trash => self.go(Location::Dir(model::trash_dir())),
             Target::Sort(key) => self.ui.folder.set_sort(key),
             Target::Act(act) => self.act(act),
+            Target::Pick(hit) => self.picker_hit(hit),
         }
         self.redraw();
     }
@@ -1146,7 +1208,7 @@ impl App {
         } else {
             self.ui.folder.select_only(pos);
         }
-        if self.ui.folder.is_selected(pos) {
+        if self.ui.folder.is_selected(pos) && self.ui.picker.is_none() {
             self.drag_arm(position, serial);
         }
         if double && !ctrl && !shift {
@@ -1155,6 +1217,7 @@ impl App {
         } else {
             self.last_click = Some((now, pos));
         }
+        self.picker_sync_name();
         self.redraw();
     }
 
@@ -1164,7 +1227,7 @@ impl App {
             self.modifiers.alt,
             self.modifiers.shift,
         );
-        if self.pre_key(&event) {
+        if self.pre_key(&event) || self.picker_key(&event) {
             return;
         }
         let (cols, row_h) = self.cells();
@@ -1249,6 +1312,7 @@ impl App {
         if let Some(pos) = moved {
             self.ensure_visible(pos);
         }
+        self.picker_sync_name();
         self.redraw();
     }
 

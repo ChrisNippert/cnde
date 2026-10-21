@@ -91,6 +91,8 @@ pub enum Target {
     Sort(SortKey),
     /// An info panel button or a context menu row.
     Act(ops::Act),
+    /// The picker's bottom row.
+    Pick(crate::picker::Hit),
 }
 
 /// A custom shortcut in the sidebar (see [`crate::bookmarks`]).
@@ -138,6 +140,8 @@ pub struct Ui {
     pub search: Search,
     /// Info panel, rename, menu and refresh state.
     pub x: ops::Extra,
+    /// File chooser mode.
+    pub picker: Option<crate::picker::Picker>,
 }
 
 /// The result of a paint, for hit-testing.
@@ -240,7 +244,12 @@ pub fn list_rect(ui: &Ui, w: f32, h: f32) -> Rect {
         0.0
     };
     let top = TOP_H + TITLE_H + head;
-    Rect::new(SIDE_W, top, list_w(ui, w), (h - top).max(0.0))
+    let bar = if ui.picker.is_some() {
+        crate::picker::BAR_H
+    } else {
+        0.0
+    };
+    Rect::new(SIDE_W, top, list_w(ui, w), (h - top - bar).max(0.0))
 }
 
 /// Width of the list area in a window `w` wide.
@@ -658,6 +667,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         t.window_background,
         (SIDE_W, 0.0, w - SIDE_W, list.y),
     );
+    crate::picker::paint_bar(ui, &mut p, &c, &mut out, (w, h), radius);
     if panel_w(ui) > 0.0 {
         info::paint(ui, &mut p, &c, &mut out, w, h);
     }
@@ -693,6 +703,7 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     transfer::paint_strip(ui, &mut p, &c, &mut out, w, h);
     crate::mainmenu::paint(ui, &mut p, &mut out, w, h);
     ops::paint_menu(ui, &mut p, &mut out, w, h);
+    crate::picker::paint_overlay(ui, &mut p, &c, &mut out, (w, h), radius);
     if let Some(sheet) = &ui.x.sheet {
         crate::openwith::paint(sheet, ui.hover, &mut p, &c, &mut out, (w, h), radius);
     }
@@ -1081,18 +1092,21 @@ fn top_bar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, w: f
             .push((Rect::new(bx, cy - size / 2.0, size, size), target));
     }
     let mut rx = w - 10.0 - shown as f32 * (size + 8.0) - 4.0;
-    rx -= 32.0;
-    button(p, out, rx, "view-more-symbolic", Target::Menu, false, true);
-    rx -= 34.0;
-    button(
-        p,
-        out,
-        rx,
-        "dialog-information-symbolic",
-        Target::Info,
-        ui.info_panel,
-        true,
-    );
+    // A file chooser has no menu and no info panel.
+    if ui.picker.is_none() {
+        rx -= 32.0;
+        button(p, out, rx, "view-more-symbolic", Target::Menu, false, true);
+        rx -= 34.0;
+        button(
+            p,
+            out,
+            rx,
+            "dialog-information-symbolic",
+            Target::Info,
+            ui.info_panel,
+            true,
+        );
+    }
     rx -= 8.0 + 68.0;
     // The list / grid switch.
     p.canvas.rounded_rect(rx, cy - 16.0, 68.0, 32.0, 9.0, c.seg);
@@ -1655,6 +1669,7 @@ mod tests {
             pages: Pages::default(),
             search: Search::default(),
             x: ops::Extra::default(),
+            picker: None,
         }
     }
 
