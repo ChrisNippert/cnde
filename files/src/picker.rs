@@ -385,7 +385,7 @@ pub fn paint_overlay(
             c.ink,
         );
         p.label_v(
-            "A file with this name already exists here. Replacing it overwrites its contents.",
+            "It already exists here and would be overwritten.",
             cx + 22.0,
             cy + 62.0,
             cw - 44.0,
