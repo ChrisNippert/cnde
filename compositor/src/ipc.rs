@@ -519,6 +519,7 @@ impl smithay::wayland::xdg_activation::XdgActivationHandler for State {
                 .then(|| crate::window::with_state(w, |s| s.id))
         });
         if let Some(id) = id {
+            tracing::debug!(id, "activation token: raising window");
             self.activate_window(id);
         }
     }
