@@ -402,12 +402,11 @@ impl State {
         };
         space
             .elements_for_output(output)
-            .filter(|w| {
+            .rfind(|w| {
                 space
                     .element_geometry(w)
                     .is_some_and(|g| geo.contains(g.loc + g.size.downscale(2).to_point()))
             })
-            .next_back()
             .is_some_and(|w| Self::placement_of(w) == Placement::Fullscreen)
     }
 
