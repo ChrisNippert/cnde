@@ -5,7 +5,10 @@
 //! connected client receives every [`Event`]; clients send [`Request`]s.
 //! Unknown messages are ignored on both sides, so either end can be newer.
 
-use std::path::PathBuf;
+use std::{
+    io::{BufRead, Write},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +30,10 @@ pub enum Event {
     /// changes (and right after connecting).
     Windows {
         windows: Vec<WindowInfo>,
+    },
+    /// The answer to [`Request::NewToken`] (sent to the asker alone).
+    Token {
+        token: String,
     },
     /// The screen is frozen for a screenshot: show the selection tool.
     /// `windows`: what window mode can pick, top first, global logical px.
@@ -166,6 +173,10 @@ pub struct WindowInfo {
     pub app_id: String,
     pub title: String,
     pub focused: bool,
+    /// Wants attention (asked to show something while out of sight); clears
+    /// when it's focused.
+    #[serde(default)]
+    pub urgent: bool,
 }
 
 /// Clients -> compositor.
@@ -230,6 +241,11 @@ pub enum Request {
     /// An app was just started: show a busy pointer until a window opens
     /// (or a few seconds pass).
     Launching,
+    /// Ask for an activation token to launch an app with
+    /// (`XDG_ACTIVATION_TOKEN`), so it may raise itself or the instance it
+    /// hands its work to. Answered to the asking connection only, with
+    /// [`Event::Token`].
+    NewToken,
     /// Lock the screen, as Super+L does.
     LockScreen,
     /// End the session: stop the compositor, as Ctrl+Alt+Backspace does.
@@ -309,6 +325,28 @@ pub mod app_grid {
 pub fn socket_path(pid: u32) -> Option<PathBuf> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")?;
     Some(PathBuf::from(runtime).join(format!("cnde-{pid}.sock")))
+}
+
+/// A fresh activation token from the compositor, for something we're about
+/// to launch: it may then raise itself, or the running instance it hands
+/// its work to. A connection of its own, so the answer comes straight back;
+/// `None` if there's no compositor socket or it doesn't answer in time.
+pub fn new_token() -> Option<String> {
+    let path = std::env::var_os(SOCKET_ENV)?;
+    let mut stream = std::os::unix::net::UnixStream::connect(path).ok()?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+        .ok()?;
+    stream.write_all(&encode(&Request::NewToken)).ok()?;
+    // The compositor greets a new connection with its state; skip to the
+    // answer.
+    std::io::BufReader::new(stream)
+        .split(b'\n')
+        .map_while(Result::ok)
+        .find_map(|line| match decode::<Event>(&line)? {
+            Event::Token { token } => Some(token),
+            _ => None,
+        })
 }
 
 /// One message as a line, ready to write.

@@ -129,6 +129,7 @@ impl State {
                 while let Some(end) = pending.iter().position(|&b| b == b'\n') {
                     let line: Vec<u8> = pending.drain(..=end).collect();
                     match cnde_ipc::decode::<Request>(&line[..line.len() - 1]) {
+                        Some(Request::NewToken) => state.send_ipc_token(id),
                         Some(request) => state.handle_ipc_request(request),
                         None => debug!(id, "ignoring unknown IPC message"),
                     }
@@ -229,6 +230,7 @@ impl State {
                     toplevel.send_close();
                 }
             }
+            Request::NewToken => {}
             Request::LockScreen => self.lock_screen(),
             Request::LogOut => self.loop_signal.stop(),
             Request::Launching => {
@@ -255,6 +257,26 @@ impl State {
         }
     }
 
+    /// Answer a `NewToken` request: a fresh activation token for `client`
+    /// to launch something with.
+    fn send_ipc_token(&mut self, client: u64) {
+        if self.lock.is_locked() {
+            return;
+        }
+        let token = self
+            .xdg_activation_state
+            .create_external_token(None)
+            .0
+            .as_str()
+            .to_string();
+        let line = cnde_ipc::encode(&Event::Token { token });
+        if let Some((_, stream)) = self.ipc.clients.iter_mut().find(|(id, _)| *id == client)
+            && stream.write_all(&line).is_err()
+        {
+            self.ipc.clients.retain(|(id, _)| *id != client);
+        }
+    }
+
     /// Send the window list if it changed. Runs every loop iteration; cheap
     /// with a handful of windows, and free with no clients.
     pub fn sync_ipc_windows(&mut self) {
@@ -274,6 +296,7 @@ impl State {
                     app_id,
                     title,
                     focused: focused.as_ref() == Some(window),
+                    urgent: crate::window::with_state(window, |s| s.urgent),
                 }
             })
             .collect();
@@ -507,8 +530,10 @@ impl smithay::wayland::xdg_activation::XdgActivationHandler for State {
     }
 
     /// Tokens are handed out freely; a recent one is enough to bring the
-    /// window forward. Stale ones are ignored (there is no per-window
-    /// urgency to flag).
+    /// window forward, if its workspace is on a monitor. Otherwise (and for
+    /// stale tokens) it's flagged urgent instead: switching workspaces
+    /// under the user's hands is worse than a lit dock icon. (Tokens we
+    /// never issued don't reach here; smithay drops them.)
     fn request_activation(
         &mut self,
         token: smithay::wayland::xdg_activation::XdgActivationToken,
@@ -517,20 +542,31 @@ impl smithay::wayland::xdg_activation::XdgActivationHandler for State {
     ) {
         // One use each.
         self.xdg_activation_state.remove_token(&token);
-        if data.timestamp.elapsed() > ACTIVATION_TOKEN_TTL {
-            tracing::debug!("ignoring stale activation token");
+        // Minimized windows aren't in the space, so ask the workspaces.
+        let found = self.workspaces.list.iter().enumerate().find_map(|(index, ws)| {
+            ws.windows
+                .iter()
+                .find(|w| w.toplevel().is_some_and(|t| t.wl_surface() == &surface))
+                .map(|w| (index, w.clone()))
+        });
+        let Some((index, window)) = found else {
+            return;
+        };
+        let id = crate::window::with_state(&window, |s| s.id);
+        let (outputs, _) = self.strip_outputs();
+        let shown = outputs
+            .iter()
+            .any(|output| self.workspace_on(output) == Some(index));
+        if data.timestamp.elapsed() > ACTIVATION_TOKEN_TTL || !shown {
+            if self.focused_window().as_ref() != Some(&window) {
+                tracing::debug!(id, "activation request: marking window urgent");
+                crate::window::with_state(&window, |s| s.urgent = true);
+                self.queue_redraw();
+            }
             return;
         }
-        // Minimized windows aren't in the space, so ask the workspaces.
-        let id = self.workspaces.list.iter().flat_map(|ws| &ws.windows).find_map(|w| {
-            w.toplevel()
-                .is_some_and(|t| t.wl_surface() == &surface)
-                .then(|| crate::window::with_state(w, |s| s.id))
-        });
-        if let Some(id) = id {
-            tracing::debug!(id, "activation token: raising window");
-            self.activate_window(id);
-        }
+        tracing::debug!(id, "activation token: raising window");
+        self.activate_window(id);
     }
 }
 smithay::delegate_xdg_activation!(State);

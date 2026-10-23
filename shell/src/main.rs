@@ -579,6 +579,8 @@ impl App {
                 self.windows = windows;
                 self.sync_dock();
             }
+            // Only answers a one-off connection (`ipc::new_token`).
+            cnde_ipc::Event::Token { .. } => {}
             cnde_ipc::Event::ScreenshotUi { windows } => self.open_screenshot_ui(windows),
             cnde_ipc::Event::Edges { outputs } => {
                 self.edges = outputs;

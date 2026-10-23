@@ -48,6 +48,8 @@ pub struct Item {
     pub focused: bool,
     /// Count, progress and urgency an app reported (see `badges`).
     pub badge: Badge,
+    /// A window of it wants attention (see `WindowInfo::urgent`); the first.
+    pub urgent: Option<u64>,
 }
 
 /// What the dock shows: favorites first (running or not), then every other
@@ -63,12 +65,16 @@ pub fn items(favorites: &[String], apps: &[AppEntry], windows: &[WindowInfo]) ->
             windows: Vec::new(),
             focused: false,
             badge: Badge::default(),
+            urgent: None,
         };
         for (i, window) in windows.iter().enumerate() {
             if !claimed[i] && entry.owns(&window.app_id) {
                 claimed[i] = true;
                 item.windows.push(window.id);
                 item.focused |= window.focused;
+                if window.urgent && item.urgent.is_none() {
+                    item.urgent = Some(window.id);
+                }
             }
         }
         item
@@ -94,6 +100,9 @@ pub fn items(favorites: &[String], apps: &[AppEntry], windows: &[WindowInfo]) ->
                 Some(item) => {
                     item.windows.push(window.id);
                     item.focused |= window.focused;
+                    if window.urgent && item.urgent.is_none() {
+                        item.urgent = Some(window.id);
+                    }
                 }
                 None => out.push(Item {
                     app: None,
@@ -102,6 +111,7 @@ pub fn items(favorites: &[String], apps: &[AppEntry], windows: &[WindowInfo]) ->
                     windows: vec![window.id],
                     focused: window.focused,
                     badge: Badge::default(),
+                    urgent: window.urgent.then_some(window.id),
                 }),
             }
         }
@@ -116,6 +126,10 @@ fn running_click(item: &Item, click_minimizes: bool) -> Click {
     let Some(&first) = item.windows.first() else {
         return Click::Nothing;
     };
+    // Something wants attention: go there first.
+    if let Some(urgent) = item.urgent {
+        return Click::Activate(urgent);
+    }
     if item.focused && click_minimizes {
         return Click::Minimize(item.windows.clone());
     }
@@ -374,6 +388,10 @@ pub struct Dock {
     /// Apps just launched from here (desktop IDs), bouncing until their
     /// window shows up.
     pub launching: Vec<(String, std::time::Instant)>,
+    /// Windows that were urgent at the last update, and the icons that just
+    /// became so, hopping once.
+    urgent_seen: Vec<u64>,
+    attention: Vec<(u64, std::time::Instant)>,
 }
 
 /// The two ways an edge dock's shape moves.
@@ -535,6 +553,8 @@ impl Dock {
             edit: None,
             drag: None,
             launching: Vec::new(),
+            urgent_seen: Vec::new(),
+            attention: Vec::new(),
         }
     }
 
@@ -768,6 +788,14 @@ impl Dock {
 
     /// New items or icon size: resize (and reserve the space, on an edge).
     pub fn update(&mut self, items: Vec<Item>, icon: f32) {
+        // One hop for each window that just turned urgent.
+        let urgent: Vec<u64> = items.iter().filter_map(|i| i.urgent).collect();
+        for &id in &urgent {
+            if !self.urgent_seen.contains(&id) {
+                self.attention.push((id, std::time::Instant::now()));
+            }
+        }
+        self.urgent_seen = urgent;
         self.items = items;
         let layout = self.layout(icon);
         let size = (layout.width.ceil() as u32, layout.height.ceil() as u32);
@@ -913,6 +941,7 @@ impl Dock {
             }
             None => theme,
         };
+        self.attention.retain(|(_, at)| at.elapsed().as_secs_f32() < HOP);
         // Bouncing icons: done once the app has a window, or after a while.
         let items = &self.items;
         self.launching.retain(|(id, at)| {
@@ -925,13 +954,24 @@ impl Dock {
             .items
             .iter()
             .map(|item| {
-                self.launching
+                let launching = self
+                    .launching
                     .iter()
                     .find(|(id, _)| item.app.as_deref() == Some(id))
-                    .map_or(0.0, |(_, at)| {
-                        let t = at.elapsed().as_secs_f32() / HOP;
-                        (t * std::f32::consts::PI).sin().abs() * HOP_HEIGHT
-                    })
+                    .map(|(_, at)| *at);
+                // A single hop, for a window that just wanted attention.
+                let attention = self
+                    .attention
+                    .iter()
+                    .find(|(id, _)| item.windows.contains(id))
+                    .map(|(_, at)| *at);
+                launching.map_or(0.0, |at| {
+                    let t = at.elapsed().as_secs_f32() / HOP;
+                    (t * std::f32::consts::PI).sin().abs() * HOP_HEIGHT
+                }) + attention.map_or(0.0, |at| {
+                    let t = at.elapsed().as_secs_f32() / HOP;
+                    (t * std::f32::consts::PI).sin() * HOP_HEIGHT
+                })
             })
             .collect();
         // Away from the screen edge it's on.
@@ -989,6 +1029,7 @@ impl Dock {
         }
         // Keep hopping: draw again on the next frame.
         if !self.launching.is_empty()
+            || !self.attention.is_empty()
             || self.solid_fade.running()
             || self.tint_fade.running()
             || self.shape.running()
@@ -1147,7 +1188,9 @@ fn paint(
                 theme.qs_dim,
             );
         }
-        paint_badge(canvas, fonts, theme, item.badge, (x, y), icon, look.pulse);
+        let mut badge = item.badge;
+        badge.urgent |= item.urgent.is_some();
+        paint_badge(canvas, fonts, theme, badge, (x, y), icon, look.pulse);
         if edit.is_some() && item.favorite {
             let b = badge_rect(*cell);
             canvas.circle(
@@ -1468,6 +1511,7 @@ mod tests {
             app_id: app_id.into(),
             title: String::new(),
             focused,
+            urgent: false,
         }
     }
 
@@ -1480,6 +1524,7 @@ mod tests {
             windows,
             focused,
             badge: Badge::default(),
+            urgent: None,
         };
         // Not focused: bring up the first window (restoring a minimized one).
         assert!(matches!(
@@ -1516,6 +1561,7 @@ mod tests {
                 windows: vec![],
                 focused: false,
                 badge: Badge::default(),
+                urgent: None,
             };
             3
         ];
@@ -1539,6 +1585,7 @@ mod tests {
             windows: vec![],
             focused: false,
             badge: Badge::default(),
+            urgent: None,
         };
         let items = vec![item; 2];
         let place = LauncherPlace {

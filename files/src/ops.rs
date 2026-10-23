@@ -399,6 +399,12 @@ pub(crate) fn in_terminal(mut term: Vec<String>, command: Vec<String>) -> Vec<St
 
 /// Run `cmd` detached, reaping it on a thread.
 pub(crate) fn run_detached(mut cmd: Command) -> std::io::Result<()> {
+    // A token from the compositor, so the app (or the instance it hands the
+    // files to) may come to the front.
+    if let Some(token) = cnde_ipc::new_token() {
+        cmd.env("XDG_ACTIVATION_TOKEN", &token)
+            .env("DESKTOP_STARTUP_ID", &token);
+    }
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())
