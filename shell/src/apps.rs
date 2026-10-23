@@ -332,6 +332,17 @@ fn command_line(exec: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Hand `command` a fresh activation token (`XDG_ACTIVATION_TOKEN`, and
+/// `DESKTOP_STARTUP_ID` for older toolkits), so what it starts, or the
+/// running instance it forwards to, is allowed to come to the front.
+pub fn with_activation_token(command: &mut Command) {
+    if let Some(token) = cnde_ipc::new_token() {
+        command
+            .env("XDG_ACTIVATION_TOKEN", &token)
+            .env("DESKTOP_STARTUP_ID", &token);
+    }
+}
+
 /// Start `app`, fully detached: it outlives the shell, and its output goes
 /// nowhere (apps that log a lot would otherwise fill our log).
 pub fn launch(app: &App, terminal: &str) {
@@ -344,14 +355,16 @@ pub fn launch(app: &App, terminal: &str) {
     debug!(id = %app.id, command = %line, "launching");
     // The outer shell backgrounds the app and exits at once, so the app is
     // reparented away from us and we never have to reap it.
-    let result = Command::new("sh")
+    let mut command = Command::new("sh");
+    command
         .arg("-c")
         .arg(format!("{line} </dev/null >/dev/null 2>&1 &"))
         .current_dir(std::env::var_os("HOME").unwrap_or_else(|| "/".into()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+        .stderr(Stdio::null());
+    with_activation_token(&mut command);
+    let result = command.status();
     if let Err(err) = result {
         warn!(id = %app.id, %err, "can't launch");
     }
@@ -360,14 +373,16 @@ pub fn launch(app: &App, terminal: &str) {
 /// Run a command line through `sh`, detached like `launch`.
 pub fn run_command(line: &str) {
     debug!(command = %line, "running");
-    let result = Command::new("sh")
+    let mut command = Command::new("sh");
+    command
         .arg("-c")
         .arg(format!("{line} </dev/null >/dev/null 2>&1 &"))
         .current_dir(std::env::var_os("HOME").unwrap_or_else(|| "/".into()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+        .stderr(Stdio::null());
+    with_activation_token(&mut command);
+    let result = command.status();
     if let Err(err) = result {
         warn!(command = %line, %err, "can't run");
     }

@@ -62,6 +62,9 @@ pub struct WindowState {
     /// Hidden until activated again (the dock, the overview's search).
     /// It stays in its workspace, just not in the space.
     pub minimized: bool,
+    /// Asked to show something while out of sight; the dock lights its
+    /// icon until the window is focused.
+    pub urgent: bool,
     /// On a tiling workspace, kept out of the tiles: floated by the user
     /// (Super+Shift+T, dropped off the tiles, resized), or lifted while
     /// being dragged.
@@ -431,6 +434,7 @@ impl State {
         if let Some(window) = window {
             self.space.raise_element(window, true);
             self.workspaces.raise(window);
+            with_state(window, |s| s.urgent = false);
             self.mru.retain(|w| w != window && smithay::utils::IsAlive::alive(w));
             self.mru.insert(0, window.clone());
         }

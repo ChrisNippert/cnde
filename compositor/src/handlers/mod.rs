@@ -82,6 +82,19 @@ impl DataDeviceHandler for State {
 }
 
 impl ClientDndGrabHandler for State {
+    /// A drag begins: draw its icon at the pointer and show a grabbing
+    /// cursor until it ends.
+    fn started(
+        &mut self,
+        _source: Option<smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource>,
+        icon: Option<WlSurface>,
+        _seat: Seat<Self>,
+    ) {
+        self.dnd_active = true;
+        self.dnd_icon = icon;
+        self.queue_redraw();
+    }
+
     /// A drop lands on a window (a file into a chat, say): focus it, so you
     /// can type the message that goes with it.
     ///
@@ -89,6 +102,9 @@ impl ClientDndGrabHandler for State {
     /// pointer's lock and the seat's data, which asking the pointer where
     /// it is and moving keyboard focus both take again (a hang, a panic).
     fn dropped(&mut self, target: Option<WlSurface>, validated: bool, seat: Seat<Self>) {
+        self.dnd_active = false;
+        self.dnd_icon = None;
+        self.queue_redraw();
         if target.is_none() || !validated {
             return;
         }
