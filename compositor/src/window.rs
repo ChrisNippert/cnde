@@ -450,6 +450,7 @@ impl State {
                 .map(|t| t.wl_surface().clone()),
         };
         keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
+        self.release_unfocused_constraint();
         // Title bars show which window has focus.
         self.queue_redraw();
     }

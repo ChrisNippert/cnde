@@ -154,7 +154,7 @@ impl PointerConstraintsHandler for State {
     fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
         // Applies at once if the pointer is already over the surface (and
         // inside its region); otherwise when it gets there (see input.rs).
-        if pointer.current_focus().as_ref() != Some(surface) {
+        if pointer.current_focus().as_ref() != Some(surface) || !self.keyboard_on_window(surface) {
             return;
         }
         let location = pointer.current_location();

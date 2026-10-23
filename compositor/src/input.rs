@@ -499,6 +499,9 @@ impl State {
         let Some((surface, origin)) = self.surface_under(location) else {
             return;
         };
+        if !self.keyboard_on_window(&surface) {
+            return;
+        }
         with_pointer_constraint(&surface, pointer, |constraint| {
             if let Some(constraint) = constraint
                 && !constraint.is_active()
@@ -507,6 +510,44 @@ impl State {
                 if constraint.region().is_none_or(|r| r.contains(point)) {
                     constraint.activate();
                 }
+            }
+        });
+    }
+
+    /// Whether the keyboard is with `surface`'s window (a game's subsurface
+    /// counts as its toplevel): only the focused window may lock or confine
+    /// the pointer, not one merely under it. By surface, not client, since
+    /// every X11 window shares xwayland-satellite's connection.
+    pub(crate) fn keyboard_on_window(&self, surface: &WlSurface) -> bool {
+        let root = |mut s: WlSurface| {
+            while let Some(parent) = smithay::wayland::compositor::get_parent(&s) {
+                s = parent;
+            }
+            s
+        };
+        self.seat
+            .get_keyboard()
+            .and_then(|k| k.current_focus())
+            .is_some_and(|focus| root(focus) == root(surface.clone()))
+    }
+
+    /// Focus moved: let go of a lock or confinement held by the pointer's
+    /// surface if its app no longer has the keyboard.
+    pub(crate) fn release_unfocused_constraint(&mut self) {
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        let Some(surface) = pointer.current_focus() else {
+            return;
+        };
+        if self.keyboard_on_window(&surface) {
+            return;
+        }
+        with_pointer_constraint(&surface, &pointer, |constraint| {
+            if let Some(constraint) = constraint
+                && constraint.is_active()
+            {
+                constraint.deactivate();
             }
         });
     }
