@@ -161,6 +161,14 @@ impl App {
         }
     }
 
+    /// The first theme sound of `names` that is installed, if
+    /// `sound.event_sounds` is on.
+    pub fn event_sound_first(&self, names: &[&str]) {
+        if self.config.sound.event_sounds {
+            crate::sounds::play_first(names);
+        }
+    }
+
     /// Said once each time the battery drops below `power.low_battery`.
     pub fn check_low_battery(&mut self) {
         let low = self

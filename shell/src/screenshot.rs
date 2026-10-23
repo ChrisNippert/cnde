@@ -10,6 +10,7 @@
 //! their own, gone when the tool closes.
 
 use cnde_ipc::{ScreenshotTarget, ScreenshotWindow};
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 use cnde_ui::{Canvas, Color, Fonts, Icons, Theme, Weight};
 use smithay_client_toolkit::{
     compositor::{CompositorState, FrameCallbackData},
@@ -409,6 +410,19 @@ impl ScreenshotUi {
             shift(rect);
         }
         Some(bar)
+    }
+
+    /// The cursor for the pointer's spot: a crosshair for framing a region,
+    /// a hand over a window to pick, the normal arrow over the toolbar.
+    pub fn cursor(&self) -> Shape {
+        if self.toolbar().is_some_and(|bar| bar.bar.contains(self.pointer)) {
+            return Shape::Default;
+        }
+        match self.mode {
+            Mode::Selection => Shape::Crosshair,
+            Mode::Window if self.window_at(self.pointer).is_some() => Shape::Pointer,
+            Mode::Screen | Mode::Window => Shape::Default,
+        }
     }
 
     fn monitor_at(&self, point: (f32, f32)) -> Option<&Overlay> {

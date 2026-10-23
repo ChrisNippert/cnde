@@ -12,8 +12,14 @@ use tracing::debug;
 
 /// Play the theme sound `name` (e.g. "audio-volume-change") without waiting.
 pub fn play(name: &str) {
-    let Some(path) = find(name) else {
-        debug!(name, "no such sound");
+    play_first(&[name]);
+}
+
+/// Play the first of `names` the theme has, so a sound can fall back to a
+/// more common one.
+pub fn play_first(names: &[&str]) {
+    let Some(path) = first_found(names, find) else {
+        debug!(?names, "no such sound");
         return;
     };
     let _ = thread::Builder::new()
@@ -49,4 +55,22 @@ fn find(name: &str) -> Option<PathBuf> {
                 .map(|ext| dir.join(format!("sounds/freedesktop/stereo/{name}.{ext}")))
         })
         .find(|path| path.is_file())
+}
+
+/// The first of `names` that `lookup` finds.
+fn first_found<T>(names: &[&str], lookup: impl Fn(&str) -> Option<T>) -> Option<T> {
+    names.iter().find_map(|name| lookup(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn falls_back_to_the_next_name() {
+        let has = |n: &str| (n == "camera-shutter" || n == "complete").then(|| n.to_string());
+        let names = ["screen-capture", "camera-shutter", "complete"];
+        assert_eq!(first_found(&names, has).as_deref(), Some("camera-shutter"));
+        assert_eq!(first_found(&names[..1], has), None);
+    }
 }

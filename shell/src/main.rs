@@ -60,6 +60,7 @@ use smithay_client_toolkit::{
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
         pointer::{
             BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, PointerEvent, PointerEventKind, PointerHandler,
+            cursor_shape::CursorShapeManager,
         },
     },
     shell::{
@@ -75,6 +76,9 @@ use smithay_client_toolkit::{
 };
 use tracing::{debug, info, warn};
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::ExtWorkspaceManagerV1;
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
+    Shape, WpCursorShapeDeviceV1,
+};
 
 use crate::{
     actions::Actions,
@@ -182,6 +186,13 @@ pub struct App {
     calendar_dismissed: Option<std::time::Instant>,
     seat_handle: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
+    /// Names cursors for the compositor to draw; None if it can't.
+    cursor_shape: Option<CursorShapeManager>,
+    shape_device: Option<WpCursorShapeDeviceV1>,
+    /// The shape last asked for on the screenshot overlay.
+    screenshot_cursor: Option<Shape>,
+    /// The serial of the latest pointer enter, which cursor requests need.
+    enter_serial: u32,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     modifiers: Modifiers,
     loop_handle: LoopHandle<'static, App>,
@@ -355,6 +366,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tray_popover: None,
         tray_popover_dismissed: None,
         seat_handle: None,
+        cursor_shape: CursorShapeManager::bind(&globals, &qh).ok(),
+        shape_device: None,
+        screenshot_cursor: None,
+        enter_serial: 0,
         pointer: None,
         keyboard: None,
         modifiers: Modifiers::default(),
@@ -595,7 +610,8 @@ impl App {
             cnde_ipc::Event::ScreenshotDone { path } => {
                 self.screenshot = None;
                 if let Some(path) = path {
-                    self.event_sound("screen-capture");
+                    // The shutter, not the generic event sound.
+                    self.event_sound_first(&["screen-capture", "camera-shutter", "complete"]);
                     info!(%path, "screenshot saved");
                 }
             }
@@ -636,6 +652,19 @@ impl App {
             windows,
             self.screenshot_last,
         ));
+    }
+
+    /// Asks for the crosshair, hand or arrow the screenshot tool wants under
+    /// the pointer; `entered` re-asks, as the pointer's cursor resets on entry.
+    fn screenshot_cursor_update(&mut self, entered: bool) {
+        let (Some(ui), Some(device)) = (&self.screenshot, &self.shape_device) else {
+            return;
+        };
+        let shape = ui.cursor();
+        if entered || self.screenshot_cursor != Some(shape) {
+            device.set_shape(self.enter_serial, shape);
+            self.screenshot_cursor = Some(shape);
+        }
     }
 
     fn screenshot_outcome(&mut self, outcome: screenshot::Outcome) {
@@ -1628,6 +1657,11 @@ impl SeatHandler for App {
     ) {
         if capability == Capability::Pointer && self.pointer.is_none() {
             self.pointer = self.seat.get_pointer(qh, &seat).ok();
+            self.shape_device = self
+                .pointer
+                .as_ref()
+                .zip(self.cursor_shape.as_ref())
+                .map(|(pointer, shapes)| shapes.get_shape_device(pointer, qh));
         }
         if capability == Capability::Keyboard && self.keyboard.is_none() {
             // With repeat, so holding Backspace in the search keeps deleting.
@@ -1655,6 +1689,7 @@ impl SeatHandler for App {
             && let Some(pointer) = self.pointer.take()
         {
             pointer.release();
+            self.shape_device = None;
         }
     }
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
@@ -1669,6 +1704,9 @@ impl PointerHandler for App {
         events: &[PointerEvent],
     ) {
         for event in events {
+            if let PointerEventKind::Enter { serial } = event.kind {
+                self.enter_serial = serial;
+            }
             if let PointerEventKind::Enter { serial }
             | PointerEventKind::Press { serial, .. }
             | PointerEventKind::Release { serial, .. } = event.kind
@@ -1760,6 +1798,10 @@ impl PointerHandler for App {
                     _ => screenshot::Outcome::Nothing,
                 };
                 self.screenshot_outcome(outcome);
+                self.screenshot_cursor_update(matches!(
+                    event.kind,
+                    PointerEventKind::Enter { .. }
+                ));
                 continue;
             }
             if let Some(i) = self
