@@ -210,6 +210,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Draw the first frames before blocking for events.
     state.on_loop_iteration();
     let result = event_loop.run(None, &mut state, State::on_loop_iteration);
+    if !nested {
+        portals::unregister_file_manager();
+    }
     if let Some(path) = ipc_socket {
         let _ = std::fs::remove_file(path);
     }

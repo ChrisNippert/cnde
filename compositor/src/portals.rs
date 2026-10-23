@@ -63,10 +63,77 @@ pub fn setup(env: &ClientEnv, share_picker: SharePicker) {
                 );
                 install_wlr_config(&config.join("xdg-desktop-portal-wlr"), share_picker);
             }
+            register_file_manager();
             if update_activation_environment(&env) {
                 restart_portals();
             }
         });
+}
+
+const FILE_MANAGER_SERVICE: &str = "org.freedesktop.FileManager1.service";
+
+/// Where the session bus looks first for services to start on demand
+/// (before ~/.local/share and /usr/share); gone when the user's last
+/// session ends.
+fn runtime_service_file() -> Option<PathBuf> {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty())?;
+    Some(Path::new(&runtime).join("dbus-1/services").join(FILE_MANAGER_SERVICE))
+}
+
+/// "Show in folder" from apps calls org.freedesktop.FileManager1, which the
+/// bus starts from whichever file manager installed a service file (often
+/// Nautilus). Point it at cnde-files for this session instead, so it starts
+/// only when asked. A service file the user made in ~/.local/share wins.
+fn register_file_manager() {
+    let Some(path) = runtime_service_file() else {
+        return;
+    };
+    let users_own = std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .is_some_and(|data| data.join("dbus-1/services").join(FILE_MANAGER_SERVICE).exists());
+    let Some(files) = find_binary("cnde-files").filter(|_| !users_own) else {
+        // Not ours to serve (anymore): don't leave an old registration.
+        let _ = std::fs::remove_file(&path);
+        return;
+    };
+    let contents = file_manager_service(&files);
+    if std::fs::read_to_string(&path).is_ok_and(|old| old == contents) {
+        return;
+    }
+    write_config(&path, &contents);
+    // The bus only rereads its service directories when asked.
+    let reloaded = Command::new("dbus-send")
+        .args([
+            "--session",
+            "--type=method_call",
+            "--dest=org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus.ReloadConfig",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !reloaded {
+        warn!("can't ask the session bus to reload; \"show in folder\" may open another file manager");
+    }
+}
+
+/// Undo `register_file_manager` when the session ends.
+pub fn unregister_file_manager() {
+    if let Some(path) = runtime_service_file() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn file_manager_service(files: &Path) -> String {
+    format!(
+        "# Written by cnde for this session: \"show in folder\" opens cnde-files.\n\
+         [D-BUS Service]\nName=org.freedesktop.FileManager1\nExec={}\n",
+        shell_quote(&files.to_string_lossy())
+    )
 }
 
 fn config_home() -> Option<PathBuf> {
@@ -169,16 +236,22 @@ fn install_wlr_config(dir: &Path, share_picker: SharePicker) {
 /// a shell): next to our own binary first (a dev build run from target/),
 /// else wherever PATH has it.
 fn picker_command() -> Option<String> {
+    let path = find_binary(PICKER)?;
+    Some(shell_quote(&path.to_string_lossy()))
+}
+
+/// One of cnde's programs: next to our own binary first (a dev build run
+/// from target/), else wherever PATH has it.
+fn find_binary(name: &str) -> Option<PathBuf> {
     let sibling = std::env::current_exe()
         .ok()
-        .and_then(|exe| Some(exe.parent()?.join(PICKER)))
+        .and_then(|exe| Some(exe.parent()?.join(name)))
         .filter(|path| path.is_file());
-    let path = sibling.or_else(|| {
+    sibling.or_else(|| {
         std::env::split_paths(&std::env::var_os("PATH")?)
-            .map(|dir| dir.join(PICKER))
+            .map(|dir| dir.join(name))
             .find(|path| path.is_file())
-    })?;
-    Some(shell_quote(&path.to_string_lossy()))
+    })
 }
 
 fn shell_quote(text: &str) -> String {
