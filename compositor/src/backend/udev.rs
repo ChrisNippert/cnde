@@ -853,9 +853,14 @@ impl State {
                     smithay::input::pointer::CursorIcon::Default
                 )
             );
-        let mut busy_status = smithay::input::pointer::CursorImageStatus::Named(
-            smithay::input::pointer::CursorIcon::Progress,
-        );
+        // Dragging something wins over busy.
+        let dragging = self.dnd_active;
+        let busy = busy || dragging;
+        let mut busy_status = smithay::input::pointer::CursorImageStatus::Named(if dragging {
+            smithay::input::pointer::CursorIcon::Grabbing
+        } else {
+            smithay::input::pointer::CursorIcon::Progress
+        });
         let mut elements = Vec::new();
         if let (Some(pointer), Some(output_geo)) = (pointer, self.space.output_geometry(&output)) {
             elements.extend(render::cursor_elements(
@@ -871,6 +876,17 @@ impl State {
                 Scale::from(output.current_scale().fractional_scale()),
                 elapsed,
             ));
+            if !self.lock.is_locked()
+                && let Some(icon) = &self.dnd_icon
+            {
+                elements.extend(render::dnd_icon_elements(
+                    &mut gpu.renderer,
+                    icon,
+                    pointer,
+                    output_geo,
+                    Scale::from(output.current_scale().fractional_scale()),
+                ));
+            }
         }
         let cursor_count = elements.len();
         // A screenshot being framed: the frozen screen, the tool on top.

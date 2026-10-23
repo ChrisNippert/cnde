@@ -179,12 +179,14 @@ impl State {
         // the nested window is cheap; we still render only when something changed.
         // The udev backend gets ages from its DRM swapchain instead.
         let age = 0;
+        let pointer = self.seat.get_pointer().map(|p| p.current_location());
         let Backend::Winit(backend) = &mut self.backend else {
             return;
         };
         // The host draws the pointer: show it the cursor clients name, so
         // resize arrows and the like can be seen nested too.
         let icon = match &self.cursor_status {
+            _ if self.dnd_active => smithay::input::pointer::CursorIcon::Grabbing,
             smithay::input::pointer::CursorImageStatus::Named(icon) => *icon,
             _ => smithay::input::pointer::CursorIcon::Default,
         };
@@ -319,6 +321,19 @@ impl State {
                 && !locked
             {
                 elements.insert(0, render::OutputElement::Wallpaper(fade));
+            }
+            // A drag's icon, over everything but the night light.
+            if !locked
+                && let (Some(icon), Some(pointer), Some(geo)) =
+                    (&self.dnd_icon, pointer, output_geo)
+            {
+                let scale = backend.output.current_scale().fractional_scale().into();
+                for (i, element) in render::dnd_icon_elements(renderer, icon, pointer, geo, scale)
+                    .into_iter()
+                    .enumerate()
+                {
+                    elements.insert(i, element);
+                }
             }
             // The night light filter goes on top of everything but is
             // left out of screen captures.

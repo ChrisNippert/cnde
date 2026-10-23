@@ -130,6 +130,10 @@ pub struct State {
     pub seat: Seat<Self>,
     /// What the pointer should look like, as last requested by a client.
     pub cursor_status: CursorImageStatus,
+    /// A drag-and-drop is under way (the pointer shows it), and the icon
+    /// surface its source asked to have drawn at the pointer.
+    pub dnd_active: bool,
+    pub dnd_icon: Option<WlSurface>,
     pub mod_key: ModKey,
     /// `[shortcuts]`, compiled; rebuilt on config changes.
     pub shortcuts: crate::keybinds::Shortcuts,
@@ -268,6 +272,8 @@ impl State {
 
             seat,
             cursor_status: CursorImageStatus::default_named(),
+            dnd_active: false,
+            dnd_icon: None,
             mod_key,
             shortcuts: Default::default(),
             desktop_shown: None,
@@ -418,6 +424,11 @@ impl State {
         }
         self.send_layer_frame_callbacks(output, elapsed);
         if let CursorImageStatus::Surface(surface) = &self.cursor_status {
+            send_frames_surface_tree(surface, output, elapsed, Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            });
+        }
+        if let Some(surface) = &self.dnd_icon {
             send_frames_surface_tree(surface, output, elapsed, Some(Duration::ZERO), |_, _| {
                 Some(output.clone())
             });

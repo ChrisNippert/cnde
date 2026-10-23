@@ -168,6 +168,27 @@ pub fn cursor_elements(
     }
 }
 
+/// The icon a drag-and-drop source asked for, hanging off the pointer (the
+/// surface's own offset is its hotspot). Above everything but the cursor.
+pub fn dnd_icon_elements(
+    renderer: &mut GlesRenderer,
+    icon: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    pointer: Point<f64, Logical>,
+    output_geo: Rectangle<i32, Logical>,
+    scale: Scale<f64>,
+) -> Vec<OutputElement> {
+    if !icon.is_alive() || !output_geo.to_f64().contains(pointer) {
+        return Vec::new();
+    }
+    let location = (pointer - output_geo.loc.to_f64())
+        .to_physical(scale)
+        .to_i32_round();
+    render_elements_from_surface_tree(renderer, icon, location, scale, 1.0, Kind::Unspecified)
+        .into_iter()
+        .map(OutputElement::Surface)
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn output_elements(
     renderer: &mut GlesRenderer,

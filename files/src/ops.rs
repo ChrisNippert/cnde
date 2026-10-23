@@ -424,7 +424,7 @@ impl App {
     }
 
     /// The selected entries (cloned), in listing order.
-    fn selected_entries(&self) -> Vec<Entry> {
+    pub(crate) fn selected_entries(&self) -> Vec<Entry> {
         let f = &self.ui.folder;
         f.visible
             .iter()

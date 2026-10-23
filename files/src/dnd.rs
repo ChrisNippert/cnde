@@ -7,6 +7,7 @@ use std::{
     path::PathBuf,
 };
 
+use cnde_ui::{Canvas, Weight};
 use smithay_client_toolkit::{
     data_device_manager::{
         data_device::DataDeviceHandler,
@@ -15,7 +16,8 @@ use smithay_client_toolkit::{
     reexports::client::{
         Connection, QueueHandle,
         protocol::{
-            wl_data_device::WlDataDevice, wl_data_device_manager::DndAction, wl_surface::WlSurface,
+            wl_data_device::WlDataDevice, wl_data_device_manager::DndAction, wl_shm,
+            wl_surface::WlSurface,
         },
     },
     shell::WaylandSurface,
@@ -64,6 +66,8 @@ pub struct State {
     /// What was last told to the compositor, to not repeat it.
     told: Option<(Option<PathBuf>, DndAction)>,
     incoming: bool,
+    /// The card drawn at the pointer for our own drag.
+    icon: Option<WlSurface>,
 }
 
 fn same_drive(a: &std::path::Path, b: &std::path::Path) -> bool {
@@ -104,6 +108,7 @@ impl App {
         if paths.is_empty() {
             return;
         }
+        let icon = self.make_drag_icon();
         let Some(data) = &mut self.data else {
             return;
         };
@@ -117,11 +122,85 @@ impl App {
             DndAction::Copy | DndAction::Move,
         );
         debug!("starting a drag");
-        source.start_drag(device, self.window.wl_surface(), None, serial);
+        source.start_drag(device, self.window.wl_surface(), icon.as_ref(), serial);
         data.drag = Some((source, payload));
         self.ui.hover = None;
         self.ui.hover_row = None;
         self.redraw();
+    }
+
+    /// A small card the compositor draws at the pointer while dragging: the
+    /// first selected item's icon and name, with a count when there are more.
+    fn make_drag_icon(&mut self) -> Option<WlSurface> {
+        const H: f32 = 44.0;
+        const W: f32 = 168.0;
+        let selected = self.selected_entries();
+        let first = selected.first()?;
+        let name = first.name.clone();
+        let icon_name = view::icon_for(first);
+        let count = selected.len();
+        let scale = self.scale.max(1);
+        let (w, h) = ((W as i32) * scale, (H as i32) * scale);
+        let (buffer, pixels) = self.pool.create_buffer(w, h, w * 4, self.shm_format).ok()?;
+        {
+            let mut canvas = Canvas::new(pixels, w as u32, h as u32, scale as f32)?;
+            let res = &mut self.res;
+            let t = &res.theme;
+            canvas.rounded_rect(0.0, 0.0, W, H, 12.0, t.popover_background);
+            canvas.stroke_rounded_rect(
+                0.5,
+                0.5,
+                W - 1.0,
+                H - 1.0,
+                11.5,
+                1.0,
+                t.window_text.with_alpha(0.15),
+            );
+            canvas.icon(
+                &mut res.icons,
+                icon_name,
+                12.0,
+                (H - 20.0) / 2.0,
+                20.0,
+                t.window_text,
+            );
+            let mut layout = view::fit(
+                &mut res.fonts,
+                &name,
+                t.font_size,
+                Weight::Normal,
+                scale as f32,
+                W - 44.0 - if count > 1 { 22.0 } else { 0.0 },
+            );
+            let ty = (H - layout.height) / 2.0;
+            canvas.text(&mut res.fonts, &mut layout, 40.0, ty, t.window_text);
+            if count > 1 {
+                canvas.circle(W - 22.0, H / 2.0, 11.0, t.accent);
+                let mut n = res.fonts.layout(
+                    &count.min(99).to_string(),
+                    t.font_size * 0.85,
+                    Weight::Normal,
+                    scale as f32,
+                );
+                let (nx, ny) = (W - 22.0 - n.width / 2.0, (H - n.height) / 2.0);
+                canvas.text(&mut res.fonts, &mut n, nx, ny, t.on_accent);
+            }
+        }
+        if self.shm_format == wl_shm::Format::Argb8888 {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+        }
+        if let Some(old) = self.ui.x.dnd.icon.take() {
+            old.destroy();
+        }
+        let surface = self.compositor.create_surface(&self.qh);
+        surface.set_buffer_scale(scale);
+        surface.damage_buffer(0, 0, w, h);
+        buffer.attach_to(&surface).ok()?;
+        surface.commit();
+        self.ui.x.dnd.icon = Some(surface.clone());
+        Some(surface)
     }
 
     /// Where a drop at `at` would land, and what to highlight.
