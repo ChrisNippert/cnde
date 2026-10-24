@@ -4,6 +4,8 @@
 use std::time::Duration;
 
 use cnde_ipc::MediaKey;
+
+use crate::media::{Op, Status};
 use cnde_ui::{Canvas, Color, Painter, Weight};
 use smithay_client_toolkit::{
     reexports::{
@@ -42,8 +44,27 @@ pub struct Osd {
 
 impl App {
     /// A volume or brightness key: change it and show where it's got to.
+    /// A playback key goes to the player on show and names the track.
     pub fn media_key(&mut self, key: MediaKey) {
         match key {
+            MediaKey::PlayPause | MediaKey::Next | MediaKey::Previous | MediaKey::Stop => {
+                let Some(player) = self.media.key_target() else {
+                    return;
+                };
+                let (op, icon) = match key {
+                    MediaKey::Next => (Op::Next, "media-skip-forward-symbolic"),
+                    MediaKey::Previous => (Op::Previous, "media-skip-backward-symbolic"),
+                    MediaKey::Stop => (Op::Stop, "media-playback-stop-symbolic"),
+                    // The icon for what it's about to do.
+                    _ if player.status == Status::Playing => {
+                        (Op::PlayPause, "media-playback-pause-symbolic")
+                    }
+                    _ => (Op::PlayPause, "media-playback-start-symbolic"),
+                };
+                let (bus, title) = (player.bus.clone(), player.title.clone());
+                self.media.control(&bus, op);
+                self.show_osd(icon, None, &title);
+            }
             MediaKey::VolumeUp | MediaKey::VolumeDown | MediaKey::Mute => {
                 let Some(mut volume) = self.status.volume else {
                     return;

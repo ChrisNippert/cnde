@@ -137,6 +137,11 @@ pub enum MediaKey {
     MicMute,
     BrightnessUp,
     BrightnessDown,
+    /// Play/Pause (and the separate Play and Pause keys some keyboards have).
+    PlayPause,
+    Next,
+    Previous,
+    Stop,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

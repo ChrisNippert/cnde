@@ -138,6 +138,7 @@ pub enum Op {
     PlayPause,
     Next,
     Previous,
+    Stop,
 }
 
 enum Cmd {
@@ -181,6 +182,12 @@ impl Media {
             .iter()
             .filter(|p| p.status != Status::Stopped)
             .collect()
+    }
+
+    /// Where the playback keys go: the one on show, else (nothing playing
+    /// or paused) any player, so Play can start one that's stopped.
+    pub fn key_target(&self) -> Option<&Player> {
+        self.current().or_else(|| self.players.first())
     }
 
     pub fn visible(&self, on: bool) {
@@ -327,6 +334,7 @@ fn run(cmds: mpsc::Receiver<Cmd>, poke: mpsc::Sender<Cmd>, ui: Sender<Event>) ->
                         Op::PlayPause => "PlayPause",
                         Op::Next => "Next",
                         Op::Previous => "Previous",
+                        Op::Stop => "Stop",
                     };
                     if let Err(err) =
                         conn.call_method(Some(bus.as_str()), PATH, Some(PLAYER), method, &())

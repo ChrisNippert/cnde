@@ -82,7 +82,7 @@ pub enum Direction {
     Down,
 }
 
-/// The volume and brightness keys, with or without modifiers.
+/// The volume, brightness and playback keys, with or without modifiers.
 pub fn media_key(sym: Keysym) -> Option<cnde_ipc::MediaKey> {
     use cnde_ipc::MediaKey;
     Some(match sym.raw() {
@@ -92,6 +92,10 @@ pub fn media_key(sym: Keysym) -> Option<cnde_ipc::MediaKey> {
         keysyms::KEY_XF86AudioMicMute => MediaKey::MicMute,
         keysyms::KEY_XF86MonBrightnessUp => MediaKey::BrightnessUp,
         keysyms::KEY_XF86MonBrightnessDown => MediaKey::BrightnessDown,
+        keysyms::KEY_XF86AudioPlay | keysyms::KEY_XF86AudioPause => MediaKey::PlayPause,
+        keysyms::KEY_XF86AudioNext => MediaKey::Next,
+        keysyms::KEY_XF86AudioPrev => MediaKey::Previous,
+        keysyms::KEY_XF86AudioStop => MediaKey::Stop,
         _ => return None,
     })
 }
