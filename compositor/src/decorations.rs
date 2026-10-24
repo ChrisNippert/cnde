@@ -104,8 +104,9 @@ pub fn content_rect(rect: Rectangle<i32, Logical>, bar: i32) -> Rectangle<i32, L
 }
 
 /// The button (or the title) at `x` along a bar `width` wide; `all`:
-/// minimize and maximize too, not just close.
-fn part_at(width: f64, x: f64, all: bool) -> Part {
+/// minimize and maximize too, not just close. Tiles have no maximize
+/// button: minimize takes its place.
+fn part_at(width: f64, x: f64, all: bool, tiled: bool) -> Part {
     let step = (BUTTON + BUTTON_GAP) as f64;
     let close = width - SIDE as f64 - BUTTON as f64;
     let on = |start: f64| x >= start && x < start + BUTTON as f64;
@@ -114,8 +115,8 @@ fn part_at(width: f64, x: f64, all: bool) -> Part {
     } else if !all {
         Part::Title
     } else if on(close - step) {
-        Part::Maximize
-    } else if on(close - 2.0 * step) {
+        if tiled { Part::Minimize } else { Part::Maximize }
+    } else if !tiled && on(close - 2.0 * step) {
         Part::Minimize
     } else {
         Part::Title
@@ -138,6 +139,8 @@ struct Key {
     appearance: cnde_config::Appearance,
     rounded: bool,
     maximized: bool,
+    /// In a tile: no maximize button.
+    tiled: bool,
     all_buttons: bool,
 }
 
@@ -200,6 +203,8 @@ impl Decorations {
             appearance: self.appearance.clone(),
             rounded: state.placement == Placement::Floating,
             maximized: state.placement == Placement::Maximized,
+            tiled: state.placement == Placement::Floating
+                && current.states.contains(XdgState::TiledLeft),
             all_buttons: self.all_buttons,
         };
         if state.titlebar.as_ref().is_none_or(|t| t.key != key) {
@@ -372,7 +377,11 @@ fn paint(canvas: &mut Canvas<'_>, fonts: &mut Fonts, icons: &mut Icons, key: &Ke
     let y = (height - BUTTON) / 2.0;
     let close_x = width - SIDE - BUTTON;
     let maximize_x = close_x - BUTTON_GAP - BUTTON;
-    let minimize_x = maximize_x - BUTTON_GAP - BUTTON;
+    let minimize_x = if key.tiled {
+        maximize_x
+    } else {
+        maximize_x - BUTTON_GAP - BUTTON
+    };
     let maximize_icon = if key.maximized {
         "window-restore-symbolic"
     } else {
@@ -384,7 +393,12 @@ fn paint(canvas: &mut Canvas<'_>, fonts: &mut Fonts, icons: &mut Icons, key: &Ke
         (minimize_x, Part::Minimize, "window-minimize-symbolic"),
     ];
     let shown = if key.all_buttons { 3 } else { 1 };
-    for (x, part, icon) in buttons.into_iter().take(shown) {
+    let tiled = key.tiled;
+    for (x, part, icon) in buttons
+        .into_iter()
+        .filter(|(_, part, _)| !(tiled && *part == Part::Maximize))
+        .take(shown)
+    {
         let fill = if key.hover == Some(part) { 0.18 } else { 0.10 };
         canvas.circle(
             x + BUTTON / 2.0,
@@ -544,9 +558,10 @@ impl State {
             );
             if frame.contains(pos) {
                 let all = self.decorations.all_buttons;
+                let tiled = self.is_tiled(window);
                 return Some((
                     window.clone(),
-                    part_at(frame.size.w, pos.x - frame.loc.x, all),
+                    part_at(frame.size.w, pos.x - frame.loc.x, all, tiled),
                 ));
             }
             if with_state(window, |s| s.placement) != Placement::Floating {
@@ -751,12 +766,15 @@ mod tests {
     #[test]
     fn buttons_sit_at_the_right_end() {
         let width = 600.0;
-        assert_eq!(part_at(width, 10.0, true), Part::Title);
-        assert_eq!(part_at(width, width - SIDE as f64 - 1.0, true), Part::Close);
+        assert_eq!(part_at(width, 10.0, true, false), Part::Title);
+        assert_eq!(part_at(width, width - SIDE as f64 - 1.0, true, false), Part::Close);
         let maximize = width - SIDE as f64 - 2.0 * BUTTON as f64 - BUTTON_GAP as f64 + 1.0;
-        assert_eq!(part_at(width, maximize, true), Part::Maximize);
+        assert_eq!(part_at(width, maximize, true, false), Part::Maximize);
         let minimize = maximize - (BUTTON + BUTTON_GAP) as f64;
-        assert_eq!(part_at(width, minimize, true), Part::Minimize);
+        assert_eq!(part_at(width, minimize, true, false), Part::Minimize);
+        // A tile has no maximize: minimize sits next to close.
+        assert_eq!(part_at(width, maximize, true, true), Part::Minimize);
+        assert_eq!(part_at(width, minimize, true, true), Part::Title);
     }
 
     #[test]

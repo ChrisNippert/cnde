@@ -149,7 +149,8 @@ pub fn dwindle(
 
 /// Dwindle's binary tree of splits: each leaf is a window, each split
 /// halves its space along the longer side (decided when arranging, so it
-/// follows the monitor it's shown on). The root split takes `ratio`.
+/// follows the monitor it's shown on). Each split keeps its own ratio
+/// (dragged tile edges); the root takes the workspace's main ratio instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SplitTree<W> {
     root: Option<Node<W>>,
@@ -164,21 +165,88 @@ impl<W> Default for SplitTree<W> {
 #[derive(Debug, Clone, PartialEq)]
 enum Node<W> {
     Leaf(W),
-    Split(Box<Node<W>>, Box<Node<W>>),
+    /// The first child's share of the space, then the children.
+    Split(f64, Box<Node<W>>, Box<Node<W>>),
+}
+
+/// A tile edge being dragged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl Edge {
+    fn horizontal(self) -> bool {
+        matches!(self, Edge::Left | Edge::Right)
+    }
+
+    /// Whether it's the far side of its tile (right or bottom).
+    fn far(self) -> bool {
+        matches!(self, Edge::Right | Edge::Bottom)
+    }
+}
+
+/// Which split a dragged edge moved.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Dragged {
+    /// The root split: its ratio is the workspace's main ratio.
+    Root(f64),
+    Inner,
+}
+
+/// The smallest a tile gets dragged to along `total`: 10% or 120 px, though
+/// never more than half.
+fn min_tile(total: i32) -> i32 {
+    ((total as f64 * 0.1) as i32).max(120).min(total / 2)
+}
+
+/// `rect` cut in two by a split of `ratio`: whether side by side, then the
+/// two halves.
+fn halves(
+    rect: Rectangle<i32, Logical>,
+    ratio: f64,
+    gap: i32,
+) -> (bool, Rectangle<i32, Logical>, Rectangle<i32, Logical>) {
+    // Side by side when wider than tall, else one above the other.
+    let wide = rect.size.w >= rect.size.h;
+    let total = if wide { rect.size.w } else { rect.size.h };
+    let first = (((total - gap) as f64 * ratio).round() as i32).max(1);
+    let second = (total - first - gap).max(1);
+    let (ra, rb) = if wide {
+        (
+            Rectangle::new(rect.loc, Size::from((first, rect.size.h))),
+            Rectangle::new(
+                rect.loc + Point::from((first + gap, 0)),
+                Size::from((second, rect.size.h)),
+            ),
+        )
+    } else {
+        (
+            Rectangle::new(rect.loc, Size::from((rect.size.w, first))),
+            Rectangle::new(
+                rect.loc + Point::from((0, first + gap)),
+                Size::from((rect.size.w, second)),
+            ),
+        )
+    };
+    (wide, ra, rb)
 }
 
 impl<W: PartialEq + Clone> Node<W> {
     fn contains(&self, w: &W) -> bool {
         match self {
             Node::Leaf(leaf) => leaf == w,
-            Node::Split(a, b) => a.contains(w) || b.contains(w),
+            Node::Split(_, a, b) => a.contains(w) || b.contains(w),
         }
     }
 
     fn leaves(&self, out: &mut Vec<W>) {
         match self {
             Node::Leaf(leaf) => out.push(leaf.clone()),
-            Node::Split(a, b) => {
+            Node::Split(_, a, b) => {
                 a.leaves(out);
                 b.leaves(out);
             }
@@ -190,11 +258,11 @@ impl<W: PartialEq + Clone> Node<W> {
         match self {
             Node::Leaf(leaf) if leaf == target => {
                 let old = Node::Leaf(leaf.clone());
-                *self = Node::Split(Box::new(old), Box::new(Node::Leaf(new.clone())));
+                *self = Node::Split(0.5, Box::new(old), Box::new(Node::Leaf(new.clone())));
                 true
             }
             Node::Leaf(_) => false,
-            Node::Split(a, b) => a.split(target, new) || b.split(target, new),
+            Node::Split(_, a, b) => a.split(target, new) || b.split(target, new),
         }
     }
 
@@ -203,8 +271,8 @@ impl<W: PartialEq + Clone> Node<W> {
     fn remove(self, w: &W) -> Option<Node<W>> {
         match self {
             Node::Leaf(leaf) => (leaf != *w).then_some(Node::Leaf(leaf)),
-            Node::Split(a, b) => match (a.remove(w), b.remove(w)) {
-                (Some(a), Some(b)) => Some(Node::Split(Box::new(a), Box::new(b))),
+            Node::Split(ratio, a, b) => match (a.remove(w), b.remove(w)) {
+                (Some(a), Some(b)) => Some(Node::Split(ratio, Box::new(a), Box::new(b))),
                 (one, other) => one.or(other),
             },
         }
@@ -216,48 +284,78 @@ impl<W: PartialEq + Clone> Node<W> {
             Node::Leaf(leaf) if leaf == a => *leaf = b.clone(),
             Node::Leaf(leaf) if leaf == b => *leaf = a.clone(),
             Node::Leaf(_) => {}
-            Node::Split(x, y) => {
+            Node::Split(_, x, y) => {
                 x.trade(a, b);
                 y.trade(a, b);
             }
         }
     }
 
+    /// `root` overrides this split's ratio (the root's main ratio).
     fn place(
         &self,
         rect: Rectangle<i32, Logical>,
-        ratio: f64,
+        root: Option<f64>,
         gap: i32,
         out: &mut Vec<(W, Rectangle<i32, Logical>)>,
     ) {
-        let (a, b) = match self {
+        let (ratio, a, b) = match self {
             Node::Leaf(leaf) => return out.push((leaf.clone(), rect)),
-            Node::Split(a, b) => (a, b),
+            Node::Split(ratio, a, b) => (root.unwrap_or(*ratio), a, b),
         };
-        // Side by side when wider than tall, else one above the other.
-        let wide = rect.size.w >= rect.size.h;
-        let total = if wide { rect.size.w } else { rect.size.h };
-        let first = (((total - gap) as f64 * ratio).round() as i32).max(1);
-        let second = (total - first - gap).max(1);
-        let (ra, rb) = if wide {
-            (
-                Rectangle::new(rect.loc, Size::from((first, rect.size.h))),
-                Rectangle::new(
-                    rect.loc + Point::from((first + gap, 0)),
-                    Size::from((second, rect.size.h)),
-                ),
-            )
+        let (_, ra, rb) = halves(rect, ratio.clamp(MIN_RATIO, MAX_RATIO), gap);
+        a.place(ra, None, gap, out);
+        b.place(rb, None, gap, out);
+    }
+
+    /// Move `w`'s `edge` to `pos` by changing the nearest split above it
+    /// that has that edge as its boundary (none if the edge is the area's).
+    fn drag(
+        &mut self,
+        w: &W,
+        rect: Rectangle<i32, Logical>,
+        root: Option<f64>,
+        gap: i32,
+        edge: Edge,
+        pos: i32,
+    ) -> Option<Dragged> {
+        let Node::Split(ratio, a, b) = self else {
+            return None;
+        };
+        let current = root.unwrap_or(*ratio).clamp(MIN_RATIO, MAX_RATIO);
+        let (wide, ra, rb) = halves(rect, current, gap);
+        let in_first = a.contains(w);
+        let found = if in_first {
+            a.drag(w, ra, None, gap, edge, pos)
         } else {
-            (
-                Rectangle::new(rect.loc, Size::from((rect.size.w, first))),
-                Rectangle::new(
-                    rect.loc + Point::from((0, first + gap)),
-                    Size::from((rect.size.w, second)),
-                ),
-            )
+            b.drag(w, rb, None, gap, edge, pos)
         };
-        a.place(ra, 0.5, gap, out);
-        b.place(rb, 0.5, gap, out);
+        if found.is_some() {
+            return found;
+        }
+        // The boundary is the first child's far edge or the second's near one.
+        if wide != edge.horizontal() || in_first != edge.far() {
+            return None;
+        }
+        let (start, total) = if wide {
+            (rect.loc.x, rect.size.w)
+        } else {
+            (rect.loc.y, rect.size.h)
+        };
+        let share = total - gap;
+        let first = if in_first {
+            pos - start
+        } else {
+            pos - gap - start
+        };
+        let min = min_tile(share);
+        let new = (first.clamp(min, (share - min).max(min)) as f64 / share.max(1) as f64)
+            .clamp(MIN_RATIO, MAX_RATIO);
+        if root.is_some() {
+            return Some(Dragged::Root(new));
+        }
+        *ratio = new;
+        Some(Dragged::Inner)
     }
 }
 
@@ -333,14 +431,28 @@ impl<W: PartialEq + Clone> SplitTree<W> {
     ) -> Vec<(W, Rectangle<i32, Logical>)> {
         let mut out = Vec::new();
         if let Some(root) = &self.root {
-            root.place(
-                inset(area, outer_gap),
-                ratio.clamp(MIN_RATIO, MAX_RATIO),
-                gap,
-                &mut out,
-            );
+            root.place(inset(area, outer_gap), Some(ratio), gap, &mut out);
         }
         out
+    }
+
+    /// Drag `w`'s `edge` to `pos` (see [`arrange`](Self::arrange) for the
+    /// other arguments). A root split isn't changed here: it's reported for
+    /// the caller to store as the main ratio.
+    #[allow(clippy::too_many_arguments)]
+    pub fn drag_edge(
+        &mut self,
+        w: &W,
+        area: Rectangle<i32, Logical>,
+        ratio: f64,
+        gap: i32,
+        outer_gap: i32,
+        edge: Edge,
+        pos: i32,
+    ) -> Option<Dragged> {
+        self.root
+            .as_mut()?
+            .drag(w, inset(area, outer_gap), Some(ratio), gap, edge, pos)
     }
 }
 
@@ -392,6 +504,23 @@ pub fn master_stack(
         y += h + gap;
     }
     rects
+}
+
+/// The main ratio that puts the main/stack boundary at `pos` (the main
+/// window's right edge if `main`, else the stack's left edge).
+pub fn master_ratio_at(
+    area: Rectangle<i32, Logical>,
+    gap: i32,
+    outer_gap: i32,
+    main: bool,
+    pos: i32,
+) -> f64 {
+    let inner = inset(area, outer_gap);
+    let share = inner.size.w - gap;
+    let width = pos - inner.loc.x - if main { 0 } else { gap };
+    let min = min_tile(share);
+    (width.clamp(min, (share - min).max(min)) as f64 / share.max(1) as f64)
+        .clamp(MIN_RATIO, MAX_RATIO)
 }
 
 /// Set or clear all four tiled states: CSD clients drop their shadows and
@@ -655,6 +784,15 @@ impl State {
     pub fn relayout_workspace(&mut self, index: usize, animate: bool) {
         if self.workspaces.is_moving() || index >= self.workspaces.list.len() {
             return;
+        }
+        // Tiles don't maximize: one that arrives maximized (moved here from a
+        // floating workspace) joins them.
+        if self.layout_of(index).tiles() {
+            for window in self.workspaces.list[index].windows.clone() {
+                if Self::placement_of(&window) == Placement::Maximized {
+                    self.unplace_to_tile(&window);
+                }
+            }
         }
         self.workspaces.list[index].sync_tiles();
         self.sync_splits(index);
@@ -1199,19 +1337,61 @@ impl State {
             .cloned()
     }
 
-    /// An interactive resize on a tiling workspace is starting: the window
-    /// floats at its current size (a maximized one too, rather than
-    /// dropping back into a tile) and the other tiles close up.
-    pub fn float_for_resize(&mut self, window: &Window) {
-        let tiling = self
-            .workspaces
-            .index_of(window)
-            .is_some_and(|index| self.layout_of(index).tiles());
-        if !tiling {
+    /// The monitor area (panels excluded) `window`'s tiles are laid out in.
+    pub fn tile_area_now(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
+        let (outputs, _) = self.strip_outputs();
+        let output = self.output_for(window)?;
+        let slot = outputs.iter().position(|o| *o == output)?;
+        self.slot_areas(&outputs, slot as isize).map(|(_, area)| area)
+    }
+
+    /// The tile `window` rests in, whole (title bar included), where the
+    /// pointer sees it.
+    pub fn tile_slot_now(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
+        let index = self.workspaces.index_of(window)?;
+        let area = self.tile_area_now(window)?;
+        self.tile_rects(index, area)
+            .into_iter()
+            .find(|(w, _)| w == window)
+            .map(|(_, rect)| rect)
+    }
+
+    /// An interactive resize of a tile moves `window`'s `edge` to `pos`:
+    /// the split on that side follows and the neighbours take up the
+    /// difference. Edges on the screen's border, and the stack's inner
+    /// edges (always equal), do nothing.
+    pub fn drag_tile_edge(&mut self, window: &Window, edge: Edge, pos: i32) {
+        let Some(index) = self.workspaces.index_of(window) else {
             return;
+        };
+        let Some(area) = self.tile_area_now(window) else {
+            return;
+        };
+        self.sync_splits(index);
+        let (ratio, gap, outer_gap) = self.tile_params(index);
+        let new = match self.config.tiling.style {
+            TilingStyle::Dwindle => self.workspaces.list[index]
+                .splits
+                .drag_edge(window, area, ratio, gap, outer_gap, edge, pos)
+                .map(|dragged| match dragged {
+                    Dragged::Root(ratio) => Some(ratio),
+                    Dragged::Inner => None,
+                }),
+            TilingStyle::Master => {
+                let windows = self.tiled_windows(index);
+                let first = windows.first() == Some(window);
+                let boundary = if first { Edge::Right } else { Edge::Left };
+                (windows.len() > 1 && edge == boundary)
+                    .then(|| Some(master_ratio_at(area, gap, outer_gap, first, pos)))
+            }
+        };
+        let Some(new) = new else {
+            return;
+        };
+        if let Some(ratio) = new {
+            self.workspaces.list[index].master_ratio = Some(ratio);
         }
-        with_state(window, |s| s.keep_floating = true);
-        self.relayout_visible(true);
+        self.relayout_workspace(index, false);
     }
 
     /// Before a new window's first configure: on a tiling workspace, ask
@@ -1486,5 +1666,109 @@ mod tests {
         let mut ws = workspace(&[1, 2, 3]);
         ws.swap_tiles(&3, &1);
         assert_eq!(ws.tile_order(), vec![3, 2, 1]);
+    }
+
+    fn three() -> SplitTree<u32> {
+        // 1 | (2 over 3), in a 1010x600 area with a 10 px gap.
+        let mut tree = SplitTree::default();
+        tree.insert(1, None);
+        tree.insert(2, Some(&1));
+        tree.insert(3, Some(&2));
+        tree
+    }
+
+    #[test]
+    fn dragging_an_edge_moves_the_split_on_that_side() {
+        let area = rect(0, 0, 1010, 600);
+        let mut tree = three();
+        // 1's right edge is the root split: reported, not stored.
+        let dragged = tree.drag_edge(&1, area, 0.5, 10, 0, Edge::Right, 600);
+        assert_eq!(dragged, Some(Dragged::Root(0.6)));
+        let rects = tree.arrange(area, 0.6, 10, 0);
+        assert_eq!(rects[0], (1, rect(0, 0, 600, 600)));
+        assert_eq!(rects[1].1, rect(610, 0, 400, 295));
+        // 2's bottom edge is the inner split, 3's top edge the same one.
+        assert_eq!(
+            tree.drag_edge(&2, area, 0.6, 10, 0, Edge::Bottom, 400),
+            Some(Dragged::Inner)
+        );
+        let rects = tree.arrange(area, 0.6, 10, 0);
+        assert_eq!(rects[1].1, rect(610, 0, 400, 400));
+        assert_eq!(rects[2].1, rect(610, 410, 400, 190));
+        assert_eq!(
+            tree.drag_edge(&3, area, 0.6, 10, 0, Edge::Top, 300),
+            Some(Dragged::Inner)
+        );
+        assert_eq!(tree.arrange(area, 0.6, 10, 0)[1].1.size.h, 290);
+        // 2 and 3 meet the root split with their left edges.
+        assert_eq!(
+            tree.drag_edge(&3, area, 0.6, 10, 0, Edge::Left, 410),
+            Some(Dragged::Root(0.4))
+        );
+    }
+
+    #[test]
+    fn edges_on_the_screen_border_do_nothing() {
+        let area = rect(0, 0, 1010, 600);
+        let mut tree = three();
+        let before = tree.clone();
+        for (w, edge) in [
+            (1, Edge::Left),
+            (1, Edge::Top),
+            (1, Edge::Bottom),
+            (2, Edge::Right),
+            (2, Edge::Top),
+            (3, Edge::Right),
+            (3, Edge::Bottom),
+        ] {
+            assert_eq!(tree.drag_edge(&w, area, 0.5, 10, 0, edge, 300), None);
+        }
+        assert_eq!(tree, before);
+    }
+
+    #[test]
+    fn dragged_tiles_keep_a_minimum_size() {
+        let area = rect(0, 0, 1010, 600);
+        let mut tree = three();
+        assert_eq!(
+            tree.drag_edge(&1, area, 0.5, 10, 0, Edge::Right, 5),
+            Some(Dragged::Root(0.12))
+        );
+        assert_eq!(
+            tree.drag_edge(&1, area, 0.5, 10, 0, Edge::Right, 5000),
+            Some(Dragged::Root(0.88))
+        );
+        tree.drag_edge(&2, area, 0.5, 10, 0, Edge::Bottom, 0);
+        assert_eq!(tree.arrange(area, 0.5, 10, 0)[1].1.size.h, 120);
+        tree.drag_edge(&2, area, 0.5, 10, 0, Edge::Bottom, 9999);
+        assert_eq!(tree.arrange(area, 0.5, 10, 0)[2].1.size.h, 120);
+    }
+
+    #[test]
+    fn ratios_survive_inserting_removing_and_swapping() {
+        let area = rect(0, 0, 1010, 600);
+        let mut tree = three();
+        tree.drag_edge(&2, area, 0.5, 10, 0, Edge::Bottom, 400);
+        assert_eq!(tree.arrange(area, 0.5, 10, 0)[1].1.size.h, 400);
+        // Trading places keeps the proportions of the places.
+        tree.swap(&2, &3);
+        assert_eq!(tree.arrange(area, 0.5, 10, 0)[1].1.size.h, 400);
+        // A new window splits a leaf: the old splits stay as they were.
+        tree.insert(4, Some(&3));
+        let rects = tree.arrange(area, 0.5, 10, 0);
+        assert_eq!(rects[0].1.size.w, 500);
+        assert_eq!(rects[1].1.size.h, 400);
+        // Closing a window gives its space to its sibling, ratios intact.
+        tree.remove(&4);
+        assert_eq!(tree.arrange(area, 0.5, 10, 0)[1].1.size.h, 400);
+    }
+
+    #[test]
+    fn dragging_the_main_edge_sets_the_master_ratio() {
+        let area = rect(0, 0, 1010, 600);
+        assert_eq!(master_ratio_at(area, 10, 0, true, 600), 0.6);
+        // The stack's left edge sits a gap further along.
+        assert_eq!(master_ratio_at(area, 10, 0, false, 610), 0.6);
+        assert_eq!(master_ratio_at(area, 10, 0, true, 0), 0.12);
     }
 }

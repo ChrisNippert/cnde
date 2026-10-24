@@ -538,6 +538,13 @@ impl State {
             return;
         };
         let current = Self::placement_of(window);
+        // Tiles don't maximize; the client is only told it stays tiled.
+        if target == Placement::Maximized && output.is_none() && self.is_tiled(window) {
+            if toplevel.is_initial_configure_sent() {
+                toplevel.send_configure();
+            }
+            return;
+        }
         // A video leaving fullscreen in a maximized browser stays maximized.
         let target = if current == Placement::Fullscreen && target == Placement::Floating {
             with_state(window, |s| s.before_fullscreen.take()).unwrap_or(target)

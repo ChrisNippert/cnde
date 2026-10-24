@@ -38,7 +38,7 @@ impl PointerGrab<State> for MoveSurfaceGrab {
             .map_element(self.window.clone(), new_location.to_i32_round(), true);
         // A tile being dragged swaps with tiles instead of snapping to edges.
         if self.tile.is_none() {
-            data.update_snap_preview(&self.window, event.location);
+            data.update_snap_preview(&self.window, event.location, self.tile.is_some());
         }
         data.queue_redraw();
     }

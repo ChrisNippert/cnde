@@ -119,11 +119,20 @@ pub fn snap_target(
 
 impl State {
     /// Called on every motion of an interactive move.
-    pub fn update_snap_preview(&mut self, window: &Window, pointer: Point<f64, Logical>) {
+    /// A window dragged out of a tile (`was_tile`) never maximizes: dropped
+    /// at the top edge it rejoins the tiles.
+    pub fn update_snap_preview(
+        &mut self,
+        window: &Window,
+        pointer: Point<f64, Logical>,
+        was_tile: bool,
+    ) {
         let output = self.space.output_under(pointer).next().cloned();
         // Snap within what panels leave free, like maximize does.
         let area = output.as_ref().and_then(|o| self.usable_area(o));
-        let target = area.and_then(|area| snap_target(pointer, area));
+        let target = area
+            .and_then(|area| snap_target(pointer, area))
+            .filter(|t| !(was_tile && *t == Placement::Maximized));
 
         let current = self
             .snap_preview

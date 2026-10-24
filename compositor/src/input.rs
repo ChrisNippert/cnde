@@ -24,7 +24,7 @@ use smithay::wayland::compositor::RegionAttributes;
 use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
 
 use crate::{
-    grabs::{MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab},
+    grabs::{MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab, TileResizeGrab},
     keybinds::{self, Action, Direction, ModKey},
     spawn,
     state::State,
@@ -914,8 +914,14 @@ impl State {
         let Some(geo) = self.space.element_geometry(&window) else {
             return;
         };
-        // Resizing a tiled window floats it at its current size, too.
-        self.float_for_resize(&window);
+        // A tile keeps its place: its edges move the splits instead.
+        if self.is_tiled(&window)
+            && let Some(tile) = self.tile_slot_now(&window)
+        {
+            let grab = TileResizeGrab::start(start_data, window, edges, tile);
+            pointer.set_grab(self, grab, serial, Focus::Clear);
+            return;
+        }
         // Resizing a maximized/snapped window turns it floating at its current size.
         if Self::placement_of(&window) != Placement::Floating {
             with_state(&window, |s| s.restore = Some(geo));
