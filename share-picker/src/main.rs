@@ -18,14 +18,15 @@ mod thumb;
 use std::time::Duration;
 
 use cnde_config::Config;
+use cnde_ui::anim::{MEDIUM, SHORT, scaled};
 use cnde_ui::{
-    Canvas, Color, Fonts, Icons, Painter, Rect, Theme, Weight,
+    Animator, Canvas, Color, Fonts, Icons, Painter, Rect, Theme, Weight,
     tiny_skia::{IntSize, Pixmap},
 };
 use layout::{CARD_PAD, CARD_W, Hit, THUMB_H, layout_for};
 use picker::{Nav, Outcome, Picker, Tab, report};
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
+    compositor::{CompositorHandler, CompositorState, FrameCallbackData},
     delegate_dispatch2, delegate_registry,
     output::{OutputHandler, OutputState},
     reexports::{
@@ -79,6 +80,23 @@ const THUMB_PIXELS: usize = 640;
 /// How long to wait for the compositor's frames before showing the cards
 /// without them.
 const CAPTURE_WAIT: Duration = Duration::from_millis(2500);
+
+/// What the picker eases, for the animator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Anim {
+    /// 0-1: the backdrop and panel appearing (and, going back, leaving).
+    Open,
+    /// 0-1: the cards after a tab switch.
+    Content,
+    /// The tab control's lit segment, fractionally between the two.
+    TabPos,
+    TabHover(usize),
+    CancelHover,
+    /// A card's selection highlight (0-1).
+    Card(usize),
+    /// A thumbnail fading in over its placeholder: (tab, card).
+    Thumb(usize, usize),
+}
 
 /// What a card is for.
 enum Kind {
@@ -145,6 +163,18 @@ struct App {
     picker: Picker,
 
     layer: Option<LayerSurface>,
+    anim: Animator<Anim>,
+    /// The answer is out; the picker is fading away before exiting.
+    closing: bool,
+    /// A frame callback is outstanding.
+    frame_pending: bool,
+    /// The last paint left something moving: paint again on the next frame.
+    animating: bool,
+    /// The last paint was the settled picture, so a repaint can damage just
+    /// the panel (with where the panel was, which a tab switch can change).
+    settled: bool,
+    last_panel: Option<Rect>,
+    last_tab: Tab,
     size: (u32, u32),
     scale: i32,
     hover: Hit,
@@ -170,6 +200,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|text| Config::parse(&text).ok())
         .unwrap_or_default();
     let theme = Theme::for_appearance(&config.appearance);
+    cnde_ui::anim::set_speed(config.animations.speed as f32);
     let mut icons = Icons::new();
     icons.set_theme(&config.appearance.icon_theme);
 
@@ -201,6 +232,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tab_rects: Vec::new(),
         picker: Picker::new(Vec::new(), Vec::new()),
         layer: None,
+        anim: Animator::new(),
+        closing: false,
+        frame_pending: false,
+        animating: false,
+        settled: false,
+        last_panel: None,
+        last_tab: Tab::Screens,
         size: (0, 0),
         scale: 1,
         hover: Hit::Outside,
@@ -402,6 +440,16 @@ impl App {
         shot.done = true;
         debug!(output = %shot.name, preview = thumb.is_some(), "captured");
         shot.thumb = thumb;
+        // A preview that turns up after the cards are showing fades in.
+        if self.layer.is_some() && self.shots[index].thumb.is_some() {
+            let key = if index < self.monitors {
+                Anim::Thumb(0, index)
+            } else {
+                Anim::Thumb(1, index - self.monitors)
+            };
+            self.anim.restart(key, 0.0, 1.0, SHORT);
+            self.draw();
+        }
         if self.shots.iter().all(|s| s.done) {
             self.open();
         }
@@ -432,10 +480,27 @@ impl App {
         let code = report(&mut std::io::stdout().lock(), &outcome).unwrap_or(1);
         info!(?outcome, "done");
         self.code = Some(code);
-        self.exit.stop();
+        // The portal has its answer; fade out before leaving. Nothing on
+        // screen (or no frames coming) means leave now.
+        if self.layer.is_none() || self.size.0 == 0 {
+            self.exit.stop();
+            return;
+        }
+        self.closing = true;
+        let fallback = scaled(SHORT) + Duration::from_millis(150);
+        let _ = self
+            .loop_handle
+            .insert_source(Timer::from_duration(fallback), |_, _, app| {
+                app.exit.stop();
+                TimeoutAction::Drop
+            });
+        self.draw();
     }
 
     fn pointer_at(&mut self, pos: (f64, f64)) {
+        if self.closing {
+            return;
+        }
         self.picker.set_columns(self.layout().columns);
         let hit = self.hit(pos);
         let changed = self.picker.hover(hit) || hit != self.hover;
@@ -461,6 +526,9 @@ impl App {
     }
 
     fn key(&mut self, event: KeyEvent) {
+        if self.closing {
+            return;
+        }
         self.picker.set_columns(self.layout().columns);
         let nav = match event.keysym {
             Keysym::Left => Some(Nav::Left),
@@ -498,7 +566,49 @@ impl App {
         }
         let scale = self.scale;
         let layout = self.layout();
+        let panel = layout.panel;
+        let tab = self.picker.tab;
+        if tab != self.last_tab {
+            self.last_tab = tab;
+            self.anim.restart(Anim::Content, 0.0, 1.0, MEDIUM);
+        }
+        // Every animated value for this paint, from one clock.
+        self.anim.begin();
+        let (goal, time) = if self.closing {
+            (0.0, SHORT)
+        } else {
+            (1.0, MEDIUM)
+        };
+        let open = self.anim.get(Anim::Open, goal, time);
+        if self.closing && open <= 0.0 {
+            self.anim.end();
+            self.exit.stop();
+            return;
+        }
+        let content = self.anim.get(Anim::Content, 1.0, MEDIUM);
+        let tab_pos = self.anim.get(Anim::TabPos, tab.index() as f32, SHORT);
+        let tab_hover = [0, 1].map(|i| {
+            let on = self.hover == Hit::Tab(i);
+            self.anim.get(Anim::TabHover(i), on as u8 as f32, SHORT)
+        });
+        let on = self.hover == Hit::Cancel;
+        let cancel_hover = self.anim.get(Anim::CancelHover, on as u8 as f32, SHORT);
         let (on_screens, on_windows) = self.shots.split_at(self.monitors);
+        let shots = match tab {
+            Tab::Screens => on_screens,
+            Tab::Windows => on_windows,
+        };
+        let mut card_hl = Vec::new();
+        let mut thumb_in = Vec::new();
+        for (i, shot) in shots.iter().enumerate() {
+            let on = i == self.picker.selected && !self.picker.tabs_focused;
+            card_hl.push(self.anim.get(Anim::Card(i), on as u8 as f32, SHORT));
+            let shown = shot.thumb.is_some() as u8 as f32;
+            thumb_in.push(self.anim.get(Anim::Thumb(tab.index(), i), shown, SHORT));
+        }
+        self.anim.end();
+        self.animating = self.anim.running();
+
         let mut tab_rects = Vec::new();
         let (w, h) = (lw as i32 * scale, lh as i32 * scale);
         let (buffer, pixels) = match self
@@ -513,24 +623,36 @@ impl App {
         };
         pixels.fill(0);
         if let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) {
+            canvas.clear(Color::rgba(0, 0, 0, 0.5 * open));
+            let view = View {
+                shots,
+                layout,
+                tab,
+                tabs_focused: self.picker.tabs_focused,
+                content,
+                tab_pos,
+                tab_hover,
+                cancel_hover,
+                card_hl,
+                thumb_in,
+            };
             let mut p = Painter {
                 canvas: &mut canvas,
                 fonts: &mut self.fonts,
                 icons: &mut self.icons,
                 theme: &self.theme,
             };
-            let view = View {
-                shots: match self.picker.tab {
-                    Tab::Screens => on_screens,
-                    Tab::Windows => on_windows,
-                },
-                layout,
-                tab: self.picker.tab,
-                tabs_focused: self.picker.tabs_focused,
-                selected: self.picker.selected,
-                hover: self.hover,
+            tab_rects = if open >= 1.0 {
+                paint(&mut p, &view)
+            } else {
+                // Drawn offscreen, then blended in as a whole.
+                let panel = view.layout.panel;
+                let (cx, cy) = (panel.x + panel.w / 2.0, panel.y + panel.h / 2.0);
+                blended(&mut p, open, 0.96 + 0.04 * open, (cx, cy), |q| {
+                    paint(q, &view)
+                })
+                .unwrap_or_default()
             };
-            tab_rects = paint(&mut p, &view);
         }
         self.tab_rects = tab_rects;
         // The canvas draws RGBA; the buffer wants BGRA.
@@ -539,11 +661,59 @@ impl App {
         }
         let wl = layer.wl_surface();
         wl.set_buffer_scale(scale);
-        wl.damage_buffer(0, 0, w, h);
+        // Settled and only the panel changed: damage just that, and where it
+        // was a moment ago; the backdrop is the same in every frame.
+        let s = scale as f32;
+        match (self.settled && open >= 1.0, self.last_panel) {
+            (true, Some(old)) => {
+                let (x0, y0) = (panel.x.min(old.x), panel.y.min(old.y));
+                let (x1, y1) = (
+                    panel.right().max(old.right()),
+                    panel.bottom().max(old.bottom()),
+                );
+                // The shadow hangs a little below and around.
+                wl.damage_buffer(
+                    ((x0 - 4.0) * s) as i32,
+                    ((y0 - 4.0) * s) as i32,
+                    ((x1 - x0 + 8.0) * s).ceil() as i32 + 1,
+                    ((y1 - y0 + 16.0) * s).ceil() as i32 + 1,
+                );
+            }
+            _ => wl.damage_buffer(0, 0, w, h),
+        }
+        self.settled = open >= 1.0;
+        self.last_panel = Some(panel);
+        if self.animating && !self.frame_pending {
+            wl.frame(&self.qh, FrameCallbackData(wl.clone()));
+            self.frame_pending = true;
+        }
         if buffer.attach_to(wl).is_ok() {
             wl.commit();
         }
     }
+}
+
+/// Paints `draw` offscreen, then blends it onto `p`'s canvas as a whole at
+/// `opacity`, zoomed about `center`; whatever `draw` returns comes back.
+fn blended<T>(
+    p: &mut Painter<'_, '_>,
+    opacity: f32,
+    zoom: f32,
+    center: (f32, f32),
+    draw: impl FnOnce(&mut Painter<'_, '_>) -> T,
+) -> Option<T> {
+    let (w, h) = p.canvas.pixel_size();
+    let mut pixmap = Pixmap::new(w, h)?;
+    let mut layer = Canvas::new(pixmap.data_mut(), w, h, p.canvas.scale())?;
+    let out = draw(&mut Painter {
+        canvas: &mut layer,
+        fonts: p.fonts,
+        icons: p.icons,
+        theme: p.theme,
+    });
+    p.canvas
+        .composite(pixmap.as_ref(), opacity, zoom, center.0, center.1);
+    Some(out)
 }
 
 struct View<'a> {
@@ -551,15 +721,22 @@ struct View<'a> {
     layout: layout::Layout,
     tab: Tab,
     tabs_focused: bool,
-    selected: usize,
-    hover: Hit,
+    /// Eased values: the cards appearing after a tab switch, the lit tab
+    /// segment's position, hover per tab segment and the cancel button,
+    /// and per card its selection highlight and thumbnail fade.
+    content: f32,
+    tab_pos: f32,
+    tab_hover: [f32; 2],
+    cancel_hover: f32,
+    card_hl: Vec<f32>,
+    thumb_in: Vec<f32>,
 }
 
-/// Draws the picker; returns where the tab control's segments are.
+/// Draws the panel and everything on it (the backdrop is the caller's);
+/// returns where the tab control's segments are.
 fn paint(p: &mut Painter<'_, '_>, v: &View<'_>) -> Vec<Rect> {
     let t = p.theme;
     let l = &v.layout;
-    p.canvas.clear(Color::rgba(0, 0, 0, 0.5));
 
     let panel = l.panel;
     let shadow = Color::rgba(0, 0, 0, 0.18);
@@ -602,8 +779,8 @@ fn paint(p: &mut Painter<'_, '_>, v: &View<'_>) -> Vec<Rect> {
         l.tabs.0,
         l.tabs.1,
         &["Screens", "Windows"],
-        Some(v.tab.index() as f32),
-        |i| (v.hover == Hit::Tab(i)) as u8 as f32,
+        Some(v.tab_pos),
+        |i| v.tab_hover[i],
     );
     if v.tabs_focused
         && let (Some(first), Some(last)) = (tab_rects.first(), tab_rects.last())
@@ -619,6 +796,37 @@ fn paint(p: &mut Painter<'_, '_>, v: &View<'_>) -> Vec<Rect> {
         );
     }
 
+    if v.content >= 1.0 {
+        paint_cards(p, v);
+    } else {
+        // A tab switch: the new cards fade and grow in as a whole.
+        let (cx, cy) = (panel.x + panel.w / 2.0, panel.y + panel.h / 2.0);
+        blended(p, v.content, 0.97 + 0.03 * v.content, (cx, cy), |q| {
+            paint_cards(q, v)
+        });
+    }
+
+    let cancel = l.cancel;
+    let rect = Rect::new(cancel.x, cancel.y, cancel.w, cancel.h);
+    p.button(rect, v.cancel_hover);
+    let lw = p.measure("Cancel", 14.0, Weight::Normal);
+    p.label_v(
+        "Cancel",
+        rect.x + (rect.w - lw) / 2.0,
+        rect.y + rect.h / 2.0,
+        rect.w,
+        14.0,
+        Weight::Normal,
+        t.popup_text,
+    );
+    tab_rects
+}
+
+/// The cards of the current tab, or the note that there are none.
+fn paint_cards(p: &mut Painter<'_, '_>, v: &View<'_>) {
+    let t = p.theme;
+    let l = &v.layout;
+    let panel = l.panel;
     if v.shots.is_empty() {
         let label = "No windows open";
         let lw = p.measure(label, 14.0, Weight::Normal);
@@ -634,12 +842,8 @@ fn paint(p: &mut Painter<'_, '_>, v: &View<'_>) -> Vec<Rect> {
     }
 
     for (i, (card, shot)) in l.cards.iter().zip(v.shots).enumerate() {
-        let selected = i == v.selected && !v.tabs_focused;
-        let fill = if selected {
-            t.qs_tile.mix(t.accent, 0.22)
-        } else {
-            t.qs_tile
-        };
+        let hl = v.card_hl[i];
+        let fill = t.qs_tile.mix(t.accent, 0.22 * hl);
         p.canvas
             .rounded_rect(card.x, card.y, card.w, card.h, t.qs_tile_radius, fill);
         let (tx, ty, tw) = (
@@ -649,7 +853,15 @@ fn paint(p: &mut Painter<'_, '_>, v: &View<'_>) -> Vec<Rect> {
         );
         let inner = (t.qs_tile_radius - 3.0).max(2.0);
         match &shot.thumb {
-            Some(thumb) => p.canvas.image(thumb.as_ref(), tx, ty, tw, THUMB_H, inner),
+            Some(thumb) => {
+                p.canvas.image(thumb.as_ref(), tx, ty, tw, THUMB_H, inner);
+                let wait = 1.0 - v.thumb_in[i];
+                if wait > 0.0 {
+                    // The placeholder lifts off the picture.
+                    let cover = t.qs_toggle_off.with_alpha(wait);
+                    p.canvas.rounded_rect(tx, ty, tw, THUMB_H, inner, cover);
+                }
+            }
             None => {
                 p.canvas
                     .rounded_rect(tx, ty, tw, THUMB_H, inner, t.qs_toggle_off);
@@ -678,7 +890,7 @@ fn paint(p: &mut Painter<'_, '_>, v: &View<'_>) -> Vec<Rect> {
                 }
             }
         }
-        if selected {
+        if hl > 0.0 {
             p.canvas.stroke_rounded_rect(
                 card.x,
                 card.y,
@@ -686,7 +898,7 @@ fn paint(p: &mut Painter<'_, '_>, v: &View<'_>) -> Vec<Rect> {
                 card.h,
                 t.qs_tile_radius,
                 2.5,
-                t.accent,
+                t.accent.with_alpha(hl),
             );
         }
         let text_y = ty + THUMB_H + 10.0;
@@ -714,25 +926,12 @@ fn paint(p: &mut Painter<'_, '_>, v: &View<'_>) -> Vec<Rect> {
             t.qs_dim,
         );
     }
-
-    let cancel = l.cancel;
-    let rect = Rect::new(cancel.x, cancel.y, cancel.w, cancel.h);
-    p.button(rect, if v.hover == Hit::Cancel { 1.0 } else { 0.0 });
-    let lw = p.measure("Cancel", 14.0, Weight::Normal);
-    p.label_v(
-        "Cancel",
-        rect.x + (rect.w - lw) / 2.0,
-        rect.y + rect.h / 2.0,
-        rect.w,
-        14.0,
-        Weight::Normal,
-        t.popup_text,
-    );
-    tab_rects
 }
 
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
+        // Gone already: nothing to fade, so leave at once.
+        self.layer = None;
         self.finish(Outcome::Cancel);
     }
 
@@ -744,6 +943,10 @@ impl LayerShellHandler for App {
         configure: LayerSurfaceConfigure,
         _: u32,
     ) {
+        if self.size.0 == 0 {
+            // First sight of the surface: fade in from nothing.
+            self.anim.restart(Anim::Open, 0.0, 1.0, MEDIUM);
+        }
         self.size = configure.new_size;
         self.picker.set_columns(self.layout().columns);
         self.draw();
@@ -769,7 +972,12 @@ impl CompositorHandler for App {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
+        self.frame_pending = false;
+        if self.animating {
+            self.draw();
+        }
+    }
     fn surface_enter(
         &mut self,
         _: &Connection,
@@ -917,6 +1125,9 @@ impl PointerHandler for App {
         events: &[PointerEvent],
     ) {
         for event in events {
+            if self.closing {
+                break;
+            }
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     self.pointer_at(event.position)
