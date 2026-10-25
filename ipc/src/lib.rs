@@ -84,12 +84,20 @@ pub enum Side {
     Right,
 }
 
+/// The layer `Request::NotificationFrost` is for when it doesn't say.
+fn notifications_layer() -> String {
+    "cnde-notifications".to_string()
+}
+
 /// One notification card, for the frost behind it: its rectangle within the
 /// notification stack's surface and how visible it is (0-1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CardFrost {
     pub rect: [f64; 4],
     pub alpha: f32,
+    /// Its corners, if not the popups' usual ones.
+    #[serde(default)]
+    pub radius: Option<f64>,
 }
 
 /// One dock icon: its windows and its cell in the dock's surface.
@@ -222,11 +230,14 @@ pub enum Request {
         side: Side,
     },
     DockPreviewHide,
-    /// Where the notification cards are on `output` right now (they animate,
-    /// so this is sent as they move), for the frost behind them. Empty: none.
+    /// Where the notification cards (or another shell layer's cards, by
+    /// namespace) are on `output` right now (they animate, so this is sent
+    /// as they move), for the frost behind them. Empty: none.
     NotificationFrost {
         output: String,
         cards: Vec<CardFrost>,
+        #[serde(default = "notifications_layer")]
+        layer: String,
     },
     /// Keep the open dock preview up (a click on its icon) until a thumbnail
     /// is picked, Escape, or a click elsewhere.

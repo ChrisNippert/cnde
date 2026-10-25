@@ -50,9 +50,9 @@ pub struct DockFrost {
     solids: HashMap<String, (PixelShaderElement, [f32; 4], u32)>,
     /// How solid each backing is heading (from, to, since when).
     covered: HashMap<String, (f32, f32, Instant)>,
-    /// The shell's notification cards, per output name (see
-    /// `Request::NotificationFrost`).
-    pub cards: HashMap<String, Vec<cnde_ipc::CardFrost>>,
+    /// The shell's notification cards (and level display), per output
+    /// name and layer namespace (see `Request::NotificationFrost`).
+    pub cards: HashMap<(String, String), Vec<cnde_ipc::CardFrost>>,
 }
 
 /// What's behind the shell's popups: the windows on the output
@@ -317,17 +317,25 @@ impl DockFrost {
         now: Instant,
     ) -> Vec<OutputElement> {
         let prefix = format!("{}/note/", output.name());
-        let cards = self.cards.get(&output.name()).cloned().unwrap_or_default();
-        let origin = {
-            let map = layer_map_for_output(output);
-            map.layers()
-                .find(|l| l.namespace() == "cnde-notifications")
-                .and_then(|l| map.layer_geometry(l))
-                .map(|g| g.loc)
-        };
         let mut elements = Vec::new();
         let mut drawn = Vec::new();
-        if let Some(origin) = origin {
+        let layers: Vec<_> = self
+            .cards
+            .iter()
+            .filter(|((o, _), _)| *o == output.name())
+            .map(|((_, layer), cards)| (layer.clone(), cards.clone()))
+            .collect();
+        for (layer, cards) in layers {
+            let origin = {
+                let map = layer_map_for_output(output);
+                map.layers()
+                    .find(|l| l.namespace() == layer)
+                    .and_then(|l| map.layer_geometry(l))
+                    .map(|g| g.loc)
+            };
+            let Some(origin) = origin else {
+                continue;
+            };
             let theme = cnde_ui::Theme::for_screen(
                 &config.appearance,
                 screen_colour(config, wallpapers, output),
@@ -344,7 +352,8 @@ impl DockFrost {
                         .into(),
                     (card.rect[2].round() as i32, card.rect[3].round() as i32).into(),
                 );
-                let namespace = format!("note/{i}");
+                let radius = card.radius.unwrap_or(radius);
+                let namespace = format!("note/{layer}/{i}");
                 drawn.push(format!("{}/{namespace}", output.name()));
                 let at = Point::<i32, Physical>::from((
                     (rect.loc.x as f64 * scale).round() as i32,

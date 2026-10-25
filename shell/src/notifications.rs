@@ -58,6 +58,8 @@ const WIDTH: f32 = 380.0;
 const SLIDE: f32 = 40.0;
 /// Cards appear, leave and move over this long.
 const ANIM: Duration = Duration::from_millis(230);
+/// The stack's layer namespace (the compositor finds it by this).
+const NAMESPACE: &str = "cnde-notifications";
 const MARGIN: i32 = 10;
 const PADDING: f32 = 14.0;
 const GAP: f32 = 8.0;
@@ -783,7 +785,7 @@ impl App {
             &self.qh,
             surface,
             Layer::Top,
-            Some("cnde-notifications"),
+            Some(NAMESPACE),
             Some(&output),
         );
         layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
@@ -847,12 +849,16 @@ impl App {
             self.ipc.send(&cnde_ipc::Request::NotificationFrost {
                 output: old,
                 cards: Vec::new(),
+                layer: NAMESPACE.to_string(),
             });
         }
         if let Some(output) = output {
             self.notifications.frost_output = Some(output.clone());
-            self.ipc
-                .send(&cnde_ipc::Request::NotificationFrost { output, cards });
+            self.ipc.send(&cnde_ipc::Request::NotificationFrost {
+                output,
+                cards,
+                layer: NAMESPACE.to_string(),
+            });
         }
     }
 
@@ -1167,6 +1173,7 @@ impl App {
                 frost.push(cnde_ipc::CardFrost {
                     rect: [slide.into(), top.into(), lw.into(), card.height.into()],
                     alpha: presence,
+                    radius: None,
                 });
                 // A card on its way out can't be clicked.
                 if card.leaving.is_none() {

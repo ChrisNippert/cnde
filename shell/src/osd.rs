@@ -1,20 +1,24 @@
 //! The on-screen display: a pill near the bottom of the screen showing the
 //! volume or brightness after its key is pressed, gone after a moment.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cnde_ipc::MediaKey;
 
 use crate::media::{Op, Status};
-use cnde_ui::{Canvas, Color, Painter, Weight};
+use cnde_ui::{
+    Canvas, Painter, Weight,
+    tiny_skia::{self, Pixmap, PixmapPaint, Transform},
+};
 use smithay_client_toolkit::{
     reexports::{
         calloop::{
             RegistrationToken,
             timer::{TimeoutAction, Timer},
         },
-        client::protocol::wl_shm,
+        client::protocol::{wl_shm, wl_surface::WlSurface},
     },
+    compositor::FrameCallbackData,
     shell::{
         WaylandSurface,
         wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerSurface},
@@ -27,6 +31,12 @@ use crate::{App, actions::Action, panel::volume_icon};
 const SIZE: (u32, u32) = (260, 52);
 /// Above where the dock usually sits.
 const BOTTOM_MARGIN: i32 = 120;
+/// How far the pill rises as it fades in (and sinks as it goes); the
+/// surface is this much taller, below the pill.
+const RISE: f32 = 12.0;
+/// Fading in and out takes this long.
+const ANIM: Duration = Duration::from_millis(200);
+const NAMESPACE: &str = "cnde-osd";
 const SHOWN_FOR: Duration = Duration::from_millis(1500);
 /// Each press moves the level this much (percent).
 const STEP: u32 = 5;
@@ -40,6 +50,23 @@ pub struct Osd {
     scale: i32,
     configured: bool,
     hide: Option<RegistrationToken>,
+    /// For the frost behind it.
+    output: Option<String>,
+    frost_sent: bool,
+    shown: Instant,
+    leaving: Option<Instant>,
+    frame_pending: bool,
+}
+
+impl Osd {
+    /// How far in it is (0-1).
+    fn presence(&self, now: Instant, duration: Duration) -> f32 {
+        use cnde_ui::anim::{ease_out, progress};
+        match self.leaving {
+            Some(at) => 1.0 - ease_out(progress(at, duration, now)),
+            None => ease_out(progress(self.shown, duration, now)),
+        }
+    }
 }
 
 impl App {
@@ -125,17 +152,18 @@ impl App {
                 return;
             };
             let (output, scale) = (panel.output.clone(), panel.scale());
+            let output_name = self.outputs.info(&output).and_then(|i| i.name);
             let surface = self.compositor.create_surface(&self.qh);
             let layer = self.layer_shell.create_layer_surface(
                 &self.qh,
                 surface,
                 Layer::Overlay,
-                Some("cnde-osd"),
+                Some(NAMESPACE),
                 Some(&output),
             );
             layer.set_anchor(Anchor::BOTTOM);
-            layer.set_margin(0, 0, BOTTOM_MARGIN, 0);
-            layer.set_size(SIZE.0, SIZE.1);
+            layer.set_margin(0, 0, BOTTOM_MARGIN - RISE as i32, 0);
+            layer.set_size(SIZE.0, SIZE.1 + RISE as u32);
             layer.set_exclusive_zone(-1);
             layer.set_keyboard_interactivity(KeyboardInteractivity::None);
             if let Ok(region) = smithay_client_toolkit::compositor::Region::new(&self.compositor) {
@@ -154,6 +182,11 @@ impl App {
                 scale,
                 configured: false,
                 hide: None,
+                output: output_name,
+                frost_sent: false,
+                shown: Instant::now(),
+                leaving: None,
+                frame_pending: false,
             });
         }
         let Some(osd) = &mut self.osd else {
@@ -162,13 +195,25 @@ impl App {
         osd.icon = icon.to_string();
         osd.level = level;
         osd.label = label.to_string();
+        // Pressed again on its way out: come back from where it's got to.
+        if osd.leaving.is_some() {
+            let now = Instant::now();
+            let duration = cnde_ui::anim::scaled(ANIM);
+            let presence = osd.presence(now, duration);
+            osd.leaving = None;
+            osd.shown = now - duration.mul_f32(presence);
+        }
         if let Some(timer) = osd.hide.take() {
             self.loop_handle.remove(timer);
         }
         osd.hide = self
             .loop_handle
             .insert_source(Timer::from_duration(SHOWN_FOR), |_, _, app| {
-                app.osd = None;
+                if let Some(osd) = &mut app.osd {
+                    osd.hide = None;
+                    osd.leaving = Some(Instant::now());
+                }
+                app.draw_osd();
                 TimeoutAction::Drop
             })
             .ok();
@@ -205,6 +250,33 @@ impl App {
         }
     }
 
+    /// Take the level display down, and the frost behind it.
+    pub fn drop_osd(&mut self) {
+        let Some(osd) = self.osd.take() else {
+            return;
+        };
+        if let Some(timer) = osd.hide {
+            self.loop_handle.remove(timer);
+        }
+        if let Some(output) = osd.output.filter(|_| osd.frost_sent) {
+            self.ipc.send(&cnde_ipc::Request::NotificationFrost {
+                output,
+                cards: Vec::new(),
+                layer: NAMESPACE.to_string(),
+            });
+        }
+    }
+
+    /// The compositor is ready for a new frame.
+    pub fn osd_frame(&mut self, surface: &WlSurface) {
+        if let Some(osd) = &mut self.osd
+            && osd.layer.wl_surface() == surface
+        {
+            osd.frame_pending = false;
+            self.draw_osd();
+        }
+    }
+
     pub fn osd_configured(&mut self) {
         if let Some(osd) = &mut self.osd {
             osd.configured = true;
@@ -219,8 +291,26 @@ impl App {
         if !osd.configured {
             return;
         }
+        let now = Instant::now();
+        let duration = cnde_ui::anim::scaled(ANIM);
+        if osd
+            .leaving
+            .is_some_and(|at| cnde_ui::anim::progress(at, duration, now) >= 1.0)
+        {
+            self.drop_osd();
+            return;
+        }
+        let presence = osd.presence(now, duration);
+        let animating = match osd.leaving {
+            Some(_) => true,
+            None => now < osd.shown + duration,
+        };
+        let drop = RISE * (1.0 - presence);
         let scale = osd.scale;
-        let (w, h) = (SIZE.0 as i32 * scale, SIZE.1 as i32 * scale);
+        let (w, h) = (SIZE.0 as i32 * scale, (SIZE.1 as f32 + RISE) as i32 * scale);
+        let Some(mut scratch) = Pixmap::new(SIZE.0 * scale as u32, SIZE.1 * scale as u32) else {
+            return;
+        };
         let (buffer, pixels) = match self.pool.create_buffer(w, h, w * 4, self.shm_format) {
             Ok(created) => created,
             Err(err) => {
@@ -228,10 +318,11 @@ impl App {
                 return;
             }
         };
-        if let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) {
+        pixels.fill(0);
+        let (sw, sh) = (scratch.width(), scratch.height());
+        if let Some(mut canvas) = Canvas::new(scratch.data_mut(), sw, sh, scale as f32) {
             let t = &self.theme;
             let (lw, lh) = (SIZE.0 as f32, SIZE.1 as f32);
-            canvas.clear(Color::rgba(0, 0, 0, 0.0));
             canvas.rounded_rect(0.0, 0.0, lw, lh, lh / 2.0, t.qs_background);
             let mut p = Painter {
                 canvas: &mut canvas,
@@ -285,16 +376,49 @@ impl App {
                 }
             }
         }
+        // Laid over the surface with its fade, rising into place.
+        if let Some(mut target) = tiny_skia::PixmapMut::from_bytes(pixels, w as u32, h as u32) {
+            target.draw_pixmap(
+                0,
+                (drop * scale as f32).round() as i32,
+                scratch.as_ref(),
+                &PixmapPaint {
+                    opacity: presence,
+                    ..PixmapPaint::default()
+                },
+                Transform::identity(),
+                None,
+            );
+        }
         if self.shm_format == wl_shm::Format::Argb8888 {
             for pixel in pixels.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }
         }
+        let Some(osd) = &mut self.osd else {
+            return;
+        };
         let surface = osd.layer.wl_surface();
         surface.set_buffer_scale(scale);
         surface.damage_buffer(0, 0, w, h);
         if buffer.attach_to(surface).is_ok() {
+            if animating && !osd.frame_pending {
+                surface.frame(&self.qh, FrameCallbackData(surface.clone()));
+                osd.frame_pending = true;
+            }
             surface.commit();
+        }
+        osd.frost_sent = true;
+        if let Some(output) = osd.output.clone() {
+            self.ipc.send(&cnde_ipc::Request::NotificationFrost {
+                output,
+                cards: vec![cnde_ipc::CardFrost {
+                    rect: [0.0, drop.into(), SIZE.0.into(), SIZE.1.into()],
+                    alpha: presence,
+                    radius: Some(SIZE.1 as f64 / 2.0),
+                }],
+                layer: NAMESPACE.to_string(),
+            });
         }
     }
 }

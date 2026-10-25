@@ -202,11 +202,15 @@ impl State {
                 side,
             } => self.dock_preview(&output, &windows, cell, side),
             Request::DockPreviewHide => self.dock_preview_hide(),
-            Request::NotificationFrost { output, cards } => {
+            Request::NotificationFrost {
+                output,
+                cards,
+                layer,
+            } => {
                 if cards.is_empty() {
-                    self.dock_frost.cards.remove(&output);
+                    self.dock_frost.cards.remove(&(output, layer));
                 } else {
-                    self.dock_frost.cards.insert(output, cards);
+                    self.dock_frost.cards.insert((output, layer), cards);
                 }
                 self.queue_redraw();
             }

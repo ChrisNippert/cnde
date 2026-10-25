@@ -1497,6 +1497,7 @@ impl CompositorHandler for App {
             self.draw_calendar();
         }
         self.notifications_frame(surface);
+        self.osd_frame(surface);
         if let Some(popover) = &mut self.tray_popover
             && popover.popup.wl_surface() == surface
             && popover.frame_done()
@@ -1574,7 +1575,7 @@ impl LayerShellHandler for App {
             self.docks.retain(|d| &d.layer != layer);
         }
         if self.osd.as_ref().is_some_and(|o| &o.layer == layer) {
-            self.osd = None;
+            self.drop_osd();
         }
         self.polkit_closed(layer.wl_surface());
         self.notifications_closed(layer.wl_surface());
