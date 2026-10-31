@@ -50,6 +50,10 @@ const PANEL_START_SCALE: f64 = 0.96;
 /// the scene can't be blurred, a touch over the blur when it can.
 const DIM: f32 = 0.45;
 const DIM_BLURRED: f32 = 0.22;
+/// Resting on a dock preview's thumbnail this long peeks at its window:
+/// the rest of the screen dims and blurs as under the switcher. Shorter
+/// would flash while the pointer only passes over.
+const PEEK_AFTER: Duration = Duration::from_millis(250);
 
 const CELL_W: f64 = 216.0;
 const CELL_H: f64 = 180.0;
@@ -130,6 +134,58 @@ struct Preview {
     /// Opened by a click on the dock icon: it stays until a pick, Escape
     /// or a click elsewhere, wherever the pointer goes.
     pinned: bool,
+    peek: Peek,
+}
+
+/// The hovered thumbnail's window shown on its own, everything else under
+/// the dim and blur, fading in and out from wherever it had got to.
+#[derive(Default)]
+struct Peek {
+    window: Option<Window>,
+    on: bool,
+    from: f64,
+    since: Option<Instant>,
+}
+
+impl Peek {
+    fn level(&self, now: Instant) -> f64 {
+        let Some(since) = self.since else {
+            return 0.0;
+        };
+        let e = eased(since, now);
+        if self.on {
+            self.from + (1.0 - self.from) * e
+        } else {
+            self.from * (1.0 - e)
+        }
+    }
+
+    /// The pointer rests on `window`'s thumbnail, or (`None`) left them.
+    fn set(&mut self, window: Option<Window>, now: Instant) {
+        let level = self.level(now);
+        match window {
+            Some(window) => {
+                if !self.on {
+                    self.on = true;
+                    self.from = level;
+                    // Already up (moving between thumbnails): no wait.
+                    self.since = Some(if level > 0.0 { now } else { now + PEEK_AFTER });
+                }
+                self.window = Some(window);
+            }
+            None if self.on => {
+                self.on = false;
+                self.from = level;
+                self.since = Some(now);
+            }
+            None => {}
+        }
+    }
+
+    fn busy(&self, now: Instant) -> bool {
+        self.since
+            .is_some_and(|since| now < since + FADE + Duration::from_millis(20))
+    }
 }
 
 #[derive(Default)]
@@ -295,7 +351,10 @@ impl Switcher {
         self.session.as_ref().is_some_and(|s| {
             busy(s.started + SHOW_AFTER - Duration::from_millis(20)) || busy(s.rising_since)
         }) || self.leaving.as_ref().is_some_and(|l| busy(l.since))
-            || self.preview.as_ref().is_some_and(|p| busy(p.since))
+            || self
+                .preview
+                .as_ref()
+                .is_some_and(|p| busy(p.since) || p.peek.busy(now))
     }
 
     fn step(&mut self, back: bool) {
@@ -363,7 +422,11 @@ impl Switcher {
         };
         let open = self.session.is_some();
         let fading = self.leaving.is_some() && !open;
-        if !open && self.leaving.is_none() {
+        let peeking = self
+            .preview
+            .as_ref()
+            .is_some_and(|p| p.peek.level(now) > 0.0);
+        if !open && self.leaving.is_none() && !peeking {
             self.blur.release();
         }
         if open || fading {
@@ -516,7 +579,12 @@ impl Switcher {
             level: eased(preview.since, now),
             highlight: None,
         };
-        self.panel_elements(
+        let peek = preview.peek.level(now) * look.level;
+        let peeked = preview.peek.window.clone().filter(|w| w.alive());
+        if peek > 0.0 && frost.is_some() && !self.blur.has(output) {
+            self.blur.capture(renderer, output, scene);
+        }
+        let mut elements = self.panel_elements(
             renderer,
             decorations,
             space,
@@ -529,7 +597,50 @@ impl Switcher {
             &mut frost,
             false,
             now,
-        )
+        );
+        if peek <= 0.0 {
+            return elements;
+        }
+        // Peeking: the window lit over the dim, as the switcher does it.
+        let scale = Scale::from(output.current_scale().fractional_scale());
+        let output_loc = space
+            .output_geometry(output)
+            .map_or_else(Default::default, |g| g.loc.to_f64());
+        if let Some(window) = peeked
+            && let Some(rect) = space
+                .elements_for_output(output)
+                .find(|w| **w == window)
+                .and_then(|w| space.element_geometry(w))
+        {
+            elements.extend(crate::render::window_elements(
+                renderer,
+                decorations,
+                None,
+                None,
+                &window,
+                rect.to_f64(),
+                Zoom::IDENTITY,
+                output_loc,
+                scale,
+                now,
+                1.0,
+            ));
+        }
+        let dim = self.dim.get_or_insert_with(|| {
+            SolidColorBuffer::new(Size::from((1, 1)), [0.0, 0.0, 0.0, 1.0])
+        });
+        let size = size.to_i32_round::<i32>();
+        dim.resize(Size::from((size.w.max(1), size.h.max(1))));
+        let blurred = self.blur.element(output, peek as f32);
+        elements.push(OutputElement::Solid(SolidColorRenderElement::from_buffer(
+            dim,
+            (0, 0),
+            scale,
+            if blurred.is_some() { DIM_BLURRED } else { DIM } * peek as f32,
+            Kind::Unspecified,
+        )));
+        elements.extend(blurred.map(OutputElement::Wallpaper));
+        elements
     }
 
     /// The panel `geometry` with a thumbnail of each of `windows`: shared by
@@ -1119,6 +1230,7 @@ impl State {
             close_hot: false,
             inside,
             pinned,
+            peek: Peek::default(),
         });
         self.queue_redraw();
     }
@@ -1185,6 +1297,8 @@ impl State {
         let changed = p.hover != hit.cell || p.close_hot != hit.close;
         p.hover = hit.cell;
         p.close_hot = hit.close;
+        let window = hit.cell.and_then(|i| p.windows.get(i).cloned());
+        p.peek.set(window, Instant::now());
         let entered = std::mem::replace(&mut p.inside, hit.inside) != hit.inside;
         if entered {
             self.ipc
