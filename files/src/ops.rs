@@ -92,9 +92,17 @@ pub enum Act {
     Compress(Format),
     /// Unpack the selected archive beside itself.
     ExtractHere,
+    /// Select it and open the info panel.
+    Properties,
+    /// Open or close the info panel's Advanced section.
+    AdvToggle,
+    /// Flip these permission bits of the item in the info panel.
+    Perm(u32),
+    /// Give a folder's contents its read and write bits.
+    ApplyContents,
 }
 
-const MENU: [(Act, &str); 9] = [
+const MENU: [(Act, &str); 10] = [
     (Act::Open, "Open"),
     (Act::OpenWith, "Open With…"),
     (Act::Rename, "Rename"),
@@ -104,6 +112,7 @@ const MENU: [(Act, &str); 9] = [
     (Act::Trash, "Move to Trash"),
     (Act::CopyPath, "Copy path"),
     (Act::Terminal, "Terminal here"),
+    (Act::Properties, "Properties"),
 ];
 /// The menu over a row of the recent list.
 const MENU_RECENT: [(Act, &str); 5] = [
@@ -114,7 +123,7 @@ const MENU_RECENT: [(Act, &str); 5] = [
     (Act::RemoveRecent, "Remove from Recent"),
 ];
 /// The menu over a single folder.
-const MENU_DIR: [(Act, &str); 10] = [
+const MENU_DIR: [(Act, &str); 11] = [
     (Act::Open, "Open"),
     (Act::AddBookmark, "Add to Sidebar"),
     (Act::Rename, "Rename"),
@@ -125,6 +134,7 @@ const MENU_DIR: [(Act, &str); 10] = [
     (Act::CopyPath, "Copy path"),
     (Act::Terminal, "Terminal here"),
     (Act::OpenWith, "Open With…"),
+    (Act::Properties, "Properties"),
 ];
 /// The menu over a sidebar bookmark.
 const MENU_MARK: [(Act, &str); 4] = [
@@ -547,6 +557,14 @@ impl App {
             Act::Compress(format) => self.compress_selection(format),
             Act::ExtractHere => self.extract_selection(),
             Act::SelectAll => self.ui.folder.select_all(),
+            Act::Properties => self.ui.info_panel = true,
+            Act::AdvToggle => {
+                let info = &mut self.ui.x.info;
+                info.advanced = !info.advanced;
+                info.adv_scroll = 0.0;
+            }
+            Act::Perm(mask) => self.toggle_permission(mask),
+            Act::ApplyContents => self.apply_to_contents(),
             Act::Refresh => self.reload_folder(),
             Act::ToggleHidden => self.toggle_hidden(),
             Act::ToggleFoldersFirst => self.toggle_folders_first(),
@@ -1011,6 +1029,8 @@ impl App {
                 .map(|e| e.path)
                 .collect(),
         };
+        self.ui.x.info.adv_scroll = 0.0;
+        self.load_facts();
         let state = &mut self.ui.x.info;
         if let Some(old) = state.cancel.take() {
             old.store(true, Ordering::Relaxed);
@@ -1026,6 +1046,52 @@ impl App {
             if !cancel.load(Ordering::Relaxed) {
                 let _ = tx.send(Event::Info(generation, scan));
             }
+        });
+    }
+
+    /// Read the Advanced facts of what the panel describes.
+    fn load_facts(&mut self) {
+        self.ui.x.info.facts = info::subject_path(&self.ui).and_then(|p| info::Facts::load(&p));
+    }
+
+    /// Flip permission bits of the panel's item; on a failure say so and
+    /// show the mode it really has.
+    fn toggle_permission(&mut self, mask: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(f) = self.ui.x.info.facts.as_ref().filter(|f| f.editable) else {
+            return;
+        };
+        let (path, mode) = (f.path.clone(), info::toggle(f.mode, mask));
+        if let Err(err) = fs::set_permissions(&path, fs::Permissions::from_mode(mode)) {
+            let name = path.file_name().map_or_else(
+                || path.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            self.show_error(format!("Can't change the permissions of “{name}”: {err}"));
+        }
+        self.load_facts();
+    }
+
+    /// Give everything in the panel's folder its read and write bits.
+    fn apply_to_contents(&mut self) {
+        let Some(f) = self
+            .ui
+            .x
+            .info
+            .facts
+            .as_ref()
+            .filter(|f| f.is_dir && f.editable)
+        else {
+            return;
+        };
+        let (path, mode) = (f.path.clone(), f.mode);
+        let tx = self.events.clone();
+        std::thread::spawn(move || {
+            let (count, err) = info::apply_contents(&path, mode);
+            let _ = tx.send(match err {
+                Some(err) => Event::Error(format!("Can't change every permission inside: {err}")),
+                None => Event::Notice(format!("Changed the permissions of {count} items")),
+            });
         });
     }
 

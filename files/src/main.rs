@@ -139,6 +139,8 @@ enum Event {
     Bookmarks(Vec<bookmarks::Entry>),
     Recent(Vec<pages::RecentRow>),
     Error(String),
+    /// A message for the toast that isn't an error.
+    Notice(String),
     Screen(Option<cnde_ui::Color>),
     /// An info panel scan finished (generation, result).
     Info(u64, info::Scan),
@@ -669,6 +671,7 @@ impl App {
                 self.redraw();
             }
             Event::Error(message) => self.show_error(message),
+            Event::Notice(message) => self.show_notice(message),
             Event::Info(generation, scan) => self.info_done(generation, scan),
             Event::Refreshed(generation, seq, entries)
                 if generation == self.generation && seq == self.ui.x.refresh_seq =>
@@ -1770,6 +1773,16 @@ impl PointerHandler for App {
                         self.sheet_wheel(delta);
                     } else if self.ui.x.menu.is_some() {
                         // The menu has nothing to scroll.
+                    } else if self.ui.x.info.advanced
+                        && view::panel_w(&self.ui) > 0.0
+                        && event.position.0 >= self.size.0 as f64 - info::PANEL_W as f64
+                    {
+                        let info = &mut self.ui.x.info;
+                        let scroll = (info.adv_scroll + delta).clamp(0.0, info.adv_max.get());
+                        if scroll != info.adv_scroll {
+                            info.adv_scroll = scroll;
+                            self.redraw();
+                        }
                     } else if self.modifiers.ctrl && event.position.0 >= view::SIDE_W as f64 {
                         // Ctrl+wheel zooms; down is smaller.
                         self.zoom_by(-delta / WHEEL_STEP, Some(event.position));
