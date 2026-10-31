@@ -26,6 +26,7 @@ mod picker;
 mod request;
 mod scrollbar;
 mod search;
+mod state;
 mod thumbs;
 mod transfer;
 mod undo;
@@ -396,7 +397,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         list_size: config.files.list_icon_size as f32,
         config,
         location: Location::Overview,
-        folder: Folder::new(),
+        folder: {
+            let mut folder = Folder::new();
+            state::load().apply(&mut folder);
+            folder
+        },
         mode: ViewMode::List,
         info_panel: false,
         drives: Vec::new(),
@@ -650,6 +655,7 @@ impl App {
             }
             Event::Recent(rows) => {
                 self.ui.pages.recent = Some(rows);
+                self.ui.pages.selected = None;
                 self.ui.pages.version += 1;
                 self.redraw();
             }
@@ -766,6 +772,7 @@ impl App {
         folder.sort = old.sort;
         folder.descending = old.descending;
         folder.show_hidden = old.show_hidden;
+        folder.folders_first = old.folders_first;
         folder.query = old.query.clone();
         folder.shown = old.shown.clone();
         folder.single = old.single;
@@ -813,6 +820,10 @@ impl App {
                 let old = std::mem::replace(&mut self.ui.folder, Folder::new());
                 self.ui.folder.shown = old.shown;
                 self.ui.folder.single = old.single;
+                self.ui.folder.sort = old.sort;
+                self.ui.folder.descending = old.descending;
+                self.ui.folder.show_hidden = old.show_hidden;
+                self.ui.folder.folders_first = old.folders_first;
                 self.ui.folder.loading = false;
                 self.unwatch();
             }
@@ -1140,7 +1151,10 @@ impl App {
                 self.ui.search.focused = true;
                 self.ui.search.cursor = self.ui.search.query.chars().count();
             }
-            Target::RecentFile(i) => self.open_recent(i),
+            Target::RecentFile(i) => {
+                self.press_recent(i, position, serial);
+                return;
+            }
             Target::RecentFolder(i) => self.open_recent_folder(i),
             Target::Close => self.exit.stop(),
             Target::Minimize => self.window.set_minimized(),
@@ -1177,7 +1191,10 @@ impl App {
             Target::Eject(i) => self.eject(i),
             Target::Connect => self.show_error("Network locations aren't available yet".into()),
             Target::Trash => self.go(Location::Dir(model::trash_dir())),
-            Target::Sort(key) => self.ui.folder.set_sort(key),
+            Target::Sort(key) => {
+                self.ui.folder.set_sort(key);
+                state::save(&self.ui.folder);
+            }
             Target::Act(act) => self.act(act),
             Target::Pick(hit) => self.picker_hit(hit),
         }
@@ -1185,6 +1202,24 @@ impl App {
     }
 
     /// A press in the list: select, or open on a double click.
+    /// A press on a recent: it selects, a second one opens, and holding
+    /// it may start a drag.
+    fn press_recent(&mut self, i: usize, position: (f64, f64), serial: u32) {
+        let now = Instant::now();
+        let double = self
+            .last_click
+            .is_some_and(|(t, p)| p == i && now - t < DOUBLE_CLICK);
+        self.ui.pages.selected = Some(i);
+        self.drag_arm(position, serial);
+        if double {
+            self.last_click = None;
+            self.open_recent(i);
+        } else {
+            self.last_click = Some((now, i));
+        }
+        self.redraw();
+    }
+
     fn press_list(&mut self, position: (f64, f64), serial: u32) {
         let Some(pos) = self.row_at(position) else {
             if self.painted.list.contains(position) {
@@ -1328,6 +1363,9 @@ impl App {
             Some(ResizeEdge::Right) => CursorIcon::EResize,
             Some(ResizeEdge::Top) => CursorIcon::NResize,
             Some(ResizeEdge::Bottom) => CursorIcon::SResize,
+            _ if !self.maximized && self.painted.hit(self.pointer_pos) == Some(Target::Header) => {
+                CursorIcon::Grab
+            }
             _ => CursorIcon::Default,
         };
         if (entered || icon != self.cursor)

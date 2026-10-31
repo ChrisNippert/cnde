@@ -1012,6 +1012,19 @@ fn title(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, w: f32) {
 fn top_bar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, w: f32) {
     let t = p.theme;
     let cy = TOP_H / 2.0;
+    // The title bar: a band of its own, so it reads as the place to grab.
+    let radius = if ui.rounded { t.window_radius } else { 0.0 };
+    p.canvas.rounded_rect_clipped(
+        SIDE_W - radius,
+        0.0,
+        w - SIDE_W + radius,
+        TOP_H + radius,
+        radius,
+        c.hair,
+        (SIDE_W, 0.0, w - SIDE_W, TOP_H),
+    );
+    p.canvas
+        .rounded_rect(SIDE_W, TOP_H - 1.0, w - SIDE_W, 1.0, 0.0, c.hair);
     out.hits
         .push((Rect::new(SIDE_W, 0.0, w - SIDE_W, TOP_H), Target::Header));
 

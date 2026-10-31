@@ -55,6 +55,8 @@ pub struct RecentRow {
 pub struct Pages {
     /// `None` until the first load finishes.
     pub recent: Option<Vec<RecentRow>>,
+    /// The selected recent, by row.
+    pub selected: Option<usize>,
     /// Window width in logical px, for the page's layout.
     pub width: f32,
     /// Changes whenever `recent` does, for the tiles' cached text.
@@ -382,7 +384,10 @@ fn recent_rows(
         let row = Rect::new(rx, ry, rw, ROW_H);
         let over_file = ui.hover == Some(Target::RecentFile(i));
         let over_folder = ui.hover == Some(Target::RecentFolder(i));
-        if over_file || over_folder {
+        if ui.pages.selected == Some(i) {
+            p.canvas
+                .rounded_rect(row.x, row.y, row.w, row.h, 8.0, c.sel);
+        } else if over_file || over_folder {
             p.canvas
                 .rounded_rect(row.x, row.y, row.w, row.h, 8.0, t.hover);
         }
@@ -467,7 +472,11 @@ fn recent_tiles(
         let x = list.x + grid::PAD + col as f32 * g.tile_w;
         let ty = y + row as f32 * g.tile_h;
         let (bx, bw, bh) = (x + 2.0, g.tile_w - 4.0, g.tile_h - 4.0);
-        if ui.hover == Some(Target::RecentFile(i)) || ui.hover == Some(Target::RecentFolder(i)) {
+        if ui.pages.selected == Some(i) {
+            p.canvas.rounded_rect(bx, ty, bw, bh, 12.0, c.sel);
+        } else if ui.hover == Some(Target::RecentFile(i))
+            || ui.hover == Some(Target::RecentFolder(i))
+        {
             p.canvas.rounded_rect(bx, ty, bw, bh, 12.0, t.hover);
         }
         out.hits

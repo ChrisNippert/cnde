@@ -28,6 +28,8 @@ pub struct Folder {
     pub sort: SortKey,
     pub descending: bool,
     pub show_hidden: bool,
+    /// Folders sort above files (name, size and kind sorts only).
+    pub folders_first: bool,
     /// The search narrowing `visible`; empty shows everything.
     pub query: String,
     pub selected: HashSet<String>,
@@ -52,6 +54,7 @@ impl Folder {
             sort: SortKey::Name,
             descending: false,
             show_hidden: false,
+            folders_first: true,
             query: String::new(),
             selected: HashSet::new(),
             cursor: None,
@@ -82,8 +85,14 @@ impl Folder {
             self.descending = !self.descending;
         } else {
             self.sort = key;
-            self.descending = false;
+            // Dates start with the newest.
+            self.descending = key == SortKey::Modified;
         }
+        self.resort();
+    }
+
+    pub fn set_folders_first(&mut self, first: bool) {
+        self.folders_first = first;
         self.resort();
     }
 
@@ -108,7 +117,12 @@ impl Folder {
     }
 
     fn resort(&mut self) {
-        model::sort(&mut self.entries, self.sort, self.descending);
+        model::sort(
+            &mut self.entries,
+            self.sort,
+            self.descending,
+            self.folders_first,
+        );
         self.rebuild();
     }
 

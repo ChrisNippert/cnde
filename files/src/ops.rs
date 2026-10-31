@@ -83,6 +83,7 @@ pub enum Act {
     SelectAll,
     Refresh,
     ToggleHidden,
+    ToggleFoldersFirst,
     /// The × on the progress strip.
     CancelTransfer,
     /// Show or hide the list of archive formats.
@@ -435,6 +436,15 @@ impl App {
     }
 
     /// The selected entries' paths, in listing order.
+    /// The selected recent, on the Overview and Recent pages.
+    pub(crate) fn selected_recent(&self) -> Option<&crate::pages::RecentRow> {
+        if matches!(self.ui.location, Location::Dir(_)) {
+            return None;
+        }
+        let i = self.ui.pages.selected?;
+        self.ui.pages.recent.as_ref()?.get(i)
+    }
+
     pub(crate) fn selected_paths(&self) -> Vec<PathBuf> {
         self.selected_entries()
             .into_iter()
@@ -539,6 +549,7 @@ impl App {
             Act::SelectAll => self.ui.folder.select_all(),
             Act::Refresh => self.reload_folder(),
             Act::ToggleHidden => self.toggle_hidden(),
+            Act::ToggleFoldersFirst => self.toggle_folders_first(),
             Act::CancelTransfer => self.cancel_transfer(),
         }
         self.redraw();
@@ -639,6 +650,7 @@ impl App {
             return;
         };
         let path = rows.remove(i).path;
+        self.ui.pages.selected = None;
         self.ui.pages.version += 1;
         let tx = self.events.clone();
         std::thread::spawn(move || {

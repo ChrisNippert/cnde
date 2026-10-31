@@ -104,7 +104,10 @@ impl App {
         let serial = press.serial;
         self.ui.x.dnd.press = None;
         self.ui.x.dnd.defer = None;
-        let paths = self.selected_paths();
+        let paths = match self.selected_recent() {
+            Some(row) => vec![row.path.clone()],
+            None => self.selected_paths(),
+        };
         if paths.is_empty() {
             return;
         }
@@ -134,11 +137,13 @@ impl App {
     fn make_drag_icon(&mut self) -> Option<WlSurface> {
         const H: f32 = 44.0;
         const W: f32 = 168.0;
-        let selected = self.selected_entries();
-        let first = selected.first()?;
-        let name = first.name.clone();
-        let icon_name = view::icon_for(first);
-        let count = selected.len();
+        let (name, icon_name, count) = if let Some(row) = self.selected_recent() {
+            (row.name.clone(), view::icon_for_name(&row.name, row.is_dir), 1)
+        } else {
+            let selected = self.selected_entries();
+            let first = selected.first()?;
+            (first.name.clone(), view::icon_for(first), selected.len())
+        };
         let scale = self.scale.max(1);
         let (w, h) = ((W as i32) * scale, (H as i32) * scale);
         let (buffer, pixels) = self.pool.create_buffer(w, h, w * 4, self.shm_format).ok()?;

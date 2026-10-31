@@ -74,12 +74,14 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Sort in place. Folders always come first; ties fall back to name.
-pub fn sort(entries: &mut [Entry], key: SortKey, descending: bool) {
+/// Sort in place; ties fall back to name. With `folders_first` folders stay
+/// on top whichever way the rest is ordered, except by date, where files and
+/// folders mix.
+pub fn sort(entries: &mut [Entry], key: SortKey, descending: bool, folders_first: bool) {
+    let split = folders_first && key != SortKey::Modified;
     entries.sort_by(|a, b| {
-        // Folders stay on top whichever way the rest is ordered.
         let dirs = b.is_dir.cmp(&a.is_dir);
-        if dirs != Ordering::Equal {
+        if split && dirs != Ordering::Equal {
             return dirs;
         }
         let by_name = natural_cmp(&a.name, &b.name);
@@ -281,18 +283,38 @@ mod tests {
             e("file1", false, 1),
             e("adir", true, 0),
         ];
-        sort(&mut v, SortKey::Name, false);
+        sort(&mut v, SortKey::Name, false, true);
         assert_eq!(names(&v), ["adir", "zdir", "file1", "File2", "file10"]);
-        sort(&mut v, SortKey::Name, true);
+        sort(&mut v, SortKey::Name, true, true);
         assert_eq!(names(&v), ["zdir", "adir", "file10", "File2", "file1"]);
+    }
+
+    #[test]
+    fn folders_first_is_optional_and_dates_mix() {
+        let mut v = vec![e("b", false, 1), e("adir", true, 0), e("a", false, 1)];
+        sort(&mut v, SortKey::Name, false, false);
+        assert_eq!(names(&v), ["a", "adir", "b"]);
+        sort(&mut v, SortKey::Name, false, true);
+        assert_eq!(names(&v), ["adir", "a", "b"]);
+
+        let at = |s| Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(s));
+        let mut v = vec![e("old", false, 1), e("dir", true, 0), e("new", false, 1)];
+        v[0].modified = at(10);
+        v[1].modified = at(20);
+        v[2].modified = at(30);
+        // Newest first, whether file or folder, even with folders first.
+        sort(&mut v, SortKey::Modified, true, true);
+        assert_eq!(names(&v), ["new", "dir", "old"]);
+        sort(&mut v, SortKey::Modified, false, true);
+        assert_eq!(names(&v), ["old", "dir", "new"]);
     }
 
     #[test]
     fn size_sort_ties_by_name() {
         let mut v = vec![e("b", false, 5), e("a", false, 5), e("c", false, 1)];
-        sort(&mut v, SortKey::Size, false);
+        sort(&mut v, SortKey::Size, false, true);
         assert_eq!(names(&v), ["c", "a", "b"]);
-        sort(&mut v, SortKey::Size, true);
+        sort(&mut v, SortKey::Size, true, true);
         assert_eq!(names(&v), ["a", "b", "c"]);
     }
 

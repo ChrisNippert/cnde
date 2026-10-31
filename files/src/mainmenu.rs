@@ -13,6 +13,7 @@ use crate::{
     App,
     folder::Location,
     ops::Act,
+    state,
     view::{self, Painted, Target, Ui, ViewMode},
     zoom,
 };
@@ -28,10 +29,11 @@ pub struct MainMenu {
     pub drag: bool,
 }
 
-const ROWS: [&str; 8] = [
+const ROWS: [&str; 9] = [
     "Icon size",
     "",
     "Show hidden files",
+    "Folders first",
     "New Folder",
     "Paste",
     "Select All",
@@ -59,6 +61,7 @@ pub fn paint(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, w: f32, h: f32
         None,
         None,
         Some(Act::ToggleHidden),
+        Some(Act::ToggleFoldersFirst),
         Some(Act::NewFolder),
         Some(Act::Paste),
         Some(Act::SelectAll),
@@ -100,6 +103,13 @@ pub fn paint(ui: &Ui, p: &mut Painter<'_, '_>, out: &mut Painted, w: f32, h: f32
         row.right() - 10.0 - t.switch_width,
         row.y + (row.h - t.switch_height) / 2.0,
         ui.folder.show_hidden as u8 as f32,
+    );
+
+    let row = rects[3];
+    p.switch(
+        row.right() - 10.0 - t.switch_width,
+        row.y + (row.h - t.switch_height) / 2.0,
+        ui.folder.folders_first as u8 as f32,
     );
 
     out.hits.push((Rect::new(x, y, MENU_W, mh), Target::Menu));
@@ -146,6 +156,7 @@ impl App {
             // The menu's own padding and its switch row stay open.
             Some(Target::Menu) => {}
             Some(Target::Act(Act::ToggleHidden)) => self.toggle_hidden(),
+            Some(Target::Act(Act::ToggleFoldersFirst)) => self.toggle_folders_first(),
             Some(Target::Act(act)) => {
                 self.ui.x.main_menu = None;
                 self.act(act);
@@ -175,6 +186,13 @@ impl App {
     pub(crate) fn toggle_hidden(&mut self) {
         let show = !self.ui.folder.show_hidden;
         self.ui.folder.set_hidden(show);
+        state::save(&self.ui.folder);
+    }
+
+    pub(crate) fn toggle_folders_first(&mut self) {
+        let first = !self.ui.folder.folders_first;
+        self.ui.folder.set_folders_first(first);
+        state::save(&self.ui.folder);
     }
 
     /// Reload the open folder.
