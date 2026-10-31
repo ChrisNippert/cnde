@@ -185,7 +185,12 @@ impl State {
                 // ones repeating.
                 if let Some(key) = keybinds::media_key(handle.modified_sym()) {
                     state.suppressed_keys.push(keycode);
-                    state.start_media_repeat(keycode, key);
+                    // Toggles don't repeat: a release held up past the
+                    // delay (a busy frame, a wireless keyboard) would
+                    // toggle twice and look like nothing happened.
+                    if key.repeats() {
+                        state.start_media_repeat(keycode, key);
+                    }
                     return FilterResult::Intercept(Some(Action::Media(key)));
                 }
                 // Locked: every other key is the locker's (no bindings,

@@ -152,6 +152,17 @@ pub enum MediaKey {
     Stop,
 }
 
+impl MediaKey {
+    /// Whether holding the key steps again: volume and brightness do, the
+    /// toggles (mute, play/pause) and track keys don't.
+    pub fn repeats(self) -> bool {
+        matches!(
+            self,
+            Self::VolumeUp | Self::VolumeDown | Self::BrightnessUp | Self::BrightnessDown
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScreenshotWindow {
     pub id: u64,
