@@ -2031,6 +2031,17 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
                     Value::Bool(dk.natural_workspace_keys),
                 )
                 .sub("Super+Alt+Left shows the next workspace, as the content moves left"),
+                Row::new(
+                    "workspaces.mode",
+                    "Workspaces",
+                    Control::Dropdown(choices(&[
+                        ("Span all monitors", s("continuous")),
+                        ("Separate per monitor", s("individual")),
+                    ])),
+                    workspace_mode(c.workspaces.mode),
+                    workspace_mode(d.workspaces.mode),
+                )
+                .sub("Span: monitors show neighbouring workspaces and switch together. Separate: each monitor has its own, and switching moves the one you used last"),
             ],
         ),
         group(
@@ -2088,6 +2099,13 @@ fn window_layout(v: cnde_config::WindowLayout) -> Value {
     s(match v {
         cnde_config::WindowLayout::Floating => "floating",
         cnde_config::WindowLayout::Tiling => "tiling",
+    })
+}
+
+fn workspace_mode(v: cnde_config::WorkspaceMode) -> Value {
+    s(match v {
+        cnde_config::WorkspaceMode::Continuous => "continuous",
+        cnde_config::WorkspaceMode::Individual => "individual",
     })
 }
 

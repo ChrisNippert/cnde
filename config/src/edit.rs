@@ -194,6 +194,16 @@ mod tests {
     }
 
     #[test]
+    fn workspace_mode_is_saved() {
+        let mut f = file(DEFAULT_CONFIG);
+        f.set("workspaces.mode", "individual");
+        let config = f.config().unwrap();
+        assert_eq!(config.workspaces.mode, crate::WorkspaceMode::Individual);
+        f.set("workspaces.mode", "sideways");
+        assert!(f.config().is_err());
+    }
+
+    #[test]
     fn set_works_on_the_default_file() {
         let mut f = file(DEFAULT_CONFIG);
         f.set("dock.position", "left");

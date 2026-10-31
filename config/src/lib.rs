@@ -39,6 +39,8 @@ pub struct Config {
     /// Screen sharing through xdg-desktop-portal.
     pub portal: Portal,
     pub tiling: Tiling,
+    /// How workspaces relate to monitors.
+    pub workspaces: Workspaces,
     /// Switching to the dark style and back by the time of day.
     pub dark_mode: DarkMode,
     /// A warm colour filter, on a schedule.
@@ -924,6 +926,25 @@ impl Default for Autostart {
     }
 }
 
+/// `[workspaces]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Workspaces {
+    pub mode: WorkspaceMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceMode {
+    /// One strip across all monitors: they show consecutive workspaces and
+    /// switching moves them together.
+    #[default]
+    Continuous,
+    /// Every monitor has its own workspaces, and switching moves only the
+    /// monitor you last used.
+    Individual,
+}
+
 /// Hyprland-style master-stack tiling (ARCHITECTURE.md §4.4). Each
 /// workspace can be switched with Super+T; until then it uses `layout`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1204,6 +1225,17 @@ mod tests {
         assert_eq!(tray("\"inline\"").unwrap(), TrayMode::Inline);
         assert_eq!(tray("\"collapsed\"").unwrap(), TrayMode::Collapsed);
         assert!(tray("\"sideways\"").is_err());
+    }
+
+    #[test]
+    fn workspace_mode_reads_both_modes() {
+        let mode = |v: &str| {
+            Config::parse(&format!("[workspaces]\nmode = \"{v}\"\n")).map(|c| c.workspaces.mode)
+        };
+        assert_eq!(mode("continuous").unwrap(), WorkspaceMode::Continuous);
+        assert_eq!(mode("individual").unwrap(), WorkspaceMode::Individual);
+        assert!(mode("spiral").is_err());
+        assert_eq!(Config::default().workspaces.mode, WorkspaceMode::Continuous);
     }
 
     #[test]
