@@ -671,10 +671,20 @@ impl State {
             close: None,
             roundness: self.config.appearance.roundness() as f64,
         };
+        // Slots 0..outputs are the workspaces on screen, one per monitor.
+        // A neighbour at the side that another monitor is showing is left
+        // to that monitor (the thumbnail row over the app grid has them all).
+        let shown_elsewhere = |slot: f64| {
+            let nearest = slot.round();
+            grid < 0.5
+                && nearest != k
+                && nearest >= 0.0
+                && nearest < outputs.len() as f64
+        };
         for (index, workspace) in self.workspaces.list.iter().enumerate() {
             let slot = index as f64 - position + main as f64;
             let card = card_at(slot);
-            if !card.overlaps(geo) {
+            if !card.overlaps(geo) || shown_elsewhere(slot) {
                 continue;
             }
             scene.cards.push(Card {
