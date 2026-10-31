@@ -2,11 +2,13 @@
 //! `ext/workspaces`, and cnde-shell later), and lets them switch workspaces.
 //! ARCHITECTURE.md §6: the shell gets workspaces the same way as any bar.
 //!
-//! Mapping: one group spanning every monitor (they share one strip). We
-//! publish workspaces that have windows or are on screen; the spare empty
-//! ones at the strip's ends are an implementation detail. Names are their
-//! 1-based position, "active" means on a monitor right now, and activating
-//! one slides the strip to bring it onto the main monitor.
+//! Mapping: one group spanning every monitor (they share one strip), or in
+//! individual mode (`workspaces.mode`) one group per monitor. We publish
+//! workspaces that have windows or are on screen; the spare empty ones at
+//! the strip's ends are an implementation detail. Names are their 1-based
+//! position (in the group), "active" means on a monitor right now, and
+//! activating one slides its strip to bring it onto the main monitor (its
+//! own monitor, in individual mode).
 
 use smithay::{
     output::Output,
@@ -34,16 +36,23 @@ pub struct ExtWorkspaceState {
 /// What one bound manager has been told so far.
 struct ClientWorkspaces {
     manager: ExtWorkspaceManagerV1,
-    group: ExtWorkspaceGroupHandleV1,
+    groups: Vec<GroupState>,
     handles: Vec<(ExtWorkspaceHandleV1, Info)>,
-    outputs: Vec<WlOutput>,
     /// Set by `activate`, applied on `commit` (requests are atomic per commit).
     pending_activate: Option<WorkspaceId>,
+}
+
+struct GroupState {
+    /// "" for the one group of continuous mode, else the monitor's name.
+    key: String,
+    handle: ExtWorkspaceGroupHandleV1,
+    outputs: Vec<WlOutput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Info {
     id: WorkspaceId,
+    group: String,
     name: String,
     position: u32,
     active: bool,
@@ -58,11 +67,37 @@ impl State {
     /// counts as current, so indicators update the moment you switch.
     fn ext_workspace_infos(&self) -> Vec<Info> {
         let (outputs, main) = self.strip_outputs();
-        let base = self
-            .workspaces
-            .motion
-            .as_ref()
-            .map_or(self.workspaces.active, |m| m.to);
+        if self.workspaces.individual {
+            let mut infos = Vec::new();
+            for output in &outputs {
+                let name = output.name();
+                let target = self.workspaces.target_in(Some(&name));
+                let mut position = 0;
+                for p in 0..self.workspaces.len_of(Some(&name)) {
+                    let Some(ws) = self
+                        .workspaces
+                        .index_at(Some(&name), p)
+                        .map(|i| &self.workspaces.list[i])
+                    else {
+                        continue;
+                    };
+                    let visible = p == target;
+                    if ws.windows.is_empty() && !visible {
+                        continue;
+                    }
+                    infos.push(Info {
+                        id: ws.id,
+                        group: name.clone(),
+                        name: (position + 1).to_string(),
+                        position,
+                        active: visible,
+                    });
+                    position += 1;
+                }
+            }
+            return infos;
+        }
+        let base = self.workspaces.target_in(None);
         let first_visible = base as isize - main as isize;
         let last_visible = first_visible + outputs.len() as isize - 1;
 
@@ -75,6 +110,7 @@ impl State {
             let position = infos.len() as u32;
             infos.push(Info {
                 id: ws.id,
+                group: String::new(),
                 name: (position + 1).to_string(),
                 position,
                 active: visible,
@@ -90,7 +126,15 @@ impl State {
             return;
         }
         let infos = self.ext_workspace_infos();
-        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        let groups: Vec<(String, Vec<Output>)> = if self.workspaces.individual {
+            self.strip_outputs()
+                .0
+                .into_iter()
+                .map(|o| (o.name(), vec![o]))
+                .collect()
+        } else {
+            vec![(String::new(), self.space.outputs().cloned().collect())]
+        };
         let dh = self.display_handle.clone();
 
         for client in &mut self.ext_workspace_state.clients {
@@ -99,32 +143,62 @@ impl State {
             };
             let mut changed = false;
 
-            // Monitors (the group spans all of them).
-            let current: Vec<WlOutput> = outputs
-                .iter()
-                .flat_map(|o| o.client_outputs(&wl_client))
-                .collect();
-            for output in &current {
-                if !client.outputs.contains(output) {
-                    client.group.output_enter(output);
-                    changed = true;
+            // New groups first, so workspaces can enter them.
+            for (key, group_outputs) in &groups {
+                if !client.groups.iter().any(|g| &g.key == key) {
+                    match wl_client.create_resource::<ExtWorkspaceGroupHandleV1, (), State>(
+                        &dh,
+                        client.manager.version(),
+                        (),
+                    ) {
+                        Ok(handle) => {
+                            client.manager.workspace_group(&handle);
+                            // Workspaces come and go by themselves; clients
+                            // can't create them.
+                            handle.capabilities(GroupCapabilities::empty());
+                            client.groups.push(GroupState {
+                                key: key.clone(),
+                                handle,
+                                outputs: Vec::new(),
+                            });
+                            changed = true;
+                        }
+                        Err(err) => warn!(?err, "failed to create workspace group"),
+                    }
                 }
-            }
-            for output in &client.outputs {
-                if !current.contains(output) && output.is_alive() {
-                    client.group.output_leave(output);
-                    changed = true;
+                // Monitors (a group spans all of its own).
+                let Some(group) = client.groups.iter_mut().find(|g| &g.key == key) else {
+                    continue;
+                };
+                let current: Vec<WlOutput> = group_outputs
+                    .iter()
+                    .flat_map(|o| o.client_outputs(&wl_client))
+                    .collect();
+                for output in &current {
+                    if !group.outputs.contains(output) {
+                        group.handle.output_enter(output);
+                        changed = true;
+                    }
                 }
+                for output in &group.outputs {
+                    if !current.contains(output) && output.is_alive() {
+                        group.handle.output_leave(output);
+                        changed = true;
+                    }
+                }
+                group.outputs = current;
             }
-            client.outputs = current;
 
             // Workspaces that went away.
+            let group_handles = &client.groups;
             client.handles.retain(|(handle, info)| {
                 if infos.iter().any(|i| i.id == info.id) {
                     return true;
                 }
                 if handle.is_alive() {
-                    client.group.workspace_leave(handle);
+                    if let Some(group) = group_handles.iter().find(|g| g.key == info.group) {
+                        group.handle.workspace_leave(handle);
+                    }
                     handle.removed();
                 }
                 changed = true;
@@ -137,6 +211,16 @@ impl State {
                     client.handles.iter_mut().find(|(_, s)| s.id == info.id)
                 {
                     if sent != info {
+                        if sent.group != info.group {
+                            // Moved to another monitor's group.
+                            let find = |key: &str| client.groups.iter().find(|g| g.key == key);
+                            if let Some(old) = find(&sent.group) {
+                                old.handle.workspace_leave(handle);
+                            }
+                            if let Some(new) = find(&info.group) {
+                                new.handle.workspace_enter(handle);
+                            }
+                        }
                         send_details(handle, info, Some(sent));
                         *sent = info.clone();
                         changed = true;
@@ -159,10 +243,24 @@ impl State {
                 handle.id(format!("cnde-{}", info.id));
                 handle.capabilities(WorkspaceCapabilities::Activate);
                 send_details(&handle, info, None);
-                client.group.workspace_enter(&handle);
+                if let Some(group) = client.groups.iter().find(|g| g.key == info.group) {
+                    group.handle.workspace_enter(&handle);
+                }
                 client.handles.push((handle, info.clone()));
                 changed = true;
             }
+
+            // Groups that went away (monitors unplugged, or the mode changed).
+            client.groups.retain(|group| {
+                if groups.iter().any(|(key, _)| *key == group.key) {
+                    return true;
+                }
+                if group.handle.is_alive() {
+                    group.handle.removed();
+                }
+                changed = true;
+                false
+            });
 
             if changed {
                 client.manager.done();
@@ -183,17 +281,8 @@ impl State {
 
     /// Slide the strip so workspace `id` is on the main monitor.
     fn activate_workspace(&mut self, id: WorkspaceId) {
-        let Some(index) = self.workspaces.list.iter().position(|ws| ws.id == id) else {
-            return;
-        };
-        let current = self
-            .workspaces
-            .motion
-            .as_ref()
-            .map_or(self.workspaces.active, |m| m.to);
-        let step = index as isize - current as isize;
-        if step != 0 {
-            self.step_workspace(step, false);
+        if let Some(index) = self.workspaces.list.iter().position(|ws| ws.id == id) {
+            self.show_workspace(index, None);
         }
     }
 }
@@ -220,32 +309,17 @@ fn send_details(handle: &ExtWorkspaceHandleV1, info: &Info, previous: Option<&In
 impl GlobalDispatch<ExtWorkspaceManagerV1, ()> for State {
     fn bind(
         state: &mut Self,
-        dh: &DisplayHandle,
-        client: &Client,
+        _dh: &DisplayHandle,
+        _client: &Client,
         resource: New<ExtWorkspaceManagerV1>,
         _global_data: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
         let manager = data_init.init(resource, ());
-        let group = match client.create_resource::<ExtWorkspaceGroupHandleV1, (), State>(
-            dh,
-            manager.version(),
-            (),
-        ) {
-            Ok(group) => group,
-            Err(err) => {
-                warn!(?err, "failed to create workspace group");
-                return;
-            }
-        };
-        manager.workspace_group(&group);
-        // Workspaces come and go by themselves; clients can't create them.
-        group.capabilities(GroupCapabilities::empty());
         state.ext_workspace_state.clients.push(ClientWorkspaces {
             manager,
-            group,
+            groups: Vec::new(),
             handles: Vec::new(),
-            outputs: Vec::new(),
             pending_activate: None,
         });
         // Sends everything to the new client, then `done`.

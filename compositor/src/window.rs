@@ -439,6 +439,9 @@ impl State {
             self.space.raise_element(window, true);
             self.workspaces.raise(window);
             with_state(window, |s| s.urgent = false);
+            if let Some(output) = self.output_for(window) {
+                self.workspace_monitor = Some(output.name());
+            }
             self.mru.retain(|w| w != window && smithay::utils::IsAlive::alive(w));
             self.mru.insert(0, window.clone());
         }

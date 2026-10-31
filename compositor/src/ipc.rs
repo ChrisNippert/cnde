@@ -426,7 +426,7 @@ impl State {
     /// nothing else was opened or restored in between.
     pub(crate) fn toggle_show_desktop(&mut self) {
         use crate::window::with_state;
-        let Some(ws) = self.workspaces.list.get(self.workspaces.active) else {
+        let Some(ws) = self.workspaces.list.get(self.current_workspace_index()) else {
             return;
         };
         let ws_id = ws.id;
@@ -507,15 +507,7 @@ impl State {
                 self.rebuild_space();
             }
         } else {
-            let current = self
-                .workspaces
-                .motion
-                .as_ref()
-                .map_or(self.workspaces.active, |m| m.to) as isize;
-            let step = index as isize - current;
-            if step != 0 {
-                self.step_workspace(step, false);
-            }
+            self.show_workspace(index, None);
         }
         self.focus_window(Some(&window));
         if self.overview.is_open() {

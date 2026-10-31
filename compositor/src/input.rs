@@ -590,6 +590,13 @@ impl State {
             return;
         };
         let serial = SERIAL_COUNTER.next_serial();
+        // Individual workspaces: the monitor clicked is the one the
+        // workspace keys act on.
+        if button_state == ButtonState::Pressed
+            && let Some(output) = self.output_under_pointer()
+        {
+            self.workspace_monitor = Some(output.name());
+        }
         // Mod+click (e.g. Super+drag) is not a tap.
         self.mod_tap_armed = false;
         // Locked: clicks are only for the locker.

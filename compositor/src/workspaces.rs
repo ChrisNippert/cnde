@@ -6,8 +6,19 @@
 //! relative to their monitor (`WindowState::local`). While the strip is
 //! moving (key press or swipe), every monitor is drawn from this model at an
 //! offset; the space is rebuilt once the motion settles.
+//!
+//! With `workspaces.mode = "individual"` every monitor has a strip of its
+//! own instead (a [`Lane`]): `Workspaces::list` then only stores the
+//! workspaces, and each lane orders some of them by id. Switching moves the
+//! lane of the monitor used last, `State::current_output`. The strip logic
+//! (normalize, motion, swipes) is shared: a lane is normalized as a strip
+//! with one monitor, and `State::strip_view` hands drawing code either the
+//! global strip or one lane in the same shape.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use smithay::{
     desktop::Window,
@@ -63,10 +74,25 @@ pub struct Workspaces<W = Window> {
     pub active: usize,
     next_id: WorkspaceId,
     pub motion: Option<StripMotion>,
+    /// Individual mode (and then `lanes` has the strips, by output name).
+    pub individual: bool,
+    pub lanes: HashMap<String, Lane>,
+}
+
+/// One monitor's strip in individual mode.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Lane {
+    /// Left to right; ids of workspaces in `Workspaces::list`.
+    pub ids: Vec<WorkspaceId>,
+    /// Position in `ids` of the workspace on the monitor.
+    pub active: usize,
 }
 
 /// The strip sliding between two resting positions.
 pub struct StripMotion {
+    /// Individual mode: the monitor whose strip moves. `from`, `to` and the
+    /// swipe then count positions in that lane.
+    pub lane: Option<String>,
     /// Strip position (in workspaces) when the current leg started.
     from: f64,
     /// Where it comes to rest.
@@ -97,6 +123,8 @@ impl<W: PartialEq + Clone> Workspaces<W> {
             active: 0,
             next_id: 1,
             motion: None,
+            individual: false,
+            lanes: HashMap::new(),
         };
         workspaces.push_empty();
         workspaces
@@ -130,6 +158,213 @@ impl<W: PartialEq + Clone> Workspaces<W> {
 
     pub fn is_moving(&self) -> bool {
         self.motion.is_some()
+    }
+
+    /// Strip position of `lane` (`None`: the global strip) at rest or in
+    /// motion.
+    pub fn position_in(&self, lane: Option<&str>, now: Instant) -> f64 {
+        match &self.motion {
+            Some(_) => self.position(now),
+            None => self.rest_in(lane) as f64,
+        }
+    }
+
+    /// Where `lane` (`None`: the global strip) is heading or resting.
+    pub fn target_in(&self, lane: Option<&str>) -> usize {
+        self.motion.as_ref().map_or(self.rest_in(lane), |m| m.to)
+    }
+
+    fn rest_in(&self, lane: Option<&str>) -> usize {
+        lane.and_then(|name| self.lanes.get(name))
+            .map_or(self.active, |l| l.active)
+    }
+
+    /// Number of workspaces in `lane` (`None`: the global strip).
+    pub fn len_of(&self, lane: Option<&str>) -> usize {
+        lane.and_then(|name| self.lanes.get(name))
+            .map_or(self.list.len(), |l| l.ids.len())
+    }
+
+    /// Index into `list` of the workspace at `position` of `lane` (`None`:
+    /// the global strip).
+    pub fn index_at(&self, lane: Option<&str>, position: usize) -> Option<usize> {
+        match lane.and_then(|name| self.lanes.get(name)) {
+            None => (position < self.list.len()).then_some(position),
+            Some(lane) => {
+                let id = lane.ids.get(position)?;
+                self.list.iter().position(|ws| ws.id == *id)
+            }
+        }
+    }
+
+    /// The lane holding `list[index]`, and its position there.
+    pub fn lane_of(&self, index: usize) -> Option<(&str, usize)> {
+        let id = self.list.get(index)?.id;
+        self.lanes.iter().find_map(|(name, lane)| {
+            let position = lane.ids.iter().position(|i| *i == id)?;
+            Some((name.as_str(), position))
+        })
+    }
+
+    /// A monitor's lane, with one empty workspace if it's new.
+    pub fn ensure_lane(&mut self, name: &str) {
+        if !self.lanes.contains_key(name) {
+            self.push_empty();
+            let id = self.list[self.list.len() - 1].id;
+            self.lanes.insert(
+                name.to_string(),
+                Lane {
+                    ids: vec![id],
+                    active: 0,
+                },
+            );
+        }
+    }
+
+    /// Tidy one lane exactly like the global strip with a single monitor.
+    pub fn normalize_lane(&mut self, name: &str) {
+        let Some(lane) = self.lanes.get(name) else {
+            return;
+        };
+        let (ids, active) = (lane.ids.clone(), lane.active);
+        // Where its workspaces sit in `list`, which stays as it was unless
+        // the lane changes (indices held elsewhere, like the overview's
+        // drag, then stay valid).
+        let mut slots: Vec<(usize, WorkspaceId)> = ids
+            .iter()
+            .filter_map(|id| Some((self.list.iter().position(|ws| ws.id == *id)?, *id)))
+            .collect();
+        slots.sort();
+        let mut taken: Vec<Workspace<W>> = Vec::new();
+        for (i, _) in slots.iter().rev() {
+            taken.push(self.list.remove(*i));
+        }
+        taken.sort_by_key(|ws| ids.iter().position(|id| *id == ws.id));
+        let mut strip = Self {
+            list: taken,
+            active,
+            next_id: self.next_id,
+            motion: None,
+            individual: false,
+            lanes: HashMap::new(),
+        };
+        if strip.list.is_empty() {
+            strip.push_empty();
+        }
+        strip.active = strip.active.min(strip.list.len() - 1);
+        strip.normalize(0, 0);
+        self.next_id = strip.next_id;
+        let new_ids: Vec<WorkspaceId> = strip.list.iter().map(|ws| ws.id).collect();
+        self.lanes.insert(
+            name.to_string(),
+            Lane {
+                ids: new_ids.clone(),
+                active: strip.active,
+            },
+        );
+        // Same workspaces: back where they were.
+        let mut sorted: Vec<WorkspaceId> = slots.iter().map(|(_, id)| *id).collect();
+        sorted.sort();
+        let mut now = new_ids.clone();
+        now.sort();
+        if sorted == now {
+            let mut by_id: HashMap<WorkspaceId, Workspace<W>> =
+                strip.list.into_iter().map(|ws| (ws.id, ws)).collect();
+            for (i, id) in slots {
+                if let Some(ws) = by_id.remove(&id) {
+                    self.list.insert(i, ws);
+                }
+            }
+        } else {
+            self.list.extend(strip.list);
+        }
+    }
+
+    /// A monitor went away: its workspaces (and windows) continue at the
+    /// end of `into`'s lane.
+    pub fn drop_lane(&mut self, name: &str, into: &str) {
+        let Some(gone) = self.lanes.remove(name) else {
+            return;
+        };
+        self.ensure_lane(into);
+        if let Some(lane) = self.lanes.get_mut(into) {
+            lane.ids.extend(gone.ids);
+        }
+    }
+
+    /// Continuous to individual. `outputs` are in strip order with `main`
+    /// the anchor. Each monitor keeps the workspace it shows; the main
+    /// monitor's lane also takes all the others, in order: the ones before
+    /// the visible block go before its workspace, the ones after, after it.
+    /// Nothing moves on screen and no window changes workspace.
+    pub fn become_individual(&mut self, outputs: &[String], main: usize) {
+        let first = self.active as isize - main as isize;
+        let ids: Vec<WorkspaceId> = self.list.iter().map(|ws| ws.id).collect();
+        let at = |i: isize| usize::try_from(i).ok().and_then(|i| ids.get(i).copied());
+        let end = first + outputs.len() as isize;
+        let before: Vec<WorkspaceId> = (0..first).filter_map(at).collect();
+        let after: Vec<WorkspaceId> = (end..ids.len() as isize).filter_map(at).collect();
+
+        self.lanes.clear();
+        for (i, name) in outputs.iter().enumerate() {
+            let own = at(first + i as isize);
+            let lane = if i == main {
+                let mut lane = before.clone();
+                let active = lane.len();
+                lane.extend(own);
+                lane.extend(after.iter().copied());
+                Lane { ids: lane, active }
+            } else {
+                Lane {
+                    ids: own.into_iter().collect(),
+                    active: 0,
+                }
+            };
+            self.lanes.insert(name.clone(), lane);
+        }
+        self.individual = true;
+    }
+
+    /// Individual to continuous: one strip of every lane's workspaces
+    /// before its current one, then each monitor's current one in monitor
+    /// order (so they sit side by side as the strip shows them), then the
+    /// ones after.
+    pub fn become_continuous(&mut self, outputs: &[String], main: usize) {
+        let Some(anchor) = outputs.get(main).or(outputs.first()).cloned() else {
+            return;
+        };
+        let stale: Vec<String> = self
+            .lanes
+            .keys()
+            .filter(|name| !outputs.contains(name))
+            .cloned()
+            .collect();
+        for name in stale {
+            self.drop_lane(&name, &anchor);
+        }
+        for name in outputs {
+            self.ensure_lane(name);
+        }
+        let (mut before, mut current, mut after) = (Vec::new(), Vec::new(), Vec::new());
+        for name in outputs {
+            let lane = &self.lanes[name];
+            let split = lane.active.min(lane.ids.len().saturating_sub(1));
+            before.extend_from_slice(&lane.ids[..split]);
+            current.extend(lane.ids.get(split).copied());
+            after.extend_from_slice(lane.ids.get(split + 1..).unwrap_or(&[]));
+        }
+        self.active = before.len() + main.min(current.len().saturating_sub(1));
+        let order: Vec<WorkspaceId> = [before, current, after].concat();
+        let mut old = std::mem::take(&mut self.list);
+        for id in order {
+            if let Some(i) = old.iter().position(|ws| ws.id == id) {
+                self.list.push(old.remove(i));
+            }
+        }
+        // Anything no lane listed (shouldn't happen) stays reachable.
+        self.list.extend(old);
+        self.lanes.clear();
+        self.individual = false;
     }
 
     pub(crate) fn index_of(&self, window: &W) -> Option<usize> {
@@ -200,10 +435,17 @@ impl<W: PartialEq + Clone> Workspaces<W> {
             ws.list.pop();
         }
     }
+}
 
-    fn last_valid(&self) -> usize {
-        self.list.len().saturating_sub(1)
-    }
+/// A strip as drawing code sees it: `outputs` are the monitors in strip
+/// order with `main` the anchor, `order` the indices into
+/// `Workspaces::list` of its workspaces left to right, and `position` the
+/// (fractional) strip position of the workspace on the anchor.
+pub struct StripView {
+    pub outputs: Vec<Output>,
+    pub main: usize,
+    pub order: Vec<usize>,
+    pub position: f64,
 }
 
 impl Swipe {
@@ -254,10 +496,113 @@ impl State {
 
     /// Index of the workspace showing on `output` when the strip is at rest.
     pub fn workspace_on(&self, output: &Output) -> Option<usize> {
+        if self.workspaces.individual {
+            let name = output.name();
+            let lane = self.workspaces.lanes.get(&name)?;
+            return self.workspaces.index_at(Some(&name), lane.active);
+        }
         let (outputs, main) = self.strip_outputs();
         let i = outputs.iter().position(|o| o == output)?;
         let index = self.workspaces.active as isize + i as isize - main as isize;
         (index >= 0 && (index as usize) < self.workspaces.list.len()).then_some(index as usize)
+    }
+
+    /// Individual mode: the monitor workspace keys and the overview's
+    /// scroll act on: the last one clicked or focused, else the one under
+    /// the pointer.
+    pub fn current_output(&self) -> Option<Output> {
+        self.workspace_monitor
+            .as_ref()
+            .and_then(|name| self.space.outputs().find(|o| o.name() == *name))
+            .cloned()
+            .or_else(|| self.output_under_pointer())
+    }
+
+    /// The lane that switching acts on right now (`None` in continuous mode).
+    fn current_lane(&self) -> Option<String> {
+        self.workspaces
+            .individual
+            .then(|| self.current_output().map(|o| o.name()))
+            .flatten()
+    }
+
+    /// Index of the workspace "the current one" is on: the main monitor's,
+    /// or the current monitor's in individual mode.
+    pub fn current_workspace_index(&self) -> usize {
+        let last = self.workspaces.list.len().saturating_sub(1);
+        let rest = self
+            .current_lane()
+            .and_then(|name| {
+                let at = self.workspaces.lanes.get(&name)?.active;
+                self.workspaces.index_at(Some(&name), at)
+            })
+            .unwrap_or(self.workspaces.active);
+        rest.min(last)
+    }
+
+    /// Slide so workspace `index` shows: on the main monitor (or `on`, in
+    /// continuous mode), or in individual mode on the monitor whose strip
+    /// it is.
+    pub fn show_workspace(&mut self, index: usize, on: Option<&Output>) {
+        if self.workspaces.individual {
+            let Some((name, position)) = self
+                .workspaces
+                .lane_of(index)
+                .map(|(name, position)| (name.to_string(), position))
+            else {
+                return;
+            };
+            let step = position as isize - self.workspaces.target_in(Some(&name)) as isize;
+            self.workspace_monitor = Some(name);
+            if step != 0 {
+                self.step_workspace(step, false);
+            }
+            return;
+        }
+        let (outputs, main) = self.strip_outputs();
+        let slot = on
+            .and_then(|o| outputs.iter().position(|x| x == o))
+            .unwrap_or(main);
+        let target = index as isize + main as isize - slot as isize;
+        let step = target - self.workspaces.target_in(None) as isize;
+        if step != 0 {
+            self.step_workspace(step, false);
+        }
+    }
+
+    /// What drawing code walks to lay out `output`'s workspaces: in
+    /// continuous mode the global strip, in individual mode just this
+    /// monitor's.
+    pub fn strip_view(&self, output: &Output, now: Instant) -> StripView {
+        if !self.workspaces.individual {
+            let (outputs, main) = self.strip_outputs();
+            return StripView {
+                outputs,
+                main,
+                order: (0..self.workspaces.list.len()).collect(),
+                position: self.workspaces.position(now),
+            };
+        }
+        let name = output.name();
+        let order = (0..self.workspaces.len_of(Some(&name)))
+            .filter_map(|p| self.workspaces.index_at(Some(&name), p))
+            .collect();
+        let moving = self
+            .workspaces
+            .motion
+            .as_ref()
+            .is_some_and(|m| m.lane.as_deref() == Some(name.as_str()));
+        let position = if moving {
+            self.workspaces.position(now)
+        } else {
+            self.workspaces.position_in(Some(&name), now)
+        };
+        StripView {
+            outputs: vec![output.clone()],
+            main: 0,
+            order,
+            position,
+        }
     }
 
     /// Put a newly mapped window on the workspace showing where it opened.
@@ -270,7 +615,7 @@ impl State {
         let index = self
             .output_for(window)
             .and_then(|o| self.workspace_on(&o))
-            .unwrap_or(self.workspaces.active);
+            .unwrap_or(self.current_workspace_index());
         self.workspaces.remove_window(window);
         self.workspaces.list[index].windows.push(window.clone());
         // Needed if it opens mid-motion, when everything is drawn from
@@ -332,8 +677,64 @@ impl State {
 
     pub(crate) fn normalize_workspaces(&mut self) {
         let (outputs, main) = self.strip_outputs();
-        let right_of_main = outputs.len().saturating_sub(main + 1);
-        self.workspaces.normalize(main, right_of_main);
+        let names: Vec<String> = outputs.iter().map(|o| o.name()).collect();
+        let individual = self.config.workspaces.mode == cnde_config::WorkspaceMode::Individual;
+        let switched = !names.is_empty() && individual != self.workspaces.individual;
+        if switched {
+            self.switch_workspace_mode(&names, main, individual);
+        }
+        if !self.workspaces.individual {
+            let right_of_main = outputs.len().saturating_sub(main + 1);
+            self.workspaces.normalize(main, right_of_main);
+        } else if !names.is_empty() {
+            self.normalize_lanes(&names, main);
+        }
+        if switched {
+            self.rebuild_space();
+        }
+    }
+
+    fn normalize_lanes(&mut self, names: &[String], main: usize) {
+        // A monitor that went away hands its workspaces to the main one; a
+        // new one starts with an empty workspace.
+        let gone: Vec<String> = (self.workspaces.lanes.keys())
+            .filter(|name| !names.contains(name))
+            .cloned()
+            .collect();
+        for name in gone {
+            self.workspaces
+                .drop_lane(&name, &names[main.min(names.len() - 1)]);
+        }
+        for name in names {
+            self.workspaces.ensure_lane(name);
+            self.workspaces.normalize_lane(name);
+        }
+    }
+
+    /// `workspaces.mode` changed (or this is the first look at it): turn
+    /// the strip into per-monitor strips or back. See `become_individual`
+    /// and `become_continuous` for where the workspaces end up; every
+    /// window keeps its workspace, so none is lost.
+    fn switch_workspace_mode(&mut self, names: &[String], main: usize, individual: bool) {
+        self.store_local_positions();
+        // The motion's destination counts as where things are.
+        if let Some(motion) = self.workspaces.motion.take() {
+            match motion
+                .lane
+                .as_ref()
+                .and_then(|n| self.workspaces.lanes.get_mut(n))
+            {
+                Some(lane) => lane.active = motion.to,
+                None => self.workspaces.active = motion.to,
+            }
+        }
+        if individual {
+            self.workspaces.become_individual(names, main);
+        } else {
+            self.workspaces.become_continuous(names, main);
+        }
+        self.workspace_monitor = None;
+        debug!(individual, "workspace mode switched");
     }
 
     /// Record every visible window's position relative to its monitor, so
@@ -359,40 +760,65 @@ impl State {
     /// window comes along.
     pub fn step_workspace(&mut self, step: isize, carry: bool) {
         let now = Instant::now();
+        let carried = if carry { self.focused_window() } else { None };
+        // Individual mode: only the strip of the monitor used last moves
+        // (a carried window's own monitor), and one at a time.
+        let lane = self
+            .workspaces
+            .individual
+            .then(|| {
+                carried
+                    .as_ref()
+                    .and_then(|w| self.output_for(w))
+                    .or_else(|| self.current_output())
+                    .map(|o| o.name())
+            })
+            .flatten();
+        if let Some(name) = &lane {
+            let elsewhere =
+                (self.workspaces.motion.as_ref()).is_some_and(|m| m.lane.as_ref() != Some(name));
+            if elsewhere {
+                self.complete_motion();
+            }
+            self.workspace_monitor = Some(name.clone());
+        }
+        let lane = lane.as_deref();
         if !self.workspaces.is_moving() {
             // Make sure the spare workspaces at both ends exist.
             self.normalize_workspaces();
         }
-        let current_target = self
-            .workspaces
-            .motion
-            .as_ref()
-            .map_or(self.workspaces.active, |m| m.to);
+        let current_target = self.workspaces.target_in(lane);
         let target = current_target as isize + step;
-        if target < 0 || target as usize > self.workspaces.last_valid() {
+        if target < 0 || target as usize >= self.workspaces.len_of(lane) {
             return;
         }
         let target = target as usize;
-        let from = self.workspaces.position(now);
+        let from = self.workspaces.position_in(lane, now);
 
-        let carried = if carry { self.focused_window() } else { None };
         if !self.workspaces.is_moving() {
             self.store_local_positions();
         }
         if let Some(window) = &carried {
             // It stays on its monitor, so it joins whichever workspace lands
             // there; drawn fixed on screen meanwhile.
-            let (outputs, main) = self.strip_outputs();
-            let monitor = self
-                .output_for(window)
-                .and_then(|o| outputs.iter().position(|x| x == &o))
-                .unwrap_or(main);
-            let dest = (target as isize + monitor as isize - main as isize).max(0) as usize;
-            while self.workspaces.list.len() <= dest {
-                self.workspaces.push_empty();
+            let dest = if lane.is_some() {
+                self.workspaces.index_at(lane, target)
+            } else {
+                let (outputs, main) = self.strip_outputs();
+                let monitor = self
+                    .output_for(window)
+                    .and_then(|o| outputs.iter().position(|x| x == &o))
+                    .unwrap_or(main);
+                let dest = (target as isize + monitor as isize - main as isize).max(0) as usize;
+                while self.workspaces.list.len() <= dest {
+                    self.workspaces.push_empty();
+                }
+                Some(dest)
+            };
+            if let Some(dest) = dest {
+                self.workspaces.remove_window(window);
+                self.workspaces.list[dest].windows.push(window.clone());
             }
-            self.workspaces.remove_window(window);
-            self.workspaces.list[dest].windows.push(window.clone());
         }
 
         let duration_scale = (target as f64 - from).abs().clamp(0.4, 1.5);
@@ -406,7 +832,9 @@ impl State {
                 .as_mut()
                 .and_then(|m| m.carried.take())
         });
+        let lane = lane.map(str::to_string);
         self.workspaces.motion = Some(StripMotion {
+            lane,
             from,
             to: target,
             anim: Some(Animation::new(from, target as f64, params)),
@@ -418,20 +846,31 @@ impl State {
     }
 
     pub fn swipe_begin(&mut self) {
+        // Individual mode: the monitor under the fingers' pointer.
+        let lane = self
+            .workspaces
+            .individual
+            .then(|| self.output_under_pointer().map(|o| o.name()))
+            .flatten();
+        if let Some(name) = &lane {
+            let elsewhere =
+                (self.workspaces.motion.as_ref()).is_some_and(|m| m.lane.as_ref() != Some(name));
+            if elsewhere {
+                self.complete_motion();
+            }
+            self.workspace_monitor = Some(name.clone());
+        }
         if !self.workspaces.is_moving() {
             self.normalize_workspaces();
         }
         let now = Instant::now();
-        let start = self.workspaces.position(now);
+        let start = self.workspaces.position_in(lane.as_deref(), now);
         if !self.workspaces.is_moving() {
             self.store_local_positions();
         }
-        let to = self
-            .workspaces
-            .motion
-            .as_ref()
-            .map_or(self.workspaces.active, |m| m.to);
+        let to = self.workspaces.target_in(lane.as_deref());
         self.workspaces.motion = Some(StripMotion {
+            lane,
             from: start,
             to,
             anim: None,
@@ -447,7 +886,12 @@ impl State {
     }
 
     pub fn swipe_update(&mut self, dx: f64) {
-        let max = self.workspaces.last_valid() as f64;
+        let lane = self
+            .workspaces
+            .motion
+            .as_ref()
+            .and_then(|m| m.lane.as_deref());
+        let max = self.workspaces.len_of(lane).saturating_sub(1) as f64;
         if let Some(swipe) = self
             .workspaces
             .motion
@@ -462,13 +906,14 @@ impl State {
     /// Fingers lifted: settle on the nearest workspace in the direction the
     /// swipe was heading (a flick goes to the next one even if short).
     pub fn swipe_end(&mut self, cancelled: bool) {
+        let lane = self.workspaces.motion.as_ref().and_then(|m| m.lane.clone());
+        let last = self.workspaces.len_of(lane.as_deref()).saturating_sub(1) as f64;
         let Some(motion) = &mut self.workspaces.motion else {
             return;
         };
         let Some(swipe) = motion.swipe.take() else {
             return;
         };
-        let last = self.workspaces.list.len().saturating_sub(1) as f64;
         let projected = swipe.position + swipe.velocity() * presets::SWIPE_FLICK_SECONDS;
         let target = if cancelled {
             swipe.start.round()
@@ -498,26 +943,37 @@ impl State {
             self.workspaces.motion.as_ref().is_some_and(|m| {
                 m.swipe.is_none() && m.anim.as_ref().is_none_or(|a| a.is_done(now))
             });
-        if !done {
-            return;
+        if done {
+            self.complete_motion();
         }
+    }
+
+    /// End the motion in progress right now, at its destination.
+    fn complete_motion(&mut self) {
         let Some(motion) = self.workspaces.motion.take() else {
             return;
         };
-        self.workspaces.active = motion.to;
+        match motion
+            .lane
+            .as_ref()
+            .and_then(|name| self.workspaces.lanes.get_mut(name))
+        {
+            Some(lane) => lane.active = motion.to,
+            None => self.workspaces.active = motion.to,
+        }
         self.rebuild_space();
         self.normalize_workspaces();
         self.rebuild_space();
 
         // Keep focus if the focused window is still on screen; otherwise
-        // the top window on the main monitor's workspace.
+        // the top window on the main (or current) monitor's workspace.
         let focused_visible = self
             .focused_window()
             .is_some_and(|w| self.space.elements().any(|e| e == &w));
         if let Some(carried) = &motion.carried {
             self.focus_window(Some(carried));
         } else if !focused_visible {
-            let top = self.workspaces.list[self.workspaces.active]
+            let top = self.workspaces.list[self.current_workspace_index()]
                 .windows
                 .last()
                 .cloned();
@@ -654,18 +1110,31 @@ impl State {
     /// `output` is drawn there. Bottom to top.
     pub fn moving_layout(&self, output: &Output, now: Instant) -> Option<Vec<Placed>> {
         let motion = self.workspaces.motion.as_ref()?;
-        let (outputs, main) = self.strip_outputs();
+        // Another monitor's strip is moving: this one is at rest.
+        if motion
+            .lane
+            .as_ref()
+            .is_some_and(|name| *name != output.name())
+        {
+            return None;
+        }
+        let StripView {
+            outputs,
+            main,
+            order,
+            position,
+        } = self.strip_view(output, now);
         let output_geo = self.space.output_geometry(output)?.to_f64();
-        let position = self.workspaces.position(now);
 
         let mut layout = Vec::new();
         let lowest = position.floor() as isize - main as isize - 1;
         let highest = position.ceil() as isize + (outputs.len() - main) as isize + 1;
-        for index in lowest.max(0)..=highest.min(self.workspaces.list.len() as isize - 1) {
+        for pos in lowest.max(0)..=highest.min(order.len() as isize - 1) {
+            let index = order[pos as usize];
             // Fractional slot this workspace is passing through.
-            let slot = index as f64 - position + main as f64;
+            let slot = pos as f64 - position + main as f64;
             let (from, t) = (slot.floor() as isize, slot - slot.floor());
-            for window in &self.workspaces.list[index as usize].windows {
+            for window in &self.workspaces.list[index].windows {
                 if motion.carried.as_ref() == Some(window) || with_state(window, |s| s.minimized) {
                     continue;
                 }
@@ -681,7 +1150,7 @@ impl State {
                         window: window.clone(),
                         rect,
                         zoom: Zoom::IDENTITY,
-                        workspace: index as usize,
+                        workspace: index,
                     });
                 }
             }
@@ -695,7 +1164,7 @@ impl State {
                 window: window.clone(),
                 rect,
                 zoom: Zoom::IDENTITY,
-                workspace: motion.to,
+                workspace: order.get(motion.to).copied().unwrap_or(0),
             });
         }
         Some(layout)
@@ -735,7 +1204,9 @@ fn reachable(
     let left = area.loc.x - geo.loc.x;
     let right = left + area.size.w;
     Point::from((
-        local.x.clamp(left - (size.w - 64).max(0), (right - 64).max(left)),
+        local
+            .x
+            .clamp(left - (size.w - 64).max(0), (right - 64).max(left)),
         local.y.min(bottom).max(top),
     ))
 }
@@ -755,6 +1226,7 @@ mod tests {
             ));
         }
         ws.active = active;
+        ws.next_id = occupied.len() as u64;
         ws
     }
 
@@ -855,5 +1327,112 @@ mod tests {
         ws.normalize(1, 0); // one monitor left of main
         // spare | left | main | spare
         assert_eq!(shape(&ws), (vec![false, false, true, false], 2));
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Window numbers of each workspace, in `lane` order.
+    fn lane_windows(ws: &Workspaces<u32>, lane: &str) -> Vec<Vec<u32>> {
+        (0..ws.len_of(Some(lane)))
+            .map(|p| ws.list[ws.index_at(Some(lane), p).unwrap()].windows.clone())
+            .collect()
+    }
+
+    fn all_windows(ws: &Workspaces<u32>) -> Vec<u32> {
+        let mut all: Vec<u32> = ws.list.iter().flat_map(|w| w.windows.clone()).collect();
+        all.sort();
+        all
+    }
+
+    #[test]
+    fn going_individual_keeps_each_monitors_workspace() {
+        // 0 1 [2 3] 4 5 with two monitors, main left, showing 2 and 3.
+        let mut ws = strip(&[true; 6], 2);
+        ws.become_individual(&names(&["L", "R"]), 0);
+        assert!(ws.individual);
+        // Main takes the hidden ones around its own; the other has just its.
+        assert_eq!(
+            lane_windows(&ws, "L"),
+            vec![vec![0], vec![1], vec![2], vec![4], vec![5]]
+        );
+        assert_eq!(ws.lanes["L"].active, 2);
+        assert_eq!(lane_windows(&ws, "R"), vec![vec![3]]);
+        assert_eq!(all_windows(&ws), vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn lanes_normalize_independently() {
+        let mut ws = strip(&[true; 4], 1);
+        ws.become_individual(&names(&["L", "R"]), 0);
+        ws.normalize_lane("L");
+        ws.normalize_lane("R");
+        // R: its window with a spare either side.
+        assert_eq!(lane_windows(&ws, "R"), vec![vec![], vec![2], vec![]]);
+        assert_eq!(ws.lanes["R"].active, 1);
+        assert_eq!(all_windows(&ws), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn normalizing_a_settled_lane_keeps_list_order() {
+        let mut ws = strip(&[true; 4], 1);
+        ws.become_individual(&names(&["L", "R"]), 0);
+        ws.normalize_lane("R");
+        ws.normalize_lane("L");
+        let ids: Vec<_> = ws.list.iter().map(|w| w.id).collect();
+        ws.normalize_lane("R");
+        ws.normalize_lane("L");
+        assert_eq!(ws.list.iter().map(|w| w.id).collect::<Vec<_>>(), ids);
+    }
+
+    #[test]
+    fn lane_motion_counts_lane_positions() {
+        let mut ws = strip(&[true; 4], 1);
+        ws.become_individual(&names(&["L", "R"]), 0);
+        ws.normalize_lane("R");
+        assert_eq!(ws.len_of(Some("R")), 3);
+        assert_eq!(ws.target_in(Some("R")), 1);
+        let index = ws.index_at(Some("R"), 2).unwrap();
+        assert_eq!(ws.lane_of(index), Some(("R", 2)));
+    }
+
+    #[test]
+    fn unplugged_monitor_hands_over_its_windows() {
+        let mut ws = strip(&[true; 4], 1);
+        ws.become_individual(&names(&["L", "R"]), 0);
+        ws.drop_lane("R", "L");
+        assert!(!ws.lanes.contains_key("R"));
+        assert_eq!(all_windows(&ws), vec![0, 1, 2, 3]);
+        let on_l: Vec<u32> = lane_windows(&ws, "L").concat();
+        assert_eq!(on_l.len(), 4);
+        // Its own workspace is last, after the main monitor's.
+        assert_eq!(on_l.last(), Some(&2));
+    }
+
+    #[test]
+    fn going_continuous_puts_current_workspaces_side_by_side() {
+        let mut ws = strip(&[true; 4], 1);
+        ws.become_individual(&names(&["L", "R"]), 0);
+        // L looks at 0 now; R at 2.
+        ws.lanes.get_mut("L").unwrap().active = 0;
+        ws.become_continuous(&names(&["L", "R"]), 0);
+        assert!(!ws.individual && ws.lanes.is_empty());
+        let order: Vec<u32> = ws.list.iter().flat_map(|w| w.windows.clone()).collect();
+        assert_eq!(order[ws.active], 0);
+        assert_eq!(order[ws.active + 1], 2);
+        assert_eq!(all_windows(&ws), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn mode_round_trip_loses_nothing() {
+        let mut ws = strip(&[true, false, true, true, false, true], 2);
+        ws.become_individual(&names(&["A", "B", "C"]), 1);
+        for n in ["A", "B", "C"] {
+            ws.normalize_lane(n);
+        }
+        ws.become_continuous(&names(&["A", "B", "C"]), 1);
+        ws.normalize(1, 1);
+        assert_eq!(all_windows(&ws), vec![0, 2, 3, 5]);
     }
 }

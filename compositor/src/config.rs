@@ -169,6 +169,12 @@ impl State {
             // Variable refresh is switched as each monitor draws.
             self.queue_redraw();
         }
+        // Per-monitor or one strip: regroups the workspaces (see
+        // `switch_workspace_mode`).
+        if old.is_some_and(|old| old.workspaces != self.config.workspaces) {
+            self.normalize_workspaces();
+            self.queue_redraw();
+        }
         if let Some(old) = old.filter(|old| old.tiling != self.config.tiling) {
             self.tiling_config_changed(&old.tiling);
         }

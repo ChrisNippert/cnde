@@ -219,7 +219,7 @@ impl SessionLockHandler for State {
         let top = self
             .workspaces
             .list
-            .get(self.workspaces.active)
+            .get(self.current_workspace_index())
             .and_then(|ws| ws.windows.last())
             .cloned();
         self.focus_window(top.as_ref());

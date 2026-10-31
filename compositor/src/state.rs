@@ -76,6 +76,9 @@ pub struct State {
 
     pub space: Space<Window>,
     pub workspaces: crate::workspaces::Workspaces,
+    /// Individual workspaces: name of the monitor workspace keys act on,
+    /// set by clicks and focus (see `current_output`).
+    pub workspace_monitor: Option<String>,
     pub ext_workspace_state: crate::ext_workspace::ExtWorkspaceState,
     /// A three-finger swipe is driving the workspace strip.
     pub swipe_active: bool,
@@ -240,6 +243,7 @@ impl State {
             space: Space::default(),
             workspaces: crate::workspaces::Workspaces::new(),
             ext_workspace_state: Default::default(),
+            workspace_monitor: None,
             swipe_active: false,
             launching: None,
             swipe_sideways: None,

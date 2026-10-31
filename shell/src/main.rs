@@ -1341,6 +1341,10 @@ impl App {
                 let colour = |c: Option<[u8; 3]>| c.map(|[r, g, b]| cnde_ui::Color::rgb(r, g, b));
                 cnde_ui::tint::bar_choice(colour(e.top_tint))
             });
+        let Some(output) = self.panels.get(index).map(|p| p.output.clone()) else {
+            return;
+        };
+        let workspaces = self.workspaces.on_output(&output);
         let Some(panel) = self.panels.get_mut(index) else {
             return;
         };
@@ -1354,7 +1358,7 @@ impl App {
                 icons: &mut self.icons,
                 theme: &self.theme,
                 clock_format: &self.config.panel.clock_format,
-                workspaces: &self.workspaces.list,
+                workspaces: &workspaces,
                 status: &self.status,
                 tray: &mut self.tray.items,
                 tray_mode: self.config.panel.tray,

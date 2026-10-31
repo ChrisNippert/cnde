@@ -34,7 +34,7 @@ use crate::{
     render::{OutputElement, Placed, Zoom},
     state::State,
     wallpaper::Wallpapers,
-    workspaces::WorkspaceId,
+    workspaces::{StripView, WorkspaceId},
 };
 
 /// Workspace card size, as a fraction of the monitor.
@@ -449,7 +449,7 @@ impl State {
             // search box holds the keyboard, raised and waiting).
             let picked = self.overview.focus_after.take();
             let next = picked.or(previous).or_else(|| {
-                self.workspaces.list[self.workspaces.active]
+                self.workspaces.list[self.current_workspace_index()]
                     .windows
                     .last()
                     .cloned()
@@ -506,16 +506,22 @@ impl State {
             return;
         }
         let now = Instant::now();
-        let (outputs, main) = self.strip_outputs();
-        let position = self.workspaces.position(now);
+        let (all, _) = self.strip_outputs();
         let mut old = Vec::new();
-        for output in &outputs {
+        for output in &all {
             let Some(geo) = self.space.output_geometry(output) else {
                 continue;
             };
+            let StripView {
+                outputs,
+                main,
+                order,
+                position,
+            } = self.strip_view(output, now);
             let full_card = Size::from((geo.size.w as f64 * ZOOM, geo.size.h as f64 * ZOOM));
-            for (index, workspace) in self.workspaces.list.iter().enumerate() {
-                let slot = index as f64 - position + main as f64;
+            for (pos, &index) in order.iter().enumerate() {
+                let workspace = &self.workspaces.list[index];
+                let slot = pos as f64 - position + main as f64;
                 for (window, _, _, to) in self.spread_fractions(
                     output,
                     &workspace.windows,
@@ -631,7 +637,8 @@ impl State {
             });
         }
 
-        let (outputs, main) = self.strip_outputs();
+        let view = self.strip_view(output, now);
+        let (outputs, main) = (&view.outputs, view.main);
         let k = outputs.iter().position(|o| o == output)? as f64;
         let geo = self.space.output_geometry(output)?.to_f64();
         // With the app grid up, the cards shrink into a row of thumbnails
@@ -658,7 +665,7 @@ impl State {
         // The spread layout is worked out at full size, once per card.
         let full_card = Size::from((geo.size.w * ZOOM, geo.size.h * ZOOM));
 
-        let position = self.workspaces.position(now);
+        let position = view.position;
         let carried = self
             .workspaces
             .motion
@@ -676,13 +683,11 @@ impl State {
         // to that monitor (the thumbnail row over the app grid has them all).
         let shown_elsewhere = |slot: f64| {
             let nearest = slot.round();
-            grid < 0.5
-                && nearest != k
-                && nearest >= 0.0
-                && nearest < outputs.len() as f64
+            grid < 0.5 && nearest != k && nearest >= 0.0 && nearest < outputs.len() as f64
         };
-        for (index, workspace) in self.workspaces.list.iter().enumerate() {
-            let slot = index as f64 - position + main as f64;
+        for (pos, &index) in view.order.iter().enumerate() {
+            let workspace = &self.workspaces.list[index];
+            let slot = pos as f64 - position + main as f64;
             let card = card_at(slot);
             if !card.overlaps(geo) || shown_elsewhere(slot) {
                 continue;
@@ -695,7 +700,7 @@ impl State {
             for (window, real, from, to) in self.spread_fractions(
                 output,
                 &workspace.windows,
-                &outputs,
+                outputs,
                 slot,
                 full_card,
                 carried.as_ref(),
@@ -718,7 +723,11 @@ impl State {
         if let Some(window) = carried
             && let Some(rect) = self.space.element_geometry(&window)
         {
-            let workspace = self.workspaces.motion.as_ref().map_or(0, |m| m.to);
+            let workspace = self
+                .workspaces
+                .motion
+                .as_ref()
+                .map_or(0, |m| view.order.get(m.to).copied().unwrap_or(0));
             let rect = rect.to_f64();
             let card = card_at(k);
             let target = Rectangle::new(
@@ -907,22 +916,8 @@ impl State {
             }
         };
         // Bring that workspace onto the monitor that was clicked.
-        let (outputs, main) = self.strip_outputs();
-        let clicked = self
-            .space
-            .output_under(pos)
-            .next()
-            .and_then(|o| outputs.iter().position(|x| x == o))
-            .unwrap_or(main);
-        let target = index as isize + main as isize - clicked as isize;
-        let current = self
-            .workspaces
-            .motion
-            .as_ref()
-            .map_or(self.workspaces.active, |m| m.to) as isize;
-        if target != current {
-            self.step_workspace(target - current, false);
-        }
+        let clicked = self.space.output_under(pos).next().cloned();
+        self.show_workspace(index, clicked.as_ref());
         let target = window.or_else(|| self.workspaces.list[index].windows.last().cloned());
         if let Some(target) = &target {
             self.focus_window(Some(target));
@@ -933,6 +928,12 @@ impl State {
 
     /// Mouse wheel in the overview slides the strip, one notch per workspace.
     pub fn overview_scroll(&mut self, v120: f64) {
+        // Individual workspaces: the monitor under the pointer scrolls.
+        if self.workspaces.individual
+            && let Some(output) = self.output_under_pointer()
+        {
+            self.workspace_monitor = Some(output.name());
+        }
         self.overview.scroll += v120;
         while self.overview.scroll.abs() >= 120.0 {
             let step = self.overview.scroll.signum();
