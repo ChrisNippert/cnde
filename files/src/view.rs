@@ -44,7 +44,7 @@ const HEADING_H: f32 = 30.0;
 const CARD_H: f32 = 74.0;
 const COMPACT_H: f32 = 36.0;
 /// Where the sidebar's first row starts.
-const SIDE_TOP: f32 = 14.0;
+const SIDE_TOP: f32 = TOP_H + 10.0;
 const TRASH_H: f32 = 44.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1012,21 +1012,23 @@ fn title(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, w: f32) {
 fn top_bar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, w: f32) {
     let t = p.theme;
     let cy = TOP_H / 2.0;
-    // The title bar: a band of its own, so it reads as the place to grab.
+    // The title bar: a band of its own across the whole window, sidebar
+    // included, so it reads as the place to grab.
     let radius = if ui.rounded { t.window_radius } else { 0.0 };
-    p.canvas.rounded_rect_clipped(
-        SIDE_W - radius,
-        0.0,
-        w - SIDE_W + radius,
-        TOP_H + radius,
-        radius,
-        c.hair,
-        (SIDE_W, 0.0, w - SIDE_W, TOP_H),
-    );
-    p.canvas
-        .rounded_rect(SIDE_W, TOP_H - 1.0, w - SIDE_W, 1.0, 0.0, c.hair);
+    for fill in [t.window_background, c.hair] {
+        p.canvas.rounded_rect_clipped(
+            0.0,
+            0.0,
+            w,
+            TOP_H + radius,
+            radius,
+            fill,
+            (0.0, 0.0, w, TOP_H),
+        );
+    }
+    p.canvas.rounded_rect(0.0, TOP_H - 1.0, w, 1.0, 0.0, c.hair);
     out.hits
-        .push((Rect::new(SIDE_W, 0.0, w - SIDE_W, TOP_H), Target::Header));
+        .push((Rect::new(0.0, 0.0, w, TOP_H), Target::Header));
 
     let button = |p: &mut Painter<'_, '_>,
                   out: &mut Painted,
@@ -1052,7 +1054,7 @@ fn top_bar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, w: f
             out.hits.push((rect, target));
         }
     };
-    let mut x = SIDE_W + 10.0;
+    let mut x = 10.0;
     button(
         p,
         out,
@@ -1072,8 +1074,8 @@ fn top_bar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, w: f
         false,
         ui.can_forward,
     );
-    x += 38.0;
-    let crumbs_x = x;
+    // The path lines up with the list under it.
+    let crumbs_x = (x + 38.0).max(SIDE_W + 12.0);
 
     // Right side, from the edge in: window buttons, menu, info, switch.
     let shown = match ui.config.appearance.window_buttons {
@@ -1230,20 +1232,18 @@ fn sidebar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, h: f
     } else {
         t.window_sidebar
     };
-    // Rounded on the left only, in one piece.
+    // Under the title bar, rounded at the bottom left only, in one piece.
     p.canvas.rounded_rect_clipped(
         0.0,
-        0.0,
+        TOP_H - radius,
         SIDE_W + radius,
-        h,
+        h - TOP_H + radius,
         radius,
         fill,
-        (0.0, 0.0, SIDE_W, h),
+        (0.0, TOP_H, SIDE_W, h - TOP_H),
     );
     p.canvas
-        .rounded_rect(SIDE_W - 1.0, 0.0, 1.0, h, 0.0, c.hair);
-    out.hits
-        .push((Rect::new(0.0, 0.0, SIDE_W, 12.0), Target::Header));
+        .rounded_rect(SIDE_W - 1.0, TOP_H, 1.0, h - TOP_H, 0.0, c.hair);
 
     let (top, bottom) = side_band(h);
     let mut y = top - ui.side_scroll;
