@@ -19,6 +19,7 @@ use smithay::{
     },
     desktop::Window,
     reexports::calloop::timer::{TimeoutAction, Timer},
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
     reexports::wayland_server::{Resource, backend::ObjectId},
     utils::{Buffer, Physical, Point, Rectangle, Scale, Size},
 };
@@ -204,10 +205,20 @@ impl crate::state::State {
 
     /// The colour of the top of `window`, which is against the top edge.
     /// A titlebar the compositor draws is what sits under the bar, not
-    /// the client area below it, and it already follows the theme: no tint.
+    /// the client area below it: its colour, as decorations.rs paints it.
     pub fn top_tint(&self, window: &Window) -> Option<[u8; 3]> {
         if crate::decorations::titlebar_height(window) > 0 {
-            return None;
+            let theme = cnde_ui::Theme::for_appearance(&self.decorations.appearance);
+            let focused = window
+                .toplevel()
+                .is_some_and(|t| t.current_state().states.contains(XdgState::Activated));
+            let c = if focused {
+                theme.window_sidebar
+            } else {
+                theme.window_background
+            };
+            let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            return Some([byte(c.r), byte(c.g), byte(c.b)]);
         }
         Some(self.tints.get(window)?.top)
     }
