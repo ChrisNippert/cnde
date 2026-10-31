@@ -22,7 +22,7 @@ use crate::{
     render::{Placed, Zoom},
     snapshot::Snapshot,
     state::State,
-    window::{Placement, placement_rect, with_state},
+    window::{Placement, window_placement_rect, with_state},
 };
 
 pub type WorkspaceId = u64;
@@ -565,7 +565,7 @@ impl State {
                 .unwrap_or_else(|| floating_rest(window, geo, area)),
             Placement::Fullscreen => geo,
             placement => crate::decorations::content_rect(
-                placement_rect(placement, area),
+                window_placement_rect(window, placement, area),
                 crate::decorations::titlebar_height(window),
             ),
         })

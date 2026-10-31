@@ -24,7 +24,7 @@ use smithay::wayland::compositor::RegionAttributes;
 use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
 
 use crate::{
-    grabs::{MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab, TileResizeGrab},
+    grabs::{MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab, SnapPairResizeGrab, TileResizeGrab},
     keybinds::{self, Action, Direction, ModKey},
     spawn,
     state::State,
@@ -919,6 +919,20 @@ impl State {
             && let Some(tile) = self.tile_slot_now(&window)
         {
             let grab = TileResizeGrab::start(start_data, window, edges, tile);
+            pointer.set_grab(self, grab, serial, Focus::Clear);
+            return;
+        }
+        // The edge a snap pair shares moves for both windows.
+        let shared = match Self::placement_of(&window) {
+            Placement::SnappedLeft => ResizeEdge::RIGHT,
+            Placement::SnappedRight => ResizeEdge::LEFT,
+            _ => ResizeEdge::empty(),
+        };
+        if edges == shared
+            && self.snap_partner(&window).is_some()
+            && let Some(edge_x) = self.snap_edge_x(&window)
+        {
+            let grab = SnapPairResizeGrab::start(start_data, window, edge_x);
             pointer.set_grab(self, grab, serial, Focus::Clear);
             return;
         }
