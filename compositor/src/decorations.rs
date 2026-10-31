@@ -522,7 +522,7 @@ impl State {
                         DecorationMode::ServerSide => HEIGHT,
                         _ => 0,
                     };
-                    let rect = content_rect(crate::window::placement_rect(placement, area), bar);
+                    let rect = content_rect(crate::window::window_placement_rect(&window, placement, area), bar);
                     self.move_window(&window, rect.loc);
                     Some(rect.size)
                 }

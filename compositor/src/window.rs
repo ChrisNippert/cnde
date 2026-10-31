@@ -40,6 +40,10 @@ pub struct WindowState {
     pub placement: Placement,
     /// Floating geometry to return to when leaving maximize/snap/fullscreen.
     pub restore: Option<Rectangle<i32, Logical>>,
+    /// With a snap pair (snap.rs): where the edge the two halves share
+    /// sits, as a fraction of the monitor's usable width. `None` is a plain
+    /// half, unlinked.
+    pub snap_split: Option<f64>,
     /// Maximized or snapped before going fullscreen: where leaving
     /// fullscreen returns to, instead of floating.
     pub before_fullscreen: Option<Placement>,
@@ -358,7 +362,7 @@ impl State {
                 let y = area.loc.y + bar + ((area.size.h - size.h - bar) / 2).max(0);
                 (x, y).into()
             }
-            other => content_rect(placement_rect(other, area), bar).loc,
+            other => content_rect(window_placement_rect(&window, other, area), bar).loc,
         };
 
         debug!(size = ?window.geometry().size, ?location, ?placement, "mapping window");
@@ -570,7 +574,21 @@ impl State {
             None
         };
 
+        // Snapping beside a snapped window takes the space it leaves, and
+        // links the two (snap.rs).
+        let pair = match target {
+            Placement::SnappedLeft | Placement::SnappedRight => output
+                .clone()
+                .or_else(|| self.output_for(window))
+                .and_then(|o| self.snap_pair_for(window, target, area, &o)),
+            _ => None,
+        };
+        if let Some((split, other)) = &pair {
+            with_state(other, |s| s.snap_split = Some(*split));
+        }
+
         let restore = with_state(window, |s| {
+            s.snap_split = pair.as_ref().map(|(split, _)| *split);
             if current == Placement::Floating
                 && let Some(loc) = mapped_location
             {
@@ -589,7 +607,7 @@ impl State {
             Placement::Floating if tiled => self.tile_rect_now(window).or(restore),
             Placement::Floating => restore,
             other => Some(content_rect(
-                placement_rect(other, area),
+                window_placement_rect(window, other, area),
                 titlebar_height(window),
             )),
         };
@@ -696,7 +714,10 @@ impl State {
             else {
                 continue;
             };
-            let rect = content_rect(placement_rect(placement, area), titlebar_height(&window));
+            let rect = content_rect(
+                window_placement_rect(&window, placement, area),
+                titlebar_height(&window),
+            );
             toplevel.with_pending_state(|s| s.size = Some(rect.size));
             toplevel.send_pending_configure();
             self.move_window(&window, rect.loc);
@@ -723,12 +744,18 @@ impl State {
     }
 }
 
-/// The rectangle a non-floating placement occupies within `area`.
-pub fn placement_rect(
+/// The rectangle a non-floating placement occupies within `area`, with the
+/// shared edge of a snap pair at `split` (a fraction of the width) instead
+/// of the middle.
+pub fn placement_rect_split(
     placement: Placement,
     area: Rectangle<i32, Logical>,
+    split: Option<f64>,
 ) -> Rectangle<i32, Logical> {
-    let half = area.size.w / 2;
+    let half = match split {
+        Some(split) => ((split * area.size.w as f64).round() as i32).clamp(0, area.size.w),
+        None => area.size.w / 2,
+    };
     match placement {
         Placement::SnappedLeft => Rectangle::new(area.loc, Size::from((half, area.size.h))),
         Placement::SnappedRight => Rectangle::new(
@@ -737,6 +764,15 @@ pub fn placement_rect(
         ),
         Placement::Floating | Placement::Maximized | Placement::Fullscreen => area,
     }
+}
+
+/// [`placement_rect_split`] for a particular window, honouring its snap pair.
+pub fn window_placement_rect(
+    window: &Window,
+    placement: Placement,
+    area: Rectangle<i32, Logical>,
+) -> Rectangle<i32, Logical> {
+    placement_rect_split(placement, area, with_state(window, |s| s.snap_split))
 }
 
 /// Whether a window of `window` size hides a whole monitor of `output` size.
