@@ -10,7 +10,6 @@
 //! their own, gone when the tool closes.
 
 use cnde_ipc::{ScreenshotTarget, ScreenshotWindow};
-use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 use cnde_ui::{Canvas, Color, Fonts, Icons, Theme, Weight};
 use smithay_client_toolkit::{
     compositor::{CompositorState, FrameCallbackData},
@@ -26,6 +25,7 @@ use smithay_client_toolkit::{
     shm::{Shm, slot::SlotPool},
 };
 use tracing::warn;
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 
 use crate::App;
 
@@ -150,8 +150,19 @@ enum Drag {
     New((f32, f32)),
     /// Moving the selection; pointer offset from its top-left.
     Move((f32, f32)),
-    /// Resizing; the opposite corner stays put.
-    Resize((f32, f32)),
+    /// Resizing by a corner or an edge.
+    Resize(Grip),
+}
+
+/// A selection's corner or edge, as dragged: `anchor` stays put while the
+/// pointer moves `far` (only along x or y for an edge).
+#[derive(Debug, Clone, Copy)]
+struct Grip {
+    anchor: (f32, f32),
+    far: (f32, f32),
+    x: bool,
+    y: bool,
+    shape: Shape,
 }
 
 /// What the toolbar is made of, in the main overlay's coordinates.
@@ -414,14 +425,96 @@ impl ScreenshotUi {
 
     /// The cursor for the pointer's spot: a crosshair for framing a region,
     /// a hand over a window to pick, the normal arrow over the toolbar.
+    /// Over (or dragging) a selection's corner or edge, the resize arrow
+    /// for it; inside it, the move cursor.
     pub fn cursor(&self) -> Shape {
-        if self.toolbar().is_some_and(|bar| bar.bar.contains(self.pointer)) {
+        match self.drag {
+            Some(Drag::Resize(grip)) => return grip.shape,
+            Some(Drag::Move(_)) => return Shape::Grabbing,
+            Some(Drag::New(_)) => return Shape::Crosshair,
+            None => {}
+        }
+        if self
+            .toolbar()
+            .is_some_and(|bar| bar.bar.contains(self.pointer))
+        {
             return Shape::Default;
         }
         match self.mode {
-            Mode::Selection => Shape::Crosshair,
+            Mode::Selection => match self.grip_at(self.pointer) {
+                Some(grip) => grip.shape,
+                None if self.selection.contains(self.pointer) => Shape::Move,
+                None => Shape::Crosshair,
+            },
             Mode::Window if self.window_at(self.pointer).is_some() => Shape::Pointer,
             Mode::Screen | Mode::Window => Shape::Default,
+        }
+    }
+
+    /// The selection's corner or edge under `point`, corners first.
+    fn grip_at(&self, point: (f32, f32)) -> Option<Grip> {
+        let s = self.selection;
+        if s.w < 2.0 || s.h < 2.0 {
+            return None;
+        }
+        let (left, top, right, bottom) = (s.x, s.y, s.x + s.w, s.y + s.h);
+        let grip = |anchor, far, x, y, shape| Grip {
+            anchor,
+            far,
+            x,
+            y,
+            shape,
+        };
+        let corners = [
+            ((left, top), (right, bottom), Shape::NwseResize),
+            ((right, top), (left, bottom), Shape::NeswResize),
+            ((left, bottom), (right, top), Shape::NeswResize),
+            ((right, bottom), (left, top), Shape::NwseResize),
+        ];
+        let near = |a: f32, b: f32| (a - b).abs() <= HANDLE;
+        if let Some((far, anchor, shape)) = corners
+            .into_iter()
+            .find(|((cx, cy), _, _)| near(point.0, *cx) && near(point.1, *cy))
+        {
+            return Some(grip(anchor, far, true, true, shape));
+        }
+        let along_x = (left..=right).contains(&point.0);
+        let along_y = (top..=bottom).contains(&point.1);
+        let edge = HANDLE / 2.0;
+        if along_y && (point.0 - left).abs() <= edge {
+            Some(grip(
+                (right, top),
+                (left, bottom),
+                true,
+                false,
+                Shape::EwResize,
+            ))
+        } else if along_y && (point.0 - right).abs() <= edge {
+            Some(grip(
+                (left, top),
+                (right, bottom),
+                true,
+                false,
+                Shape::EwResize,
+            ))
+        } else if along_x && (point.1 - top).abs() <= edge {
+            Some(grip(
+                (left, bottom),
+                (right, top),
+                false,
+                true,
+                Shape::NsResize,
+            ))
+        } else if along_x && (point.1 - bottom).abs() <= edge {
+            Some(grip(
+                (left, top),
+                (right, bottom),
+                false,
+                true,
+                Shape::NsResize,
+            ))
+        } else {
+            None
         }
     }
 
@@ -490,8 +583,15 @@ impl ScreenshotUi {
         };
         self.pointer = point;
         match self.drag {
-            Some(Drag::New(anchor)) | Some(Drag::Resize(anchor)) => {
+            Some(Drag::New(anchor)) => {
                 self.selection = Rect::spanning(anchor, point);
+            }
+            Some(Drag::Resize(grip)) => {
+                let far = (
+                    if grip.x { point.0 } else { grip.far.0 },
+                    if grip.y { point.1 } else { grip.far.1 },
+                );
+                self.selection = Rect::spanning(grip.anchor, far);
             }
             Some(Drag::Move((dx, dy))) => {
                 self.selection.x = point.0 - dx;
@@ -525,25 +625,14 @@ impl ScreenshotUi {
         match self.mode {
             Mode::Selection => {
                 let s = self.selection;
-                let corners = [
-                    ((s.x, s.y), (s.x + s.w, s.y + s.h)),
-                    ((s.x + s.w, s.y), (s.x, s.y + s.h)),
-                    ((s.x, s.y + s.h), (s.x + s.w, s.y)),
-                    ((s.x + s.w, s.y + s.h), (s.x, s.y)),
-                ];
-                let near = |(cx, cy): (f32, f32)| {
-                    (point.0 - cx).abs() <= HANDLE && (point.1 - cy).abs() <= HANDLE
-                };
-                self.drag = Some(
-                    if let Some((_, opposite)) = corners.iter().find(|(c, _)| near(*c)) {
-                        Drag::Resize(*opposite)
-                    } else if s.contains(point) {
-                        Drag::Move((point.0 - s.x, point.1 - s.y))
-                    } else {
-                        self.selection = Rect::spanning(point, point);
-                        Drag::New(point)
-                    },
-                );
+                self.drag = Some(if let Some(grip) = self.grip_at(point) {
+                    Drag::Resize(grip)
+                } else if s.contains(point) {
+                    Drag::Move((point.0 - s.x, point.1 - s.y))
+                } else {
+                    self.selection = Rect::spanning(point, point);
+                    Drag::New(point)
+                });
                 Outcome::Redraw
             }
             // A click picks the monitor or window under it.
