@@ -569,6 +569,11 @@ pub struct Panel {
     pub padding: f32,
     /// Room either side of each button's content (Activities, status).
     pub button_padding: f32,
+    /// Logical pixels of a line along the bar's bottom edge while it takes
+    /// a window's colour (adaptive colour): a little darker on a light
+    /// colour, lighter on a dark one, so the bar and the window's own title
+    /// bar don't run together. 0 is off.
+    pub edge_line: u32,
 }
 
 impl Default for Panel {
@@ -594,6 +599,7 @@ impl Default for Panel {
             workspace_active_width: 28.0,
             padding: 12.0,
             button_padding: 10.0,
+            edge_line: 2,
         }
     }
 }
@@ -1119,6 +1125,12 @@ impl Config {
             return Err(Error::Invalid(format!(
                 "panel.height must be 16 to 96, got {}",
                 panel.height
+            )));
+        }
+        if panel.edge_line > 8 {
+            return Err(Error::Invalid(format!(
+                "panel.edge_line must be 0 to 8, got {}",
+                panel.edge_line
             )));
         }
         in_range("panel.font_size", panel.font_size as f64, 6.0, 48.0)?;

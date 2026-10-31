@@ -2236,6 +2236,7 @@ fn bar_mode(mode: cnde_config::BarMode) -> Value {
 /// The top bar's colour and material rows, shown on Appearance.
 fn panel_look(c: &Config, d: &Config) -> Vec<Row> {
     let (p, dp) = (&c.panel, &d.panel);
+    let px = |v: f64| format!("{v:.0} px");
     vec![
         Row::new(
             "panel.clear",
@@ -2254,6 +2255,20 @@ fn panel_look(c: &Config, d: &Config) -> Vec<Row> {
         )
         .sub("Rounded bottom corners and a soft shadow")
         .advanced(),
+        Row::new(
+            "panel.edge_line",
+            "Top bar edge line",
+            Control::Slider {
+                min: 0.0,
+                max: 8.0,
+                step: 1.0,
+                int: true,
+                format: px,
+            },
+            Value::Int(p.edge_line as i64),
+            Value::Int(dp.edge_line as i64),
+        )
+        .sub("A thin shade along its bottom while it takes a window's colour; 0 is off"),
         Row::new(
             "panel.background",
             "Top bar background",

@@ -66,6 +66,8 @@ pub struct Draw<'a> {
     pub backdrop_light: bool,
     /// The colour for the bar to take (a window's, else the wallpaper's).
     pub tint: Option<cnde_ui::Tint>,
+    /// `panel.edge_line`.
+    pub edge_line: u32,
 }
 
 /// Editing the bar in place (from its right-click menu).
@@ -418,6 +420,7 @@ impl Panel {
             clear,
             backdrop_light,
             tint,
+            edge_line,
         } = ctx;
         if self.width == 0 {
             return; // not configured yet
@@ -531,6 +534,25 @@ impl Panel {
                 height + self.radius,
                 self.radius,
                 background,
+            );
+        }
+        // Taking the colour of a window against it, a shade along the
+        // bottom keeps the bar apart from the window's own title bar.
+        let line = edge_line as f32 * (1.0 - float);
+        if self.shown.is_some() && line > 0.0 && solid > 0.0 {
+            let shade = if background.luminance() > 0.4 {
+                Color::rgba(0, 0, 0, 0.14 * solid)
+            } else {
+                Color::rgba(0xff, 0xff, 0xff, 0.12 * solid)
+            };
+            canvas.rounded_rect_clipped(
+                0.0,
+                -self.radius,
+                width,
+                height + self.radius,
+                self.radius,
+                shade,
+                (0.0, height - line, width, line),
             );
         }
 

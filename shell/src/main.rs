@@ -1376,6 +1376,7 @@ impl App {
                 clear: self.config.panel.clear,
                 backdrop_light,
                 tint,
+                edge_line: self.config.panel.edge_line,
             },
         );
         // Popups wear the bar's colour, so they follow it.
