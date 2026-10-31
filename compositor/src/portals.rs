@@ -29,6 +29,34 @@ use tracing::{info, warn};
 use crate::spawn::ClientEnv;
 
 const PORTALS_CONF: &str = include_str!("../../data/cnde-portals.conf");
+/// What older versions installed (file pickers from GTK, before
+/// cnde-files-portal), and the first version with it, so an unedited copy
+/// can be upgraded.
+const LEGACY_PORTALS_CONFS: [&str; 2] = [
+    "# Which xdg-desktop-portal backends a cnde session uses (installed to
+# $XDG_CONFIG_HOME/xdg-desktop-portal/ on first run if missing).
+#
+# Screen sharing and screenshots for apps go through xdg-desktop-portal-wlr,
+# which captures via ext-image-copy-capture. Everything else (file pickers,
+# settings) through the GTK backend.
+[preferred]
+default=gtk
+org.freedesktop.impl.portal.ScreenCast=wlr
+org.freedesktop.impl.portal.Screenshot=wlr
+",
+    "# Which xdg-desktop-portal backends a cnde session uses (installed to
+# $XDG_CONFIG_HOME/xdg-desktop-portal/ on first run if missing).
+#
+# Screen sharing and screenshots for apps go through xdg-desktop-portal-wlr,
+# which captures via ext-image-copy-capture. File choosers use cnde's own
+# picker (cnde-files-portal); everything else (settings) the GTK backend.
+[preferred]
+default=gtk
+org.freedesktop.impl.portal.ScreenCast=wlr
+org.freedesktop.impl.portal.Screenshot=wlr
+org.freedesktop.impl.portal.FileChooser=cnde
+",
+];
 const WLR_PORTAL_CONF: &str = include_str!("../../data/xdg-desktop-portal-wlr.ini");
 /// What older versions installed (fuzzel as the picker), so an unedited
 /// copy can be upgraded.
@@ -57,9 +85,8 @@ pub fn setup(env: &ClientEnv, share_picker: SharePicker) {
         .name("portals".into())
         .spawn(move || {
             if let Some(config) = config_home() {
-                install_if_missing(
+                install_portals_conf(
                     &config.join("xdg-desktop-portal").join("cnde-portals.conf"),
-                    PORTALS_CONF,
                 );
                 install_wlr_config(&config.join("xdg-desktop-portal-wlr"), share_picker);
             }
@@ -143,11 +170,16 @@ fn config_home() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
 }
 
-fn install_if_missing(path: &Path, contents: &str) {
-    if path.exists() {
-        return;
+/// Ours if missing, or replacing one of ours left as it was installed; a
+/// copy the user edited is theirs.
+fn install_portals_conf(path: &Path) {
+    match std::fs::read_to_string(path) {
+        Err(_) => write_config(path, PORTALS_CONF),
+        Ok(old) if old != PORTALS_CONF && LEGACY_PORTALS_CONFS.contains(&old.as_str()) => {
+            write_config(path, PORTALS_CONF)
+        }
+        Ok(_) => {}
     }
-    write_config(path, contents);
 }
 
 fn write_config(path: &Path, contents: &str) {
@@ -393,6 +425,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn unedited_portals_conf_is_upgraded_and_edited_one_kept() {
+        let dir = scratch("conf");
+        let path = dir.join("cnde-portals.conf");
+        install_portals_conf(&path);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), PORTALS_CONF);
+        for old in LEGACY_PORTALS_CONFS {
+            std::fs::write(&path, old).unwrap();
+            install_portals_conf(&path);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), PORTALS_CONF);
+        }
+        let edited = format!("{}org.freedesktop.impl.portal.Settings=kde\n", LEGACY_PORTALS_CONFS[0]);
+        std::fs::write(&path, &edited).unwrap();
+        install_portals_conf(&path);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     const CMD: &str = "/usr/bin/cnde-share-picker";

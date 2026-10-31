@@ -45,7 +45,8 @@ package_cnde-compositor() {
     pkgdesc="cnde's compositor: the session itself"
     depends=(libinput libxkbcommon mesa libdrm systemd-libs seatd)
     optdepends=('xorg-xwayland: X11 apps'
-                'xdg-desktop-portal-gtk: file pickers and settings for apps'
+                'xdg-desktop-portal-gtk: settings for apps, and file pickers without cnde-files'
+                'sound-theme-freedesktop: event sounds (screenshots, notifications)'
                 'xdg-desktop-portal-wlr: screen sharing'
                 'cnde-shell: the top bar and dock'
                 'cnde-lock: the lock screen'
@@ -86,13 +87,19 @@ package_cnde-lock() {
 package_cnde-files() {
     pkgdesc="cnde's file manager"
     depends=(libxkbcommon)
-    optdepends=('udisks2: mount and eject drives'
+    optdepends=('xdg-desktop-portal: be the file picker apps open'
+                'udisks2: mount and eject drives'
                 'ffmpegthumbnailer: video thumbnails'
                 'libarchive: compress and extract archives'
                 'cnde-icons: cnde-style icons')
     cd cnde
     install -Dm755 target/release/cnde-files -t "$pkgdir/usr/bin"
     install -Dm644 files/cnde-files.desktop -t "$pkgdir/usr/share/applications"
+    # The file picker apps get (xdg-desktop-portal's FileChooser backend).
+    install -Dm755 target/release/cnde-files-portal -t "$pkgdir/usr/bin"
+    install -Dm644 data/cnde.portal -t "$pkgdir/usr/share/xdg-desktop-portal/portals"
+    install -Dm644 data/org.freedesktop.impl.portal.desktop.cnde.service \
+        -t "$pkgdir/usr/share/dbus-1/services"
 }
 
 package_cnde-icons() {
