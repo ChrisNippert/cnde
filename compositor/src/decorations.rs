@@ -564,9 +564,14 @@ impl State {
                     part_at(frame.size.w, pos.x - frame.loc.x, all, tiled),
                 ));
             }
-            if with_state(window, |s| s.placement) != Placement::Floating {
-                continue;
-            }
+            // A snapped window keeps one border: the edge it shares with
+            // its partner, which moves both.
+            let only = match with_state(window, |s| s.placement) {
+                Placement::Floating => ResizeEdge::all(),
+                Placement::SnappedLeft if self.snap_partner(window).is_some() => ResizeEdge::RIGHT,
+                Placement::SnappedRight if self.snap_partner(window).is_some() => ResizeEdge::LEFT,
+                _ => continue,
+            };
             let (left, top) = (frame.loc.x, frame.loc.y);
             let (right, bottom) = (left + frame.size.w, top + frame.size.h);
             let near = pos.x >= left - BORDER
@@ -605,6 +610,7 @@ impl State {
             } else if pos.y >= bottom - if along_side { corner } else { 0.0 } {
                 edges |= ResizeEdge::BOTTOM;
             }
+            let edges = edges & only;
             if !edges.is_empty() {
                 return Some((window.clone(), Part::Resize(edges)));
             }
