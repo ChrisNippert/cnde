@@ -7,7 +7,7 @@ use smithay::{
     backend::allocator::dmabuf::Dmabuf,
     delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
     delegate_output, delegate_pointer_constraints, delegate_relative_pointer, delegate_seat,
-    delegate_presentation, delegate_viewporter, delegate_xdg_decoration,
+    delegate_presentation, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_dialog,
     input::{
         Seat, SeatHandler, SeatState,
         pointer::{CursorImageStatus, PointerHandle},
@@ -28,7 +28,7 @@ use smithay::{
                 set_data_device_focus,
             },
         },
-        shell::xdg::{ToplevelSurface, decoration::XdgDecorationHandler},
+        shell::xdg::{ToplevelSurface, decoration::XdgDecorationHandler, dialog::XdgDialogHandler},
     },
 };
 
@@ -291,3 +291,33 @@ impl XdgDecorationHandler for State {
     }
 }
 delegate_xdg_decoration!(State);
+
+/// Modal dialogs (xdg-dialog): a window with one open ignores input, so
+/// focus goes to the dialog (see `focus_window`) instead of the app looking
+/// frozen. Clients without the protocol (GTK 3, plain transients) get no
+/// such redirect.
+impl XdgDialogHandler for State {
+    fn modal_changed(&mut self, toplevel: ToplevelSurface, is_modal: bool) {
+        // Closing one needs nothing: unmapping it already hands focus on.
+        if !is_modal {
+            return;
+        }
+        // A dialog that turns modal over the window in use takes focus
+        // from it; focus_window picks the dialog.
+        let Some(focused) = self.focused_window() else {
+            return;
+        };
+        let mut at = toplevel.parent();
+        for _ in 0..8 {
+            let Some(parent) = at else { return };
+            if focused.toplevel().is_some_and(|t| t.wl_surface() == &parent) {
+                self.focus_window(Some(&focused));
+                return;
+            }
+            at = self
+                .window_for_surface(&parent)
+                .and_then(|w| w.toplevel().and_then(|t| t.parent()));
+        }
+    }
+}
+delegate_xdg_dialog!(State);

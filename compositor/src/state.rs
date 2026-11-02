@@ -34,7 +34,7 @@ use smithay::{
         selection::data_device::DataDeviceState,
         shell::{
             wlr_layer::{Layer, WlrLayerShellState},
-            xdg::{XdgShellState, decoration::XdgDecorationState},
+            xdg::{XdgShellState, decoration::XdgDecorationState, dialog::XdgDialogState},
         },
         security_context::{
             SecurityContext, SecurityContextHandler, SecurityContextListenerSource,
@@ -183,6 +183,9 @@ pub struct State {
     pub xdg_activation_state: XdgActivationState,
     #[allow(dead_code)] // owns the global; dropping it removes the protocol
     pub xdg_decoration_state: XdgDecorationState,
+    // Only holds the global; modality is read off each toplevel.
+    #[allow(dead_code)]
+    pub xdg_dialog_state: XdgDialogState,
     pub shm_state: ShmState,
     #[allow(dead_code)] // owns the global; dropping it removes the protocol
     pub output_manager_state: OutputManagerState,
@@ -212,6 +215,7 @@ impl State {
             WlrLayerShellState::new_with_filter::<Self, _>(&dh, client_is_unrestricted);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
+        let xdg_dialog_state = XdgDialogState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(
             &dh,
             vec![smithay::reexports::wayland_server::protocol::wl_shm::Format::Abgr8888],
@@ -325,6 +329,7 @@ impl State {
             layer_shell_state,
             xdg_activation_state,
             xdg_decoration_state,
+            xdg_dialog_state,
             shm_state,
             output_manager_state,
             seat_state,
