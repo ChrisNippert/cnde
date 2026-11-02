@@ -732,9 +732,6 @@ impl State {
         self.relayout_visible(false);
     }
 
-    /// Move a mapped window, keeping its place in the stack. Why not just
-    /// `map_element`: that puts it on top, so re-fitting maximized windows
-    /// after a setting changed buried the window being used.
     /// Where focus should go when `window` is asked to take it: the topmost
     /// mapped modal dialog among its descendants (xdg-dialog), since the
     /// window ignores input while one is up and focusing it would leave the
@@ -793,6 +790,9 @@ impl State {
         }
     }
 
+    /// Move a mapped window, keeping its place in the stack. Why not just
+    /// `map_element`: that puts it on top, so re-fitting maximized windows
+    /// after a setting changed buried the window being used.
     pub fn move_window(&mut self, window: &Window, loc: Point<i32, Logical>) {
         let above: Vec<Window> = self
             .space
@@ -822,8 +822,8 @@ fn topmost_modal_descendant<T: PartialEq + Clone>(
             let mut at = w;
             // A few levels deep: a client could make parents a loop.
             for _ in 0..8 {
-                let Some(parent) = stack.iter().find(|(o, _, _)| o == at).and_then(|e| e.1.as_ref())
-                else {
+                let parent = stack.iter().find(|(o, _, _)| o == at);
+                let Some(parent) = parent.and_then(|e| e.1.as_ref()) else {
                     return false;
                 };
                 if parent == root {
