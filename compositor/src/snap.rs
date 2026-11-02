@@ -252,6 +252,20 @@ fn remaining_split(
     Some((edge - area.loc.x) as f64 / area.size.w as f64)
 }
 
+/// The narrowest `window` says it can be (0: no limit).
+fn min_width(window: &Window) -> i32 {
+    window.toplevel().map_or(0, |toplevel| {
+        smithay::wayland::compositor::with_states(toplevel.wl_surface(), |states| {
+            states
+                .cached_state
+                .get::<smithay::wayland::shell::xdg::SurfaceCachedState>()
+                .current()
+                .min_size
+                .w
+        })
+    })
+}
+
 /// The split a shared edge dragged to global `x` makes within `area`.
 fn split_at(x: i32, area: Rectangle<i32, Logical>) -> f64 {
     ((x - area.loc.x) as f64 / area.size.w.max(1) as f64).clamp(MIN_SPLIT, 1.0 - MIN_SPLIT)
@@ -326,6 +340,14 @@ impl State {
         let Some(area) = self.area_for(window, placement) else {
             return;
         };
+        // Neither window narrower than it says it can be.
+        let (left, right) = match placement {
+            Placement::SnappedLeft => (window, &partner),
+            _ => (&partner, window),
+        };
+        let lo = area.loc.x + min_width(left);
+        let hi = area.loc.x + area.size.w - min_width(right);
+        let x = if lo <= hi { x.clamp(lo, hi) } else { x };
         let split = split_at(x, area);
         for w in [window, &partner] {
             with_state(w, |s| s.snap_split = Some(split));
