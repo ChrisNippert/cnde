@@ -242,6 +242,37 @@ impl<'a> Canvas<'a> {
             .draw_pixmap(0, 0, layer, &paint, transform, None);
     }
 
+    /// `image`, already at this canvas's pixel scale, with its top-left at
+    /// (`x`, `y`), drawn only inside `clip` (x, y, w, h); all logical.
+    pub fn pixmap_clipped(
+        &mut self,
+        image: PixmapRef<'_>,
+        x: f32,
+        y: f32,
+        clip: (f32, f32, f32, f32),
+    ) {
+        let s = self.scale;
+        let (tx, ty) = ((x * s).round(), (y * s).round());
+        let (l, t) = ((clip.0 * s).max(tx), (clip.1 * s).max(ty));
+        let r = ((clip.0 + clip.2) * s).min(tx + image.width() as f32);
+        let b = ((clip.1 + clip.3) * s).min(ty + image.height() as f32);
+        let Some(rect) = Rect::from_ltrb(l, t, r, b) else {
+            return;
+        };
+        let paint = Paint {
+            shader: Pattern::new(
+                image,
+                SpreadMode::Pad,
+                FilterQuality::Nearest,
+                1.0,
+                Transform::from_translate(tx, ty),
+            ),
+            anti_alias: false,
+            ..Paint::default()
+        };
+        self.pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+    }
+
     pub fn circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color) {
         self.rounded_rect(
             cx - radius,

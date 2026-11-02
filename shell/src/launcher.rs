@@ -268,6 +268,8 @@ pub struct Launcher {
     grid_opened: Option<std::time::Instant>,
     /// A page flip under way: the (fractional) page it started from, and when.
     page_slide: Option<(f32, std::time::Instant)>,
+    /// Grid pages drawn once, for sliding between them.
+    pages: PageCache,
 }
 
 impl Launcher {
@@ -318,6 +320,7 @@ impl Launcher {
             bottom_reserve: 0.0,
             grid_opened: None,
             page_slide: None,
+            pages: PageCache::default(),
         };
         launcher.request_size(theme, 0);
         launcher.layer.commit();
@@ -355,6 +358,7 @@ impl Launcher {
         self.grid_selected = 0;
         self.page = 0;
         self.page_slide = None;
+        self.pages = PageCache::default();
         self.request_size(theme, apps);
     }
 
@@ -665,6 +669,7 @@ impl Launcher {
                 theme,
                 &state,
                 scale as f32,
+                &mut self.pages,
             );
         }
         // ARGB8888 is BGRA in memory; we drew RGBA.
@@ -706,6 +711,7 @@ struct PaintState<'a> {
 }
 
 /// Draw everything. Separate from Wayland so tests can render it.
+#[allow(clippy::too_many_arguments)]
 fn paint(
     canvas: &mut Canvas<'_>,
     layout: &Layout,
@@ -714,13 +720,14 @@ fn paint(
     theme: &Theme,
     state: &PaintState<'_>,
     scale: f32,
+    pages: &mut PageCache,
 ) {
     canvas.clear(Color::rgba(0, 0, 0, 0.0));
     let fg = theme.popup_text;
     paint_pill(canvas, layout, fonts, icons, theme, state.query, scale);
     if let Some(grid) = &layout.grid {
         if state.appear >= 1.0 {
-            paint_grid(canvas, grid, fonts, icons, theme, state, scale);
+            paint_grid(canvas, grid, fonts, icons, theme, state, scale, pages);
         } else {
             // Drawn offscreen, then blended in as a whole.
             let (w, h) = canvas.pixel_size();
@@ -728,7 +735,7 @@ fn paint(
                 return;
             };
             if let Some(mut layer) = Canvas::new(pixmap.data_mut(), w, h, scale) {
-                paint_grid(&mut layer, grid, fonts, icons, theme, state, scale);
+                paint_grid(&mut layer, grid, fonts, icons, theme, state, scale, pages);
             }
             let zoom = 0.94 + 0.06 * state.appear;
             let (cx, cy) = (
@@ -884,6 +891,19 @@ fn paint_pill(
     );
 }
 
+/// Grid pages drawn once (icons and names), so a slide between pages
+/// moves finished images instead of laying out every name each frame.
+#[derive(Default)]
+struct PageCache {
+    /// Key (page, size, scale, its apps) and the page, card-sized; the few
+    /// last used.
+    pages: Vec<(u64, cnde_ui::tiny_skia::Pixmap)>,
+}
+
+/// Pages kept: the two a slide shows, and one it just left.
+const PAGES_KEPT: usize = 3;
+
+#[allow(clippy::too_many_arguments)]
 fn paint_grid(
     canvas: &mut Canvas<'_>,
     grid: &GridLayout,
@@ -892,12 +912,12 @@ fn paint_grid(
     theme: &Theme,
     state: &PaintState<'_>,
     scale: f32,
+    pages: &mut PageCache,
 ) {
     // Straight on the overview's blurred, dimmed wallpaper, as in GNOME:
     // light text with a shadow, in either style.
     let card = grid.card;
     let text = Color::rgb(0xff, 0xff, 0xff);
-    let shadow = Color::rgba(0, 0, 0, 0.55);
     // Mid-slide the pages either side of the one in view show, a card
     // width apart.
     let shown = state.page_shown.clamp(0.0, (grid.pages - 1) as f32);
@@ -908,16 +928,14 @@ fn paint_grid(
     {
         let dx = (page as f32 - shown) * card.w;
         let first = page * grid.per_page;
-        for i in 0..grid.per_page {
-            let Some(app) = state.apps.get(first + i) else {
-                break;
-            };
-            let mut cell = grid.slot(i);
+        // The selection, under its page.
+        let selected = state.grid_selected;
+        if (first..first + grid.per_page).contains(&selected) && selected < state.apps.len() {
+            let mut cell = grid.slot(selected - first);
             cell.x += dx;
-            if cell.x + cell.w < card.x || cell.x > card.x + card.w {
-                continue;
-            }
-            if first + i == state.grid_selected {
+            // Slid past the card's edge: hidden, as its page is.
+            let inside = cell.x + cell.w > card.x && cell.x < card.x + card.w;
+            if inside {
                 canvas.rounded_rect(
                     cell.x + 6.0,
                     cell.y + 4.0,
@@ -927,16 +945,49 @@ fn paint_grid(
                     Color::rgba(0xff, 0xff, 0xff, 0.16),
                 );
             }
-            let size = theme.grid_icon_size;
-            let icon_x = cell.x + (cell.w - size) / 2.0;
-            let icon_y = cell.y + 16.0;
-            app_icon(canvas, icons, theme, &app.icon, icon_x, icon_y, size);
-            let mut name = fit(fonts, &app.name, 13.0, Weight::Normal, scale, cell.w - 16.0);
-            let x = (cell.x + (cell.w - name.width) / 2.0).round();
-            let y = icon_y + size + 10.0;
-            canvas.text(fonts, &mut name, x + 1.0, y + 1.0, shadow);
-            canvas.text(fonts, &mut name, x, y, text);
         }
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            page.hash(&mut hasher);
+            scale.to_bits().hash(&mut hasher);
+            for v in [
+                card.w,
+                card.h,
+                grid.origin.0 - card.x,
+                grid.origin.1 - card.y,
+                grid.cell.0,
+                grid.cell.1,
+                theme.grid_icon_size,
+            ] {
+                v.to_bits().hash(&mut hasher);
+            }
+            grid.columns.hash(&mut hasher);
+            for app in state.apps.iter().skip(first).take(grid.per_page) {
+                (&app.id, &app.name, &app.icon).hash(&mut hasher);
+            }
+            hasher.finish()
+        };
+        let at = match pages.pages.iter().position(|(k, _)| *k == key) {
+            Some(at) => at,
+            None => {
+                let Some(image) = paint_page(grid, fonts, icons, theme, state.apps, first, scale)
+                else {
+                    continue;
+                };
+                if pages.pages.len() >= PAGES_KEPT {
+                    pages.pages.remove(0);
+                }
+                pages.pages.push((key, image));
+                pages.pages.len() - 1
+            }
+        };
+        canvas.pixmap_clipped(
+            pages.pages[at].1.as_ref(),
+            card.x + dx,
+            card.y,
+            (card.x, card.y, card.w, card.h),
+        );
     }
     // Page dots.
     if grid.pages > 1 {
@@ -953,6 +1004,47 @@ fn paint_grid(
             x += dot + gap;
         }
     }
+}
+
+/// One grid page's icons and names, from app `first`, card-sized at
+/// `scale`, the card's top-left at the image's.
+fn paint_page(
+    grid: &GridLayout,
+    fonts: &mut Fonts,
+    icons: &mut Icons,
+    theme: &Theme,
+    apps: &[AppEntry],
+    first: usize,
+    scale: f32,
+) -> Option<cnde_ui::tiny_skia::Pixmap> {
+    let card = grid.card;
+    let (w, h) = (
+        (card.w * scale).round().max(1.0) as u32,
+        (card.h * scale).round().max(1.0) as u32,
+    );
+    let mut image = cnde_ui::tiny_skia::Pixmap::new(w, h)?;
+    let mut canvas = Canvas::new(image.data_mut(), w, h, scale)?;
+    let text = Color::rgb(0xff, 0xff, 0xff);
+    let shadow = Color::rgba(0, 0, 0, 0.55);
+    for i in 0..grid.per_page {
+        let Some(app) = apps.get(first + i) else {
+            break;
+        };
+        let mut cell = grid.slot(i);
+        cell.x -= card.x;
+        cell.y -= card.y;
+        let size = theme.grid_icon_size;
+        let icon_x = cell.x + (cell.w - size) / 2.0;
+        let icon_y = cell.y + 16.0;
+        app_icon(&mut canvas, icons, theme, &app.icon, icon_x, icon_y, size);
+        let mut name = fit(fonts, &app.name, 13.0, Weight::Normal, scale, cell.w - 16.0);
+        let x = (cell.x + (cell.w - name.width) / 2.0).round();
+        let y = icon_y + size + 10.0;
+        canvas.text(fonts, &mut name, x + 1.0, y + 1.0, shadow);
+        canvas.text(fonts, &mut name, x, y, text);
+    }
+    drop(canvas);
+    Some(image)
 }
 
 /// An app's icon, or a generic one if its theme has none.
@@ -1148,6 +1240,7 @@ mod tests {
                 &theme,
                 &state,
                 scale,
+                &mut PageCache::default(),
             );
         }
         let mut out = cnde_ui::tiny_skia::Pixmap::new(w, h).unwrap();
