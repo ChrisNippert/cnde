@@ -8,12 +8,7 @@ compact, but it should never feel cheap.*
 > Expect rough edges, and please [report them](#reporting-bugs).
 > "cnde" is a working name.
 
-<!-- To come: the desktop, the overview, Alt+Tab, the dock -->
-
-| | |
-|---|---|
-| ![Quick settings](docs/screenshots/quick-settings.png) | ![Settings](docs/screenshots/settings.png) |
-| ![Files](docs/screenshots/files.png) | ![Files, light style](docs/screenshots/files-light.png) |
+![The cnde desktop: frosted top bar and dock over the wallpaper, with Files open](docs/screenshots/desktop.png)
 
 ## What it's for
 
@@ -48,6 +43,10 @@ compact, but it should never feel cheap.*
 - Optional cnde title bars for apps that allow them; apps that draw their
   own keep theirs.
 
+| Overview | Alt+Tab |
+|---|---|
+| ![The overview](docs/screenshots/overview.png) | ![Alt+Tab over a blurred desktop](docs/screenshots/alt-tab.png) |
+
 **Shell**
 - Top bar with workspaces, clock, tray and status icons.
 - Dock: in the overview only (the default), or at a screen edge, with window
@@ -61,6 +60,10 @@ compact, but it should never feel cheap.*
 - A screenshot tool (Super+Shift+S): region, window or screen, saved to a
   file and copied to the clipboard.
 
+| Quick settings | Dock previews |
+|---|---|
+| ![Quick settings](docs/screenshots/quick-settings.png) | ![Window previews from the dock](docs/screenshots/dock-preview.png) |
+
 **Apps**
 - **Settings:** displays, appearance, dock, top bar, windows, keyboard, mouse
   and touchpad, sound (per-app volume), Bluetooth, Wi-Fi, power, default
@@ -69,6 +72,10 @@ compact, but it should never feel cheap.*
   apps open, through the xdg-desktop-portal.
 - **Lock screen:** cnde-lock, using PAM.
 - **Screen-share picker:** chooses which monitor or window an app shares.
+
+| Settings | Files, light style |
+|---|---|
+| ![Settings](docs/screenshots/settings.png) | ![Files in the light style](docs/screenshots/files-light.png) |
 
 **Under the hood**
 - Built on smithay; Rust throughout.
