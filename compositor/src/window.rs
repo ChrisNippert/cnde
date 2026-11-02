@@ -430,14 +430,12 @@ impl State {
         // Locked: the keyboard stays with the locker.
         if self.lock.is_locked() {
             if let Some(window) = window {
-                self.space.raise_element(window, true);
-                self.workspaces.raise(window);
+                self.raise_window(window);
             }
             return;
         }
         if let Some(window) = window {
-            self.space.raise_element(window, true);
-            self.workspaces.raise(window);
+            self.raise_window(window);
             with_state(window, |s| s.urgent = false);
             if let Some(output) = self.output_for(window) {
                 self.workspace_monitor = Some(output.name());
@@ -732,6 +730,34 @@ impl State {
     /// Move a mapped window, keeping its place in the stack. Why not just
     /// `map_element`: that puts it on top, so re-fitting maximized windows
     /// after a setting changed buried the window being used.
+    /// Bring `window` to the top, and its dialogs (the toplevels it's the
+    /// parent of, and theirs) above it: one left under its window can
+    /// neither be seen nor dismissed, and a modal one holds the window open.
+    fn raise_window(&mut self, window: &Window) {
+        self.space.raise_element(window, true);
+        self.workspaces.raise(window);
+        let mut parents = vec![window.clone()];
+        // A few levels deep: a client could make parents a loop.
+        for _ in 0..4 {
+            let dialogs: Vec<Window> = self
+                .space
+                .elements()
+                .filter(|w| {
+                    let parent = w.toplevel().and_then(|t| t.parent());
+                    parents
+                        .iter()
+                        .any(|p| p.toplevel().map(|t| t.wl_surface()) == parent.as_ref())
+                })
+                .cloned()
+                .collect();
+            for dialog in &dialogs {
+                self.space.raise_element(dialog, false);
+                self.workspaces.raise(dialog);
+            }
+            parents = dialogs;
+        }
+    }
+
     pub fn move_window(&mut self, window: &Window, loc: Point<i32, Logical>) {
         let above: Vec<Window> = self
             .space
