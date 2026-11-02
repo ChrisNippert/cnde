@@ -227,6 +227,9 @@ pub struct Overlay {
     configured: bool,
     frame_pending: bool,
     dirty: bool,
+    /// What its buffer shows (the bright part, the mode), so a move
+    /// that changes nothing here doesn't paint the whole monitor again.
+    drawn: Option<(Option<Rect>, Mode)>,
 }
 
 /// One of the app's monitors, for opening the tool.
@@ -298,6 +301,7 @@ impl ScreenshotUi {
                     configured: false,
                     frame_pending: false,
                     dirty: false,
+                    drawn: None,
                 }
             })
             .collect();
@@ -369,6 +373,7 @@ impl ScreenshotUi {
         };
         let overlay = &mut self.overlays[i];
         overlay.configured = true;
+        overlay.drawn = None;
         if size.0 > 0 && size.1 > 0 {
             overlay.size = (size.0 as f32, size.1 as f32);
         }
@@ -380,6 +385,7 @@ impl ScreenshotUi {
             return false;
         };
         self.overlays[i].scale = scale.max(1);
+        self.overlays[i].drawn = None;
         self.overlays[i]
             .layer
             .wl_surface()
@@ -747,11 +753,11 @@ impl ScreenshotUi {
             y: r.y - monitor.y,
             ..r
         });
-        let (size, mode, bar) = (
-            overlay.size,
-            self.mode,
-            overlay.main.then(|| toolbar(overlay.size)),
-        );
+        if self.overlays[i].drawn == Some((bright, self.mode)) {
+            self.overlays[i].dirty = false;
+            return;
+        }
+        let (mode, bar) = (self.mode, overlay.main.then(|| toolbar(overlay.size)));
         let Some(pool) = &mut self.pool else {
             return;
         };
@@ -762,13 +768,13 @@ impl ScreenshotUi {
                 return;
             }
         };
+        fill_dim(pixels, w as usize, h as usize, scale as f32, bright);
         {
             let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) else {
                 return;
             };
             paint(
                 &mut canvas,
-                size,
                 bright,
                 mode,
                 bar,
@@ -785,6 +791,7 @@ impl ScreenshotUi {
         }
         let overlay = &mut self.overlays[i];
         overlay.dirty = false;
+        overlay.drawn = Some((bright, mode));
         let surface = overlay.layer.wl_surface();
         surface.damage_buffer(0, 0, w, h);
         if buffer.attach_to(surface).is_ok() {
@@ -795,10 +802,24 @@ impl ScreenshotUi {
     }
 }
 
+/// The dim over all but `bright` (logical px), written straight into the
+/// buffer: tiny-skia filling a whole monitor on every pointer move falls
+/// behind it. Black, so the same bytes in either channel order.
+fn fill_dim(pixels: &mut [u8], w: usize, h: usize, scale: f32, bright: Option<Rect>) {
+    let dim = [0, 0, 0, (DIM.a * 255.0).round() as u8];
+    pixels.as_chunks_mut::<4>().0.fill(dim);
+    if let Some(b) = bright {
+        let px = |v: f32, max: usize| ((v * scale).round().max(0.0) as usize).min(max);
+        let (x0, x1) = (px(b.x, w), px(b.x + b.w, w));
+        for row in px(b.y, h)..px(b.y + b.h, h) {
+            pixels[(row * w + x0) * 4..(row * w + x1) * 4].fill(0);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint(
     canvas: &mut Canvas<'_>,
-    size: (f32, f32),
     bright: Option<Rect>,
     mode: Mode,
     bar: Option<Toolbar>,
@@ -807,15 +828,10 @@ fn paint(
     theme: &Theme,
     scale: f32,
 ) {
-    canvas.clear(Color::rgba(0, 0, 0, 0.0));
-    // Dim around the bright part (four bands), or everything.
+    // The dim is already in (`fill_dim`).
     match bright {
         Some(b) => {
-            canvas.rounded_rect(0.0, 0.0, size.0, b.y, 0.0, DIM);
-            canvas.rounded_rect(0.0, b.y + b.h, size.0, size.1 - b.y - b.h, 0.0, DIM);
-            canvas.rounded_rect(0.0, b.y, b.x, b.h, 0.0, DIM);
-            canvas.rounded_rect(b.x + b.w, b.y, size.0 - b.x - b.w, b.h, 0.0, DIM);
-            // Its outline (and corner handles, for a selection).
+            // The bright part's outline (and corner handles, for a selection).
             let line = 2.0;
             let white = Color::rgb(255, 255, 255);
             let edge = if mode == Mode::Selection {
@@ -838,7 +854,7 @@ fn paint(
                 }
             }
         }
-        None => canvas.rounded_rect(0.0, 0.0, size.0, size.1, 0.0, DIM),
+        None => {}
     }
 
     let Some(bar) = bar else {
