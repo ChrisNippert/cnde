@@ -1120,6 +1120,19 @@ fn top_bar(ui: &Ui, p: &mut Painter<'_, '_>, c: &Colors, out: &mut Painted, w: f
             true,
         );
     }
+    // New folder, wherever there's a folder to make one in.
+    if matches!(ui.location, Location::Dir(_)) {
+        rx -= 34.0;
+        button(
+            p,
+            out,
+            rx,
+            "folder-new-symbolic",
+            Target::Act(ops::Act::NewFolder),
+            false,
+            true,
+        );
+    }
     rx -= 8.0 + 68.0;
     // The list / grid switch.
     p.canvas.rounded_rect(rx, cy - 16.0, 68.0, 32.0, 9.0, c.seg);
