@@ -282,17 +282,26 @@ impl State {
 
     /// The window linked to `window` by a snap pair, if any.
     pub fn snap_partner(&self, window: &Window) -> Option<Window> {
-        let (placement, linked) = with_state(window, |s| (s.placement, s.snap_split.is_some()));
-        let opposite = opposite(placement).filter(|_| linked)?;
+        let (placement, split) = with_state(window, |s| (s.placement, s.snap_split));
+        let opposite = opposite(placement).filter(|_| split.is_some())?;
         let output = self.output_for(window)?;
-        self.space
+        // Topmost first: with older pairs behind, the one beside this
+        // window is the one in front; best, the one sharing its split.
+        let candidates: Vec<&Window> = self
+            .space
             .elements()
-            .find(|w| {
+            .rev()
+            .filter(|w| {
                 *w != window
                     && with_state(w, |s| s.placement == opposite && s.snap_split.is_some())
                     && self.output_for(w).as_ref() == Some(&output)
             })
-            .cloned()
+            .collect();
+        candidates
+            .iter()
+            .find(|w| with_state(w, |s| s.snap_split) == split)
+            .or(candidates.first())
+            .map(|w| (*w).clone())
     }
 
     /// Global x of the edge a snap pair shares.
