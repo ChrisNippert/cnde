@@ -144,7 +144,10 @@ impl CaptureState {
         dh.create_global::<State, ExtForeignToplevelImageCaptureSourceManagerV1, _>(1, ());
         dh.create_global::<State, ExtImageCopyCaptureManagerV1, _>(1, ());
         Self {
-            toplevel_list: ForeignToplevelListState::new_with_filter::<State>(dh, crate::state::client_is_unrestricted),
+            toplevel_list: ForeignToplevelListState::new_with_filter::<State>(
+                dh,
+                crate::state::client_is_unrestricted,
+            ),
             toplevels: Vec::new(),
             sessions: Vec::new(),
             pending: Vec::new(),

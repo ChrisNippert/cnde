@@ -208,7 +208,8 @@ impl State {
 
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
-        let layer_shell_state = WlrLayerShellState::new_with_filter::<Self, _>(&dh, client_is_unrestricted);
+        let layer_shell_state =
+            WlrLayerShellState::new_with_filter::<Self, _>(&dh, client_is_unrestricted);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(
@@ -229,7 +230,10 @@ impl State {
         smithay::wayland::relative_pointer::RelativePointerManagerState::new::<Self>(&dh);
         smithay::wayland::pointer_constraints::PointerConstraintsState::new::<Self>(&dh);
         let lock = crate::lock::Lock::new(
-            smithay::wayland::session_lock::SessionLockManagerState::new::<Self, _>(&dh, client_is_unrestricted),
+            smithay::wayland::session_lock::SessionLockManagerState::new::<Self, _>(
+                &dh,
+                client_is_unrestricted,
+            ),
         );
         crate::ext_workspace::init(&dh);
         let security_context_state =
