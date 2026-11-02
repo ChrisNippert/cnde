@@ -74,6 +74,26 @@ const SHOWN: usize = 4;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(6);
 /// Images are kept at most this big (device pixels).
 const IMAGE_MAX: u32 = 128;
+/// The biggest `image-data` side accepted at all; it's shrunk to
+/// `IMAGE_MAX` anyway.
+const IMAGE_DATA_MAX: i32 = 2048;
+/// What's kept of a body and of the other strings: a card shows a few
+/// lines, and any app can send megabytes.
+const BODY_MAX: usize = 4096;
+const TEXT_MAX: usize = 256;
+const ACTIONS_MAX: usize = 8;
+
+/// `text` cut to at most `max` bytes, on a character boundary.
+fn clip(mut text: String, max: usize) -> String {
+    if text.len() > max {
+        let mut end = max;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    text
+}
 
 /// Why one went away, as the spec numbers them.
 #[derive(Clone, Copy)]
@@ -419,16 +439,17 @@ impl Server {
         };
         let note = Note {
             id,
-            app_name,
-            summary,
-            body,
+            app_name: clip(app_name, TEXT_MAX),
+            summary: clip(summary, TEXT_MAX),
+            body: clip(body, BODY_MAX),
             actions: actions
                 .as_chunks::<2>()
                 .0
                 .iter()
-                .map(|[key, label]| (key.clone(), label.clone()))
+                .take(ACTIONS_MAX)
+                .map(|[key, label]| (clip(key.clone(), TEXT_MAX), clip(label.clone(), TEXT_MAX)))
                 .collect(),
-            icon,
+            icon: clip(icon, TEXT_MAX * 4),
             image,
             critical,
             timeout,
@@ -464,7 +485,14 @@ fn image_data(value: &OwnedValue) -> Option<Pixmap> {
     let int = |i: usize| fields.get(i)?.downcast_ref::<i32>().ok();
     let (width, height, stride) = (int(0)?, int(1)?, int(2)?);
     let channels = int(5)?;
-    if width <= 0 || height <= 0 || int(4)? != 8 || !(3..=4).contains(&channels) {
+    // Any app can send one: a bogus stride or a huge size is refused, not
+    // trusted to index or allocate with.
+    if !(1..=IMAGE_DATA_MAX).contains(&width)
+        || !(1..=IMAGE_DATA_MAX).contains(&height)
+        || int(4)? != 8
+        || !(3..=4).contains(&channels)
+        || stride < width * channels
+    {
         return None;
     }
     let data: Vec<u8> = fields.get(6)?.try_clone().ok()?.try_into().ok()?;
@@ -474,7 +502,8 @@ fn image_data(value: &OwnedValue) -> Option<Pixmap> {
         stride as usize,
         channels as usize,
     );
-    if data.len() < stride * (h - 1) + w * channels {
+    let needed = stride.checked_mul(h - 1)?.checked_add(w * channels)?;
+    if data.len() < needed {
         return None;
     }
     let mut full = Pixmap::new(w as u32, h as u32)?;

@@ -257,6 +257,11 @@ fn gtk_icon_theme() -> Option<String> {
 
 /// An SVG or PNG scaled into a `size` square, aspect kept, centred.
 fn render_color(path: &Path, size: u32) -> Option<tiny_skia::Pixmap> {
+    // Apps name these paths (a notification's image, a tray icon), and a
+    // small file can be a huge picture: refuse what an icon never is.
+    if std::fs::metadata(path).ok()?.len() > ICON_FILE_MAX {
+        return None;
+    }
     let mut pixmap = tiny_skia::Pixmap::new(size, size)?;
     let is_svg = path.extension().is_some_and(|e| e == "svg" || e == "svgz");
     if is_svg {
@@ -270,6 +275,10 @@ fn render_color(path: &Path, size: u32) -> Option<tiny_skia::Pixmap> {
         );
         resvg::render(&tree, transform, &mut pixmap.as_mut());
     } else {
+        let (w, h) = png_size(path)?;
+        if w.max(h) > ICON_SIDE_MAX {
+            return None;
+        }
         let mut image = tiny_skia::Pixmap::load_png(path).ok()?;
         // Bicubic reads a 4x4 neighbourhood, so shrinking a 512 px icon to
         // 32 in one go skips most pixels and aliases. Halve first.
@@ -289,6 +298,24 @@ fn render_color(path: &Path, size: u32) -> Option<tiny_skia::Pixmap> {
         pixmap.draw_pixmap(0, 0, image.as_ref(), &paint, transform, None);
     }
     Some(pixmap)
+}
+
+/// The biggest icon or image file `render_color` reads, in bytes.
+const ICON_FILE_MAX: u64 = 16 << 20;
+/// The biggest PNG side it decodes.
+const ICON_SIDE_MAX: u32 = 4096;
+
+/// A PNG's width and height, from its header, without decoding it.
+fn png_size(path: &Path) -> Option<(u32, u32)> {
+    use std::io::Read;
+    let mut head = [0u8; 24];
+    std::fs::File::open(path).ok()?.read_exact(&mut head).ok()?;
+    if &head[..8] != b"\x89PNG\r\n\x1a\n" || &head[12..16] != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes(head[16..20].try_into().ok()?);
+    let h = u32::from_be_bytes(head[20..24].try_into().ok()?);
+    Some((w, h))
 }
 
 /// Half the size, each pixel the average of four (premultiplied, so
