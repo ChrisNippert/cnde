@@ -307,6 +307,10 @@ fn send_details(handle: &ExtWorkspaceHandleV1, info: &Info, previous: Option<&In
 }
 
 impl GlobalDispatch<ExtWorkspaceManagerV1, ()> for State {
+    fn can_view(client: Client, _: &()) -> bool {
+        crate::state::client_is_unrestricted(&client)
+    }
+
     fn bind(
         state: &mut Self,
         _dh: &DisplayHandle,

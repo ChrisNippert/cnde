@@ -21,7 +21,7 @@ use smithay::{
             timer::{TimeoutAction, Timer},
         },
         wayland_server::{
-            Display, DisplayHandle,
+            Client, Display, DisplayHandle,
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::wl_surface::WlSurface,
         },
@@ -35,6 +35,9 @@ use smithay::{
         shell::{
             wlr_layer::{Layer, WlrLayerShellState},
             xdg::{XdgShellState, decoration::XdgDecorationState},
+        },
+        security_context::{
+            SecurityContext, SecurityContextHandler, SecurityContextListenerSource,
         },
         shm::ShmState,
         xdg_activation::XdgActivationState,
@@ -88,6 +91,9 @@ pub struct State {
     /// set by clicks and focus (see `current_output`).
     pub workspace_monitor: Option<String>,
     pub ext_workspace_state: crate::ext_workspace::ExtWorkspaceState,
+    /// Kept so the wp_security_context_v1 global stays alive.
+    #[allow(dead_code)]
+    security_context_state: smithay::wayland::security_context::SecurityContextState,
     /// A three-finger swipe is driving the workspace strip.
     pub swipe_active: bool,
     /// An app was started (the shell says): the pointer shows it's busy
@@ -202,7 +208,7 @@ impl State {
 
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
-        let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let layer_shell_state = WlrLayerShellState::new_with_filter::<Self, _>(&dh, client_is_unrestricted);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(
@@ -223,9 +229,14 @@ impl State {
         smithay::wayland::relative_pointer::RelativePointerManagerState::new::<Self>(&dh);
         smithay::wayland::pointer_constraints::PointerConstraintsState::new::<Self>(&dh);
         let lock = crate::lock::Lock::new(
-            smithay::wayland::session_lock::SessionLockManagerState::new::<Self, _>(&dh, |_| true),
+            smithay::wayland::session_lock::SessionLockManagerState::new::<Self, _>(&dh, client_is_unrestricted),
         );
         crate::ext_workspace::init(&dh);
+        let security_context_state =
+            smithay::wayland::security_context::SecurityContextState::new::<Self, _>(
+                &dh,
+                client_is_unrestricted,
+            );
         let idle = crate::power::Idle::new(&dh, event_loop.handle());
         let capture = crate::capture::CaptureState::new(&dh);
         let mut seat_state = SeatState::new();
@@ -257,6 +268,7 @@ impl State {
             space: Space::default(),
             workspaces: crate::workspaces::Workspaces::new(),
             ext_workspace_state: Default::default(),
+            security_context_state,
             workspace_monitor: None,
             swipe_active: false,
             launching: None,
@@ -622,6 +634,31 @@ impl State {
 #[derive(Default)]
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
+    /// Set for clients that connected through a wp_security_context_v1
+    /// listener (Flatpak and other sandboxes); native clients have none.
+    pub security_context: Option<SecurityContext>,
+}
+
+/// Whether `client` may see the globals that control other clients or the
+/// session. Sandboxed clients (those that came in through a security
+/// context) must not; cnde's own shell, lock screen, portals and
+/// xwayland-satellite connect natively and keep everything.
+///
+/// Hidden from sandboxed clients:
+///   - ext-image-copy-capture, ext-output-image-capture-source and
+///     ext-foreign-toplevel-image-capture-source (screen capture)
+///   - ext-foreign-toplevel-list (lists every window)
+///   - ext-workspace (lists and switches workspaces)
+///   - wlr-layer-shell (overlays, panels, input grabs)
+///   - ext-session-lock (locking and unlocking the session)
+///   - wp-security-context itself (a sandbox can't mint new contexts)
+///
+/// Everything else is ordinary app plumbing and stays visible. The idle
+/// notifier is the one privileged-ish global smithay gives no filter for.
+pub fn client_is_unrestricted(client: &Client) -> bool {
+    client
+        .get_data::<ClientState>()
+        .is_some_and(|data| data.security_context.is_none())
 }
 
 impl ClientData for ClientState {
@@ -631,5 +668,35 @@ impl ClientData for ClientState {
         if let DisconnectReason::ProtocolError(err) = reason {
             warn!(%err, "client disconnected for a protocol error");
         }
+    }
+}
+
+impl SecurityContextHandler for State {
+    fn context_created(&mut self, source: SecurityContextListenerSource, context: SecurityContext) {
+        let result = self
+            .loop_handle
+            .insert_source(source, move |stream, _, state| {
+                let data = ClientState {
+                    security_context: Some(context.clone()),
+                    ..Default::default()
+                };
+                if let Err(err) = state.display_handle.insert_client(stream, Arc::new(data)) {
+                    warn!(?err, "failed to add sandboxed wayland client");
+                }
+            });
+        if let Err(err) = result {
+            warn!(%err, "failed to listen for a security context");
+        }
+    }
+}
+smithay::delegate_security_context!(State);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_client_data_is_unrestricted() {
+        assert!(ClientState::default().security_context.is_none());
     }
 }

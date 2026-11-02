@@ -144,7 +144,7 @@ impl CaptureState {
         dh.create_global::<State, ExtForeignToplevelImageCaptureSourceManagerV1, _>(1, ());
         dh.create_global::<State, ExtImageCopyCaptureManagerV1, _>(1, ());
         Self {
-            toplevel_list: ForeignToplevelListState::new::<State>(dh),
+            toplevel_list: ForeignToplevelListState::new_with_filter::<State>(dh, crate::state::client_is_unrestricted),
             toplevels: Vec::new(),
             sessions: Vec::new(),
             pending: Vec::new(),
@@ -563,6 +563,10 @@ impl ForeignToplevelListHandler for State {
 smithay::delegate_foreign_toplevel_list!(State);
 
 impl GlobalDispatch<ExtOutputImageCaptureSourceManagerV1, ()> for State {
+    fn can_view(client: Client, _: &()) -> bool {
+        crate::state::client_is_unrestricted(&client)
+    }
+
     fn bind(
         _: &mut Self,
         _: &DisplayHandle,
@@ -598,6 +602,10 @@ impl Dispatch<ExtOutputImageCaptureSourceManagerV1, ()> for State {
 }
 
 impl GlobalDispatch<ExtForeignToplevelImageCaptureSourceManagerV1, ()> for State {
+    fn can_view(client: Client, _: &()) -> bool {
+        crate::state::client_is_unrestricted(&client)
+    }
+
     fn bind(
         _: &mut Self,
         _: &DisplayHandle,
@@ -651,6 +659,10 @@ impl Dispatch<ExtImageCaptureSourceV1, SourceData> for State {
 }
 
 impl GlobalDispatch<ExtImageCopyCaptureManagerV1, ()> for State {
+    fn can_view(client: Client, _: &()) -> bool {
+        crate::state::client_is_unrestricted(&client)
+    }
+
     fn bind(
         _: &mut Self,
         _: &DisplayHandle,
