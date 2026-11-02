@@ -231,6 +231,11 @@ impl State {
         enum Act {
             Leave(Output),
             Enter(Output, Rectangle<i32, Logical>),
+            /// Announce a kept monitor again, after the leaves: satellite
+            /// ignores leaves, so the monitor `Space` just entered and we
+            /// took back would otherwise stay where it put the X11 window
+            /// (and X's primary, which Wine sizes a fullscreen game to).
+            Reenter(Output),
         }
         let mut acts = Vec::new();
         for window in self.space.elements() {
@@ -262,6 +267,8 @@ impl State {
             // Never leave a window on no monitor at all: a game told it's
             // nowhere may never present (black screen, audio only).
             let none_kept = !keeps.contains(&true);
+            let first = acts.len();
+            let mut kept = Vec::new();
             for (i, (output, keep)) in entered.into_iter().zip(keeps).enumerate() {
                 let keep = keep || (none_kept && i == 0);
                 if !keep {
@@ -287,7 +294,12 @@ impl State {
                     if let Some(overlap) = overlap {
                         acts.push((window.clone(), Act::Enter(output, overlap)));
                     }
+                } else {
+                    kept.push(output);
                 }
+            }
+            if acts[first..].iter().any(|(_, act)| matches!(act, Act::Leave(_))) {
+                acts.extend(kept.into_iter().map(|o| (window.clone(), Act::Reenter(o))));
             }
         }
         for (window, act) in acts {
@@ -297,6 +309,13 @@ impl State {
                 }
                 Act::Enter(output, overlap) => {
                     smithay::desktop::space::SpaceElement::output_enter(&window, &output, overlap)
+                }
+                Act::Reenter(output) => {
+                    // `Output::enter` skips a surface already on it.
+                    if let Some(toplevel) = window.toplevel() {
+                        output.leave(toplevel.wl_surface());
+                        output.enter(toplevel.wl_surface());
+                    }
                 }
             }
         }
