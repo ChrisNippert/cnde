@@ -874,6 +874,12 @@ impl State {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
+        // A fullscreen window stays put (as in GNOME): a stray Super+drag
+        // mid-game would shrink the game to a window, and Wine takes that
+        // as being minimized and hides it.
+        if Self::placement_of(&window) == Placement::Fullscreen {
+            return;
+        }
         // On a tiling workspace the window leaves its tile while dragged;
         // where it's dropped decides what happens (see `drop_window`).
         let tile = self.lift_for_move(&window);
