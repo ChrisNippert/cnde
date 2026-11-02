@@ -411,12 +411,7 @@ impl State {
         }
         // Reopened while still closing, the old order stays: nothing jumps.
         if open && self.overview.progress(Instant::now()) <= 0.0 {
-            self.overview.order = self
-                .workspaces
-                .list
-                .iter()
-                .flat_map(|ws| ws.windows.iter().cloned())
-                .collect();
+            self.overview.order = self.stacking();
         }
         self.overview.set_open(open);
         // Closing from the grid: the thumbnails zoom back with the rest.
@@ -459,10 +454,23 @@ impl State {
             } else if self.focused_window().is_none() {
                 self.focus_window(next.as_ref());
             }
+            // Windows zoom back stacked as they now are, the one picked
+            // (raised above) already in front rather than jumping there at
+            // the end.
+            self.overview.order = self.stacking();
         }
         // Windows stop (or start) taking pointer input.
         self.queue_pointer_refresh();
         self.queue_redraw();
+    }
+
+    /// Every window, bottom to top.
+    fn stacking(&self) -> Vec<Window> {
+        self.workspaces
+            .list
+            .iter()
+            .flat_map(|ws| ws.windows.iter().cloned())
+            .collect()
     }
 
     /// Called every loop iteration: drop a finished animation.
