@@ -275,15 +275,7 @@ fn picker_command() -> Option<String> {
 /// One of cnde's programs: next to our own binary first (a dev build run
 /// from target/), else wherever PATH has it.
 fn find_binary(name: &str) -> Option<PathBuf> {
-    let sibling = std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.join(name)))
-        .filter(|path| path.is_file());
-    sibling.or_else(|| {
-        std::env::split_paths(&std::env::var_os("PATH")?)
-            .map(|dir| dir.join(name))
-            .find(|path| path.is_file())
-    })
+    cnde_config::paths::find_binary(name)
 }
 
 fn shell_quote(text: &str) -> String {

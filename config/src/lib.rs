@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 mod edit;
 pub use edit::ConfigFile;
+pub mod paths;
 pub mod power;
 pub use power::{IdleStage, Power, PowerProfile};
 pub mod schedule;

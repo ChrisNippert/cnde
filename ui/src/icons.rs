@@ -44,21 +44,12 @@ pub struct Mask {
 
 impl Icons {
     pub fn new() -> Self {
-        let mut base_dirs = Vec::new();
-        if let Some(home) = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        {
-            base_dirs.push(home.join("icons"));
-        }
-        let data_dirs =
-            std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
-        base_dirs.extend(
-            data_dirs
-                .split(':')
-                .filter(|d| !d.is_empty())
-                .map(|d| PathBuf::from(d).join("icons")),
-        );
+        // The user's, the system's, then the prefix cnde was installed to
+        // (a ~/.local or /opt install isn't in XDG_DATA_DIRS).
+        let mut base_dirs: Vec<PathBuf> = cnde_config::paths::search_dirs()
+            .into_iter()
+            .map(|dir| dir.join("icons"))
+            .collect();
         // A build that isn't installed: cnde's icons from the source tree.
         let source = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../icons"));
         if source.is_dir() {
@@ -159,10 +150,12 @@ impl Icons {
                 }
             }
         }
-        for ext in ["svg", "png"] {
-            let path = PathBuf::from(format!("/usr/share/pixmaps/{name}.{ext}"));
-            if path.is_file() {
-                return Some(path);
+        for dir in cnde_config::paths::search_dirs() {
+            for ext in ["svg", "png"] {
+                let path = dir.join(format!("pixmaps/{name}.{ext}"));
+                if path.is_file() {
+                    return Some(path);
+                }
             }
         }
         None

@@ -124,7 +124,12 @@ pub fn glob(pattern: &str, name: &str) -> bool {
 fn mime_globs() -> &'static [(String, String)] {
     static GLOBS: OnceLock<Vec<(String, String)>> = OnceLock::new();
     GLOBS.get_or_init(|| {
-        let text = std::fs::read_to_string("/usr/share/mime/globs2").unwrap_or_default();
+        // Every data directory's database counts: the user's holds only
+        // their own additions, the system's the rest.
+        let text: String = cnde_config::paths::search_dirs()
+            .iter()
+            .filter_map(|dir| std::fs::read_to_string(dir.join("mime/globs2")).ok())
+            .collect();
         let mut globs = parse_globs2(&text);
         // Without the database, the types apps ask for most.
         if globs.is_empty() {

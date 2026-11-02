@@ -395,18 +395,7 @@ pub fn settings_program() -> Option<std::ffi::OsString> {
     static PROGRAM: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
     PROGRAM
         .get_or_init(|| {
-            let sibling = std::env::current_exe()
-                .ok()
-                .and_then(|exe| Some(exe.parent()?.join("cnde-settings")))
-                .filter(|exe| exe.is_file());
-            let on_path = || {
-                std::env::var_os("PATH").and_then(|path| {
-                    std::env::split_paths(&path)
-                        .map(|dir| dir.join("cnde-settings"))
-                        .find(|exe| exe.is_file())
-                })
-            };
-            sibling.or_else(on_path).map(|exe| exe.into_os_string())
+            cnde_config::paths::find_binary("cnde-settings").map(|exe| exe.into_os_string())
         })
         .clone()
 }
