@@ -74,6 +74,19 @@ struct Saved {
 }
 
 impl Screenshot {
+    /// The GPU was reset: the frozen copies are gone. While the tool is up,
+    /// freeze again from what the monitors show now.
+    pub fn clear_gpu(&mut self) {
+        let names: Vec<String> = self.frozen.drain().map(|(name, _)| name).collect();
+        if self.active {
+            for name in names {
+                if !self.freezing.contains(&name) {
+                    self.freezing.push(name);
+                }
+            }
+        }
+    }
+
     pub fn wants_freeze(&self, output: &Output) -> bool {
         self.active && self.freezing.contains(&output.name())
     }

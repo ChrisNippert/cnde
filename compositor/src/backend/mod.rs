@@ -1,6 +1,7 @@
 //! Backends (ARCHITECTURE.md §4.1): winit runs nested inside another
 //! desktop for development; udev drives real hardware from a TTY.
 
+pub mod gpu_context;
 pub mod udev;
 pub mod winit;
 

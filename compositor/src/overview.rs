@@ -195,6 +195,13 @@ pub enum Hit {
 }
 
 impl Overview {
+    /// The GPU was reset: the tile shader and the tiles built on it belonged
+    /// to the lost context.
+    pub fn clear_gpu(&mut self) {
+        self.tile_shader = None;
+        self.tiles.clear();
+    }
+
     pub fn new() -> Self {
         Self {
             open: false,

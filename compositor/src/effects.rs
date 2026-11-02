@@ -141,6 +141,18 @@ pub struct ClosingWindow {
     pub below: usize,
 }
 
+/// The GPU was reset: the old contents a window was fading out are gone,
+/// so the change just completes without them.
+pub fn clear_gpu(state: &mut WindowState) {
+    if let Some(resize) = &mut state.resize_anim {
+        resize.snapshot = None;
+    }
+    if let Some(pending) = &mut state.pending_size {
+        pending.snapshot = None;
+        pending.fade = None;
+    }
+}
+
 impl ClosingWindow {
     pub fn new(
         snapshot: Snapshot,

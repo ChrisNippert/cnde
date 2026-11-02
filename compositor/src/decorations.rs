@@ -177,6 +177,13 @@ pub struct BarInput {
 }
 
 impl Decorations {
+    /// The GPU was reset: the thumbnail shader belonged to the lost context.
+    /// (The title bar and close-button images are plain pixels, uploaded
+    /// again by the new renderer on their own.)
+    pub fn clear_gpu(&mut self) {
+        self.downscale.clear_gpu();
+    }
+
     /// The bar for `window`, drawn over `rect` (output-local, after any
     /// animation); `width` is the bar's unanimated width.
     #[allow(clippy::too_many_arguments)]

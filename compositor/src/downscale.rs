@@ -85,6 +85,12 @@ pub struct Downscale {
 }
 
 impl Downscale {
+    /// The GPU was reset: the program belonged to the lost context.
+    pub fn clear_gpu(&mut self) {
+        self.program = None;
+        self.broken = false;
+    }
+
     pub fn program(&mut self, renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
         if self.program.is_none() && !self.broken {
             match renderer.compile_custom_texture_shader(

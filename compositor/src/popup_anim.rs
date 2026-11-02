@@ -76,6 +76,13 @@ pub fn scale_at(progress: f64) -> f64 {
 }
 
 impl PopupAnims {
+    /// The GPU was reset: the pictures of popups that were open or closing
+    /// are gone.
+    pub fn clear_gpu(&mut self) {
+        self.last.clear();
+        self.closing.clear();
+    }
+
     /// Popups fading out: where each was (global) and how far it's still
     /// open, 1 to 0.
     pub fn closing(&self, now: Instant) -> impl Iterator<Item = (Rectangle<f64, Logical>, f64)> + '_ {

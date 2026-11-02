@@ -22,7 +22,7 @@ use smithay::{
             exporter::gbm::GbmFramebufferExporter,
             output::{DrmOutput, DrmOutputManager, DrmOutputRenderElements},
         },
-        egl::{EGLContext, EGLDevice, EGLDisplay, context::ContextPriority},
+        egl::{EGLDevice, EGLDisplay},
         input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{ImportDma, ImportMemWl, gles::GlesRenderer},
@@ -47,7 +47,10 @@ use smithay::{
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 use tracing::{debug, error, info, warn};
 
-use super::Backend;
+use super::{
+    Backend,
+    gpu_context::{self, Robustness},
+};
 use cnde_config::Vrr;
 
 use crate::{cursor::Cursors, render, state::State};
@@ -84,12 +87,20 @@ pub struct UdevBackend {
     pub cursors: Cursors,
     /// Live libinput devices, so config changes can be re-applied to them.
     input_devices: Vec<InputDevice>,
+    /// When the GPU was last reset under us, so a GPU that keeps resetting
+    /// ends the session instead of looping.
+    last_gpu_reset: Option<std::time::Instant>,
 }
 
 struct Gpu {
     /// Primary (KMS) node of the device; what udev events refer to.
     node: DrmNode,
+    /// Kept for building a new renderer after a GPU reset, and so the EGL
+    /// display outlives every context made on it.
+    display: EGLDisplay,
     renderer: GlesRenderer,
+    /// Whether `renderer`'s context reports a GPU reset (see `gpu_context`).
+    robustness: Robustness,
     outputs: GbmOutputManager,
     scanner: DrmScanner,
     surfaces: HashMap<crtc::Handle, Surface>,
@@ -183,6 +194,7 @@ pub fn create() -> Result<
             dmabuf_global: None,
             cursors: Cursors::load(),
             input_devices: Vec::new(),
+            last_gpu_reset: None,
         },
         notifier,
     ))
@@ -351,7 +363,7 @@ impl State {
             .ok()
             .and_then(|device| device.try_get_render_node().ok().flatten())
             .unwrap_or(node);
-        let context = EGLContext::new_with_priority(&display, ContextPriority::High)?;
+        let (context, robustness) = gpu_context::create_context(&display)?;
         // Safety: as above.
         let renderer = unsafe { GlesRenderer::new(context)? };
 
@@ -392,7 +404,9 @@ impl State {
         };
         udev.gpu = Some(Gpu {
             node,
+            display,
             renderer,
+            robustness,
             outputs,
             scanner: DrmScanner::new(),
             surfaces: HashMap::new(),
@@ -1065,6 +1079,7 @@ impl State {
             }
         }
         let start = crate::perf::now();
+        let mut render_failed = false;
         let (rendered, direct) = match surface.drm_output.render_frame(
             &mut gpu.renderer,
             &elements,
@@ -1080,10 +1095,22 @@ impl State {
             ),
             Err(err) => {
                 warn!(?err, "render failed");
+                render_failed = true;
                 (false, surface.direct)
             }
         };
         crate::perf::since("frame.draw", start);
+        // A GPU reset (a game faulted it, say) loses the GL context. It is
+        // asked after every frame, not just failed ones: the frame that
+        // follows a reset can look fine to smithay while its work was
+        // dropped. Skipped when the context isn't one that can report it.
+        if gpu.robustness == Robustness::LoseOnReset
+            && let Some(status) = gpu_context::reset_status(&mut gpu.renderer)
+        {
+            warn!(?status, render_failed, "the GPU was reset; rebuilding the renderer");
+            self.recover_from_gpu_reset();
+            return;
+        }
         // Said as it changes: whether a fullscreen game or video reaches the
         // display without being composited.
         if rendered && direct != surface.direct {
@@ -1148,6 +1175,71 @@ impl State {
         ) {
             self.queue_redraw();
         }
+    }
+
+    /// The kernel reset the GPU and our GL context was lost. Build a new
+    /// renderer on the same display, let go of everything made with the old
+    /// one, and draw every monitor again. The DRM outputs are kept: their
+    /// buffers belong to the GBM device, not to the GL context, and the
+    /// renderer is only passed in per frame. If a new renderer can't be made,
+    /// or the GPU resets again within seconds, the session ends cleanly
+    /// rather than looping.
+    fn recover_from_gpu_reset(&mut self) {
+        /// Resets closer together than this are a GPU that isn't recovering.
+        const TOO_SOON: Duration = Duration::from_secs(5);
+        let Some(udev) = self.udev() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        if udev
+            .last_gpu_reset
+            .is_some_and(|last| now.duration_since(last) < TOO_SOON)
+        {
+            error!("the GPU was reset again right after recovering; giving up");
+            self.loop_signal.stop();
+            return;
+        }
+        udev.last_gpu_reset = Some(now);
+        let Some(gpu) = udev.gpu.as_mut() else {
+            return;
+        };
+
+        let (renderer, robustness) = match gpu_context::create_context(&gpu.display)
+            .map_err(|err| err.to_string())
+            .and_then(|(context, robustness)| {
+                // Safety: the EGL display and context are only used from this thread.
+                unsafe { GlesRenderer::new(context) }
+                    .map(|renderer| (renderer, robustness))
+                    .map_err(|err| err.to_string())
+            }) {
+            Ok(made) => made,
+            Err(err) => {
+                error!(%err, "could not make a new renderer after the GPU reset; giving up");
+                self.loop_signal.stop();
+                return;
+            }
+        };
+        // The old context is lost, so freeing it may fail; that is fine. A
+        // context smithay didn't create has to be destroyed by hand, with the
+        // handle read before the renderer goes.
+        let handle = gpu.renderer.egl_context().get_context_handle();
+        let was_robust = gpu.robustness == Robustness::LoseOnReset;
+        let old = std::mem::replace(&mut gpu.renderer, renderer);
+        gpu.robustness = robustness;
+        drop(old);
+        if was_robust {
+            gpu_context::destroy_context(&gpu.display, handle);
+        }
+        // Whatever was in the frames on the way is garbage now.
+        for surface in gpu.surfaces.values_mut() {
+            surface.drm_output.reset_buffers();
+            if let RedrawState::WaitingForVblank { redraw_needed } = &mut surface.redraw {
+                *redraw_needed = true;
+            }
+        }
+        warn!("the GPU was reset; carrying on with a new renderer");
+        self.clear_gpu_caches();
+        self.udev_queue_redraw_all();
     }
 
     fn on_vblank(&mut self, crtc: crtc::Handle, _metadata: &mut Option<DrmEventMetadata>) {

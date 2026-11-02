@@ -51,6 +51,13 @@ struct Fade {
 }
 
 impl Crossfade {
+    /// The GPU was reset: the copies of the old look are gone, so the fade
+    /// is skipped.
+    pub fn clear_gpu(&mut self) {
+        self.pending.clear();
+        self.fades.clear();
+    }
+
     /// Fade every monitor from what it shows now.
     pub fn start<'a>(&mut self, outputs: impl Iterator<Item = &'a Output>) {
         if FADE.scaled_duration().is_zero() {
