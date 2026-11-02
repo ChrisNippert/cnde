@@ -30,7 +30,23 @@ in
       pkgs.xwayland
       # Event sounds (screenshots, notifications).
       pkgs.sound-theme-freedesktop
+      # Programs cnde runs: pactl (volume, devices), xdg-open and
+      # xdg-settings (default apps), gsettings (GTK apps' dark mode and
+      # fonts), bsdtar (archives in Files).
+      pkgs.pulseaudio
+      pkgs.xdg-utils
+      pkgs.glib
+      pkgs.libarchive
     ];
+
+    # Sound, and screen sharing (portal-wlr hands apps the screen through
+    # PipeWire). mkDefault: a system that set these up its own way keeps it.
+    services.pipewire = {
+      enable = lib.mkDefault true;
+      pulse.enable = lib.mkDefault true;
+      wireplumber.enable = lib.mkDefault true;
+    };
+    security.rtkit.enable = lib.mkDefault true;
 
     services.displayManager.sessionPackages = [ cfg.package ];
 
