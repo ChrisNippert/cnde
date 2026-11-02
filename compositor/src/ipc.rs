@@ -60,6 +60,11 @@ pub fn listen(handle: &LoopHandle<'static, State>) -> Option<PathBuf> {
         warn!(%err, "IPC socket");
         return None;
     }
+    // The runtime dir is private already; this holds even where it isn't.
+    use std::os::unix::fs::PermissionsExt;
+    if let Err(err) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
+        warn!(%err, "can't make the IPC socket private");
+    }
     let accepting = handle.insert_source(
         Generic::new(listener, Interest::READ, Mode::Level),
         |_, listener, state| {
@@ -110,14 +115,20 @@ impl State {
                 // One-off clients (the shell's Lock and Log Out) write a
                 // request and hang up at once: what they sent still counts.
                 let mut closed = false;
-                loop {
+                // A client writing nonstop doesn't hold the loop: the rest
+                // waits for the next wakeup.
+                let mut budget: usize = 64 * 1024;
+                while budget > 0 {
                     // Safety: we never drop or replace the stream ourselves.
                     match unsafe { stream.get_mut() }.read(&mut buf) {
                         Ok(0) => {
                             closed = true;
                             break;
                         }
-                        Ok(n) => pending.extend_from_slice(&buf[..n]),
+                        Ok(n) => {
+                            pending.extend_from_slice(&buf[..n]);
+                            budget = budget.saturating_sub(n);
+                        }
                         Err(err) if err.kind() == ErrorKind::WouldBlock => break,
                         Err(err) if err.kind() == ErrorKind::Interrupted => continue,
                         Err(_) => {
@@ -521,16 +532,47 @@ impl State {
 /// How long a token stays good for `request_activation`.
 const ACTIVATION_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Marks a token asked for by an app without the keyboard: it can only
+/// flag its window urgent, not raise it.
+struct UnfocusedToken;
+
 impl smithay::wayland::xdg_activation::XdgActivationHandler for State {
     fn activation_state(&mut self) -> &mut smithay::wayland::xdg_activation::XdgActivationState {
         &mut self.xdg_activation_state
     }
 
-    /// Tokens are handed out freely; a recent one is enough to bring the
-    /// window forward, if its workspace is on a monitor. Otherwise (and for
-    /// stale tokens) it's flagged urgent instead: switching workspaces
-    /// under the user's hands is worse than a lit dock icon. (Tokens we
-    /// never issued don't reach here; smithay drops them.)
+    /// Tokens are handed out freely, but only one asked for by the app with
+    /// the keyboard, since the user's last input to it, may raise a window
+    /// (else a background app could mint its own and take the keyboard
+    /// while the user types elsewhere). Tokens we issue ourselves (the
+    /// shell's launches) don't come through here and count as focused.
+    fn token_created(
+        &mut self,
+        _token: smithay::wayland::xdg_activation::XdgActivationToken,
+        data: smithay::wayland::xdg_activation::XdgActivationTokenData,
+    ) -> bool {
+        let focused = self.seat.get_keyboard().is_some_and(|keyboard| {
+            let client_has_focus = keyboard
+                .current_focus()
+                .and_then(|surface| smithay::reexports::wayland_server::Resource::client(&surface))
+                .is_some_and(|client| Some(client.id()) == data.client_id);
+            let recent = match (&data.serial, keyboard.last_enter()) {
+                (Some((serial, _)), Some(enter)) => serial.is_no_older_than(&enter),
+                _ => false,
+            };
+            client_has_focus && recent
+        });
+        if !focused {
+            data.user_data.insert_if_missing(|| UnfocusedToken);
+        }
+        true
+    }
+
+    /// A recent, focused token brings the window forward, if its workspace
+    /// is on a monitor. Otherwise (and for stale or unfocused tokens) it's
+    /// flagged urgent instead: switching workspaces under the user's hands
+    /// is worse than a lit dock icon. (Tokens we never issued don't reach
+    /// here; smithay drops them.)
     fn request_activation(
         &mut self,
         token: smithay::wayland::xdg_activation::XdgActivationToken,
@@ -539,6 +581,9 @@ impl smithay::wayland::xdg_activation::XdgActivationHandler for State {
     ) {
         // One use each.
         self.xdg_activation_state.remove_token(&token);
+        if self.lock.is_locked() {
+            return;
+        }
         // Minimized windows aren't in the space, so ask the workspaces.
         let found = self.workspaces.list.iter().enumerate().find_map(|(index, ws)| {
             ws.windows
@@ -554,7 +599,8 @@ impl smithay::wayland::xdg_activation::XdgActivationHandler for State {
         let shown = outputs
             .iter()
             .any(|output| self.workspace_on(output) == Some(index));
-        if data.timestamp.elapsed() > ACTIVATION_TOKEN_TTL || !shown {
+        let unfocused = data.user_data.get::<UnfocusedToken>().is_some();
+        if unfocused || data.timestamp.elapsed() > ACTIVATION_TOKEN_TTL || !shown {
             if self.focused_window().as_ref() != Some(&window) {
                 tracing::debug!(id, "activation request: marking window urgent");
                 crate::window::with_state(&window, |s| s.urgent = true);

@@ -48,6 +48,8 @@ use crate::{
 
 /// Logical pixels, like a GNOME title bar.
 pub const HEIGHT: i32 = 38;
+/// The widest bar painted, logical pixels; wider windows stretch it.
+const MAX_WIDTH: i32 = 8192;
 /// The round buttons at the right end.
 const BUTTON: f32 = 24.0;
 const BUTTON_GAP: f32 = 8.0;
@@ -200,6 +202,9 @@ impl Decorations {
         if width <= 0 {
             return None;
         }
+        // The width is the client's to set: an absurd one mustn't size the
+        // bar's pixel buffer (stretched to the window if it's ever reached).
+        let width = width.min(MAX_WIDTH);
         let toplevel = window.toplevel()?;
         let current = toplevel.current_state();
         let focused = current.states.contains(XdgState::Activated);
