@@ -25,12 +25,17 @@ pub struct Icons {
     cache: HashMap<(String, u32), Option<Mask>>,
     /// Themes searched for app icons, in order.
     app_themes: Vec<String>,
-    /// (name, pixel size) -> rendered app icon. Bounded: cleared when full.
-    app_cache: HashMap<(String, u32), Option<tiny_skia::Pixmap>>,
+    /// (name, pixel size) -> rendered app icon, and when it was last used.
+    /// Bounded: the least recently used goes when full.
+    app_cache: HashMap<(String, u32), (Option<tiny_skia::Pixmap>, u64)>,
+    /// Counts app icon lookups, for `app_cache`'s last use.
+    app_uses: u64,
 }
 
-/// More app icons than this in the cache clears it (~4 MB at 2x scale).
-const APP_CACHE_LIMIT: usize = 96;
+/// App icons kept rendered (~12 MB of grid icons at 2x scale): two app
+/// grid pages and the dock fit with room, so sliding pages never renders
+/// an icon twice.
+const APP_CACHE_LIMIT: usize = 256;
 
 pub struct Mask {
     pub size: u32,
@@ -72,6 +77,7 @@ impl Icons {
             cache: HashMap::new(),
             app_themes,
             app_cache: HashMap::new(),
+            app_uses: 0,
         }
     }
 
@@ -79,16 +85,26 @@ impl Icons {
     /// absolute path), `size` device pixels square.
     pub fn app(&mut self, name: &str, size: u32) -> Option<&tiny_skia::Pixmap> {
         let key = (name.to_string(), size);
-        if !self.app_cache.contains_key(&key) {
-            if self.app_cache.len() >= APP_CACHE_LIMIT {
-                self.app_cache.clear();
+        self.app_uses += 1;
+        let now = self.app_uses;
+        if let Some(entry) = self.app_cache.get_mut(&key) {
+            entry.1 = now;
+        } else {
+            if self.app_cache.len() >= APP_CACHE_LIMIT
+                && let Some(oldest) = self
+                    .app_cache
+                    .iter()
+                    .min_by_key(|(_, (_, used))| *used)
+                    .map(|(k, _)| k.clone())
+            {
+                self.app_cache.remove(&oldest);
             }
             let pixmap = self
                 .find_app(name, size)
                 .and_then(|path| render_color(&path, size));
-            self.app_cache.insert(key.clone(), pixmap);
+            self.app_cache.insert(key.clone(), (pixmap, now));
         }
-        self.app_cache.get(&key)?.as_ref()
+        self.app_cache.get(&key)?.0.as_ref()
     }
 
     /// Scalable first, then the largest PNG at least `size`, else the largest.
