@@ -101,6 +101,9 @@ pub struct Overview {
     /// Every window, bottom to top, as stacked when it opened: the spread
     /// keeps this order, so a clicked window being raised doesn't move it.
     order: Vec<Window>,
+    /// The window picked as it closes: drawn over the rest as they zoom
+    /// back, though the spread (laid out by `order`) doesn't change.
+    front: Option<Window>,
     /// A window thumbnail held down: a click when let go, unless it was
     /// dragged, maybe onto another workspace's card.
     grab: Option<WindowGrab>,
@@ -211,6 +214,7 @@ impl Overview {
             drag: None,
             relayout: None,
             order: Vec::new(),
+            front: None,
             grab: None,
             landing: None,
         }
@@ -413,6 +417,7 @@ impl State {
         if open && self.overview.progress(Instant::now()) <= 0.0 {
             self.overview.order = self.stacking();
         }
+        self.overview.front = None;
         self.overview.set_open(open);
         // Closing from the grid: the thumbnails zoom back with the rest.
         self.overview.app_grid = false;
@@ -454,10 +459,10 @@ impl State {
             } else if self.focused_window().is_none() {
                 self.focus_window(next.as_ref());
             }
-            // Windows zoom back stacked as they now are, the one picked
-            // (raised above) already in front rather than jumping there at
-            // the end.
-            self.overview.order = self.stacking();
+            // The one picked zooms back in front. Only drawn so: a new
+            // order would lay the spread out anew, and windows would zoom
+            // back from places they never were.
+            self.overview.front = self.focused_window().or(self.overview.focus_after.clone());
         }
         // Windows stop (or start) taking pointer input.
         self.queue_pointer_refresh();
@@ -479,6 +484,7 @@ impl State {
             self.overview.anim = None;
             if !self.overview.open {
                 self.overview.order.clear();
+                self.overview.front = None;
             }
         }
         if self
@@ -752,6 +758,12 @@ impl State {
                 zoom: Zoom::mapping(rect, target),
                 workspace,
             });
+        }
+        if let Some(front) = &self.overview.front {
+            let (top, rest): (Vec<Placed>, Vec<Placed>) =
+                scene.windows.into_iter().partition(|p| p.window == *front);
+            scene.windows = rest;
+            scene.windows.extend(top);
         }
         // A dragged window rides on top of everything, on whichever
         // monitors it's over.
