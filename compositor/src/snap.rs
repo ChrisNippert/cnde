@@ -6,7 +6,7 @@
 //! second takes the space the first leaves, and dragging the edge they share
 //! resizes both. Each keeps `WindowState::snap_split` while linked.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use smithay::{
     backend::renderer::element::{
@@ -26,10 +26,8 @@ use crate::{
     window::{Placement, placement_rect_split, window_placement_rect, with_state},
 };
 
-/// How close (logical px) the pointer must get to an edge. Generous because,
-/// nested, the host stops sending motion once the pointer leaves our window.
-const EDGE_THRESHOLD: f64 = 10.0;
-/// Width of a side zone along the top edge that still means "snap to side".
+/// Width of a side zone along the top edge that still means "snap to side"
+/// (at least the snap edge, `[snap] edge`).
 const CORNER_SIZE: f64 = 48.0;
 
 /// An existing snap narrower than this fraction of the usable width isn't
@@ -43,6 +41,100 @@ const PREVIEW_COLOR: [f32; 4] = [0.35, 0.55, 0.95, 1.0];
 const PREVIEW_FILL_ALPHA: f32 = 0.25;
 const PREVIEW_BORDER_ALPHA: f32 = 0.7;
 const PREVIEW_BORDER_WIDTH: i32 = 2;
+
+/// How long the snap zones stay up after `[snap] edge` changes (Settings'
+/// slider), then how long they fade.
+const HINT_HOLD: Duration = Duration::from_millis(1200);
+const HINT_FADE: Duration = Duration::from_millis(300);
+
+/// Every monitor's snap zones, lit for a moment when their size changes, so
+/// the slider shows what it does.
+pub struct EdgeHint {
+    since: Instant,
+    /// Left, right, top.
+    zones: [SolidColorBuffer; 3],
+}
+
+impl EdgeHint {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            since: now,
+            zones: std::array::from_fn(|_| SolidColorBuffer::new(Size::default(), PREVIEW_COLOR)),
+        }
+    }
+
+    pub fn is_animating(&self, now: Instant) -> bool {
+        now < self.since + HINT_HOLD + HINT_FADE
+    }
+
+    /// The zones within `area` (a monitor's usable area, global), `edge` px
+    /// deep, with `output_loc` subtracted.
+    pub fn render_elements(
+        &mut self,
+        area: Rectangle<i32, Logical>,
+        edge: i32,
+        output_loc: Point<i32, Logical>,
+        scale: Scale<f64>,
+        now: Instant,
+    ) -> Vec<SolidColorRenderElement> {
+        let gone = now.saturating_duration_since(self.since + HINT_HOLD);
+        let level = 1.0 - (gone.as_secs_f32() / HINT_FADE.as_secs_f32()).min(1.0);
+        if level <= 0.0 {
+            return Vec::new();
+        }
+        let a = Rectangle::new(area.loc - output_loc, area.size);
+        let edge = edge.min(a.size.w / 2).min(a.size.h);
+        let rects = [
+            Rectangle::new(a.loc, Size::from((edge, a.size.h))),
+            Rectangle::new(
+                (a.loc.x + a.size.w - edge, a.loc.y).into(),
+                Size::from((edge, a.size.h)),
+            ),
+            // Between the sides, so the corners aren't lit twice.
+            Rectangle::new(
+                (a.loc.x + edge, a.loc.y).into(),
+                Size::from((a.size.w - 2 * edge, edge)),
+            ),
+        ];
+        self.zones
+            .iter_mut()
+            .zip(rects)
+            .map(|(buffer, rect)| {
+                buffer.resize(rect.size);
+                SolidColorRenderElement::from_buffer(
+                    buffer,
+                    rect.loc.to_physical_precise_round(scale),
+                    scale,
+                    PREVIEW_BORDER_ALPHA * level,
+                    Kind::Unspecified,
+                )
+            })
+            .collect()
+    }
+}
+
+impl State {
+    /// The snap zones on `output`, while they're lit (see `EdgeHint`).
+    pub fn edge_hint_elements(
+        &mut self,
+        output: &Output,
+        now: Instant,
+    ) -> Vec<crate::render::OutputElement> {
+        let (Some(area), Some(geo)) = (self.usable_area(output), self.space.output_geometry(output))
+        else {
+            return Vec::new();
+        };
+        let edge = self.config.snap.edge as i32;
+        let scale = Scale::from(output.current_scale().fractional_scale());
+        let Some(hint) = &mut self.edge_hint else {
+            return Vec::new();
+        };
+        hint.render_elements(area, edge, geo.loc, scale, now)
+            .into_iter()
+            .map(crate::render::OutputElement::Solid)
+            .collect()
+    }
+}
 
 pub struct SnapPreview {
     pub target: Placement,
@@ -107,21 +199,24 @@ impl SnapPreview {
     }
 }
 
-/// Which placement a drag ending at `pointer` would snap to within `area`.
+/// Which placement a drag ending at `pointer` would snap to within `area`,
+/// snapping within `edge` logical px of its sides and top.
 pub fn snap_target(
     pointer: Point<f64, Logical>,
     area: Rectangle<i32, Logical>,
+    edge: f64,
 ) -> Option<Placement> {
     let area = area.to_f64();
     let left = pointer.x - area.loc.x;
     let right = area.loc.x + area.size.w - pointer.x;
     let top = pointer.y - area.loc.y;
+    let corner = CORNER_SIZE.max(edge);
 
-    if left <= EDGE_THRESHOLD || (top <= EDGE_THRESHOLD && left <= CORNER_SIZE) {
+    if left <= edge || (top <= edge && left <= corner) {
         Some(Placement::SnappedLeft)
-    } else if right <= EDGE_THRESHOLD || (top <= EDGE_THRESHOLD && right <= CORNER_SIZE) {
+    } else if right <= edge || (top <= edge && right <= corner) {
         Some(Placement::SnappedRight)
-    } else if top <= EDGE_THRESHOLD {
+    } else if top <= edge {
         Some(Placement::Maximized)
     } else {
         None
@@ -249,7 +344,7 @@ impl State {
         // Snap within what panels leave free, like maximize does.
         let area = output.as_ref().and_then(|o| self.usable_area(o));
         let target = area
-            .and_then(|area| snap_target(pointer, area))
+            .and_then(|area| snap_target(pointer, area, self.config.snap.edge as f64))
             .filter(|t| !(was_tile && *t == Placement::Maximized));
 
         let current = self
@@ -301,7 +396,7 @@ mod tests {
 
     #[test]
     fn edges_map_to_placements() {
-        let at = |x, y| snap_target(Point::from((x, y)), area());
+        let at = |x, y| snap_target(Point::from((x, y)), area(), 10.0);
         assert_eq!(at(960.0, 0.0), Some(Placement::Maximized));
         assert_eq!(at(0.0, 500.0), Some(Placement::SnappedLeft));
         assert_eq!(at(1919.0, 500.0), Some(Placement::SnappedRight));
@@ -310,7 +405,7 @@ mod tests {
 
     #[test]
     fn top_corners_prefer_sides() {
-        let at = |x, y| snap_target(Point::from((x, y)), area());
+        let at = |x, y| snap_target(Point::from((x, y)), area(), 10.0);
         assert_eq!(at(20.0, 0.0), Some(Placement::SnappedLeft));
         assert_eq!(at(1900.0, 0.0), Some(Placement::SnappedRight));
     }

@@ -41,6 +41,8 @@ pub struct Config {
     pub tiling: Tiling,
     /// How workspaces relate to monitors.
     pub workspaces: Workspaces,
+    /// Snapping windows dragged to a monitor's edges.
+    pub snap: Snap,
     /// Switching to the dark style and back by the time of day.
     pub dark_mode: DarkMode,
     /// A warm colour filter, on a schedule.
@@ -945,6 +947,21 @@ pub enum WorkspaceMode {
     Individual,
 }
 
+/// `[snap]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Snap {
+    /// Logical pixels from a monitor's side or top within which a dragged
+    /// window snaps (to that half, or maximized), 2 to 96.
+    pub edge: u32,
+}
+
+impl Default for Snap {
+    fn default() -> Self {
+        Self { edge: 10 }
+    }
+}
+
 /// Hyprland-style master-stack tiling (ARCHITECTURE.md §4.4). Each
 /// workspace can be switched with Super+T; until then it uses `layout`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1108,6 +1125,7 @@ impl Config {
             48.0,
         )?;
         in_range("tiling.gap", self.tiling.gap as f64, 0.0, 64.0)?;
+        in_range("snap.edge", self.snap.edge as f64, 2.0, 96.0)?;
         in_range("tiling.outer_gap", self.tiling.outer_gap as f64, 0.0, 128.0)?;
         in_range(
             "input.touchpad.workspace_swipe_distance",

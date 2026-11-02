@@ -128,6 +128,8 @@ pub struct State {
     pub pending_quick_shot: Option<String>,
     /// Drag-to-edge preview while a window is being moved.
     pub snap_preview: Option<SnapPreview>,
+    /// The snap zones, lit a moment after their size changes.
+    pub edge_hint: Option<crate::snap::EdgeHint>,
     pub popups: PopupManager,
 
     pub seat: Seat<Self>,
@@ -272,6 +274,7 @@ impl State {
             screenshot: Default::default(),
             pending_quick_shot: None,
             snap_preview: None,
+            edge_hint: None,
             popups: PopupManager::default(),
 
             seat,

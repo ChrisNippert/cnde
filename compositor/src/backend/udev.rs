@@ -821,6 +821,16 @@ impl State {
                 .and_then(|surface| self.bar_tint(&surface.output)),
             Backend::Winit(_) => None,
         };
+        let edge_hint = match &self.backend {
+            Backend::Udev(udev) => udev
+                .gpu
+                .as_ref()
+                .and_then(|gpu| gpu.surfaces.get(&crtc))
+                .map(|surface| surface.output.clone()),
+            Backend::Winit(_) => None,
+        }
+        .map(|output| self.edge_hint_elements(&output, now))
+        .unwrap_or_default();
         let Backend::Udev(udev) = &mut self.backend else {
             return;
         };
@@ -928,7 +938,7 @@ impl State {
                 ),
                 None => Vec::new(),
             };
-            let over_windows = match (
+            let mut over_windows: Vec<_> = match (
                 scene.as_ref().and_then(|s| s.close.as_ref()),
                 self.space.output_geometry(&output),
             ) {
@@ -945,6 +955,7 @@ impl State {
                     .collect(),
                 _ => Vec::new(),
             };
+            over_windows.extend(edge_hint);
             elements.extend(render::output_elements(
                 &mut gpu.renderer,
                 &self.space,
@@ -1084,6 +1095,7 @@ impl State {
             &self.closing,
             self.snap_preview.as_ref(),
             self.workspaces.is_moving()
+                || self.edge_hint.as_ref().is_some_and(|h| h.is_animating(now))
                 || self.overview.is_animating(now)
                 || self.switcher.is_animating(now)
                 || self.popup_anims.is_animating(now)

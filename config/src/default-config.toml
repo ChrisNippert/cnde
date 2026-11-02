@@ -108,6 +108,9 @@
 # gap = 8                  # px between tiled windows (0-64)
 # outer_gap = 8            # px between tiled windows and the screen's edges (0-128)
 
+[snap]
+# edge = 10                # px from a monitor's side or top where a dragged window snaps (2-96)
+
 [workspaces]
 # mode = "continuous"      # "continuous": one strip, monitors show consecutive workspaces and switch together; "individual": every monitor has its own workspaces and switching moves only the monitor you used last
 

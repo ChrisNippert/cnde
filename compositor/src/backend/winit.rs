@@ -172,6 +172,12 @@ impl State {
             Backend::Winit(winit) => self.bar_tint(&winit.output),
             Backend::Udev(_) => None,
         };
+        let edge_hint = match &self.backend {
+            Backend::Winit(winit) => Some(winit.output.clone()),
+            Backend::Udev(_) => None,
+        }
+        .map(|output| self.edge_hint_elements(&output, now))
+        .unwrap_or_default();
 
         // Why age 0 (full redraw): smithay 0.7's winit `buffer_age()` needs the EGL
         // surface current, which it often isn't between frames, so it fails with
@@ -227,7 +233,7 @@ impl State {
                 ),
                 None => Vec::new(),
             };
-            let over_windows = match (scene.as_ref().and_then(|s| s.close.as_ref()), output_geo) {
+            let mut over_windows: Vec<_> = match (scene.as_ref().and_then(|s| s.close.as_ref()), output_geo) {
                 (Some(close), Some(geo)) => self
                     .decorations
                     .close_button(
@@ -241,6 +247,7 @@ impl State {
                     .collect(),
                 _ => Vec::new(),
             };
+            over_windows.extend(edge_hint);
             let frozen = self.screenshot.frozen_element(&backend.output);
             let locked = self.lock.is_locked();
             let mut elements = if locked {
@@ -397,6 +404,7 @@ impl State {
             &self.closing,
             self.snap_preview.as_ref(),
             self.workspaces.is_moving()
+                || self.edge_hint.as_ref().is_some_and(|h| h.is_animating(now))
                 || self.overview.is_animating(now)
                 || self.switcher.is_animating(now)
                 || self.popup_anims.is_animating(now)

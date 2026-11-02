@@ -2126,87 +2126,106 @@ fn tiling_style(v: cnde_config::TilingStyle) -> Value {
 fn windows(c: &Config, d: &Config) -> Vec<Group> {
     let (t, dt) = (&c.tiling, &d.tiling);
     let px = |v: f64| format!("{v:.0} px");
-    vec![group(
-        "Tiling",
-        vec![
-            Row::new(
-                "tiling.layout",
-                "Tiling",
-                Control::Segmented(choices(&[
-                    ("Floating", s("floating")),
-                    ("Tiling", s("tiling")),
-                ])),
-                window_layout(t.layout),
-                window_layout(dt.layout),
-            )
-            .sub("Tiled windows share the screen without overlapping. Applies to every workspace unless Super+T is set to one workspace"),
-            Row::new(
-                "tiling.toggle",
-                "Super+T toggles",
-                Control::Segmented(choices(&[
-                    ("All workspaces", s("all")),
-                    ("This workspace", s("workspace")),
-                ])),
-                tiling_toggle(t.toggle),
-                tiling_toggle(dt.toggle),
-            )
-            .sub("With one workspace, the Tiling setting is how new workspaces start"),
-            Row::new(
-                "tiling.style",
-                "Tiling style",
-                Control::Segmented(choices(&[
-                    ("Split", s("dwindle")),
-                    ("Main + Stack", s("master")),
-                ])),
-                tiling_style(t.style),
-                tiling_style(dt.style),
-            )
-            .sub("Split halves the last window for each new one; Main + Stack stacks the rest beside one main window"),
-            Row::new(
-                "tiling.master_ratio",
-                "First window width",
+    vec![
+        group(
+            "Snapping",
+            vec![Row::new(
+                "snap.edge",
+                "Snap zone",
                 Control::Slider {
-                    min: 0.1,
-                    max: 0.9,
-                    step: 0.05,
-                    int: false,
-                    format: |v| format!("{:.0}%", v * 100.0),
-                },
-                Value::Float(t.master_ratio),
-                Value::Float(dt.master_ratio),
-            )
-            .sub("Super+[ and Super+] change it for one workspace"),
-            Row::new(
-                "tiling.gap",
-                "Gaps",
-                Control::Slider {
-                    min: 0.0,
-                    max: 64.0,
+                    min: 2.0,
+                    max: 96.0,
                     step: 1.0,
                     int: true,
                     format: px,
                 },
-                Value::Int(t.gap as i64),
-                Value::Int(dt.gap as i64),
+                Value::Int(c.snap.edge as i64),
+                Value::Int(d.snap.edge as i64),
             )
-            .sub("Space between tiled windows"),
-            Row::new(
-                "tiling.outer_gap",
-                "Screen edge gaps",
-                Control::Slider {
-                    min: 0.0,
-                    max: 128.0,
-                    step: 1.0,
-                    int: true,
-                    format: px,
-                },
-                Value::Int(t.outer_gap as i64),
-                Value::Int(dt.outer_gap as i64),
-            )
-            .sub("Space between tiled windows and the edges of the screen")
-            .advanced(),
-        ],
-    )]
+            .sub("How near a monitor's side or top a dragged window snaps. Shown on every monitor as you change it")],
+        ),
+        group(
+            "Tiling",
+            vec![
+                Row::new(
+                    "tiling.layout",
+                    "Tiling",
+                    Control::Segmented(choices(&[
+                        ("Floating", s("floating")),
+                        ("Tiling", s("tiling")),
+                    ])),
+                    window_layout(t.layout),
+                    window_layout(dt.layout),
+                )
+                .sub("Tiled windows share the screen without overlapping. Applies to every workspace unless Super+T is set to one workspace"),
+                Row::new(
+                    "tiling.toggle",
+                    "Super+T toggles",
+                    Control::Segmented(choices(&[
+                        ("All workspaces", s("all")),
+                        ("This workspace", s("workspace")),
+                    ])),
+                    tiling_toggle(t.toggle),
+                    tiling_toggle(dt.toggle),
+                )
+                .sub("With one workspace, the Tiling setting is how new workspaces start"),
+                Row::new(
+                    "tiling.style",
+                    "Tiling style",
+                    Control::Segmented(choices(&[
+                        ("Split", s("dwindle")),
+                        ("Main + Stack", s("master")),
+                    ])),
+                    tiling_style(t.style),
+                    tiling_style(dt.style),
+                )
+                .sub("Split halves the last window for each new one; Main + Stack stacks the rest beside one main window"),
+                Row::new(
+                    "tiling.master_ratio",
+                    "First window width",
+                    Control::Slider {
+                        min: 0.1,
+                        max: 0.9,
+                        step: 0.05,
+                        int: false,
+                        format: |v| format!("{:.0}%", v * 100.0),
+                    },
+                    Value::Float(t.master_ratio),
+                    Value::Float(dt.master_ratio),
+                )
+                .sub("Super+[ and Super+] change it for one workspace"),
+                Row::new(
+                    "tiling.gap",
+                    "Gaps",
+                    Control::Slider {
+                        min: 0.0,
+                        max: 64.0,
+                        step: 1.0,
+                        int: true,
+                        format: px,
+                    },
+                    Value::Int(t.gap as i64),
+                    Value::Int(dt.gap as i64),
+                )
+                .sub("Space between tiled windows"),
+                Row::new(
+                    "tiling.outer_gap",
+                    "Screen edge gaps",
+                    Control::Slider {
+                        min: 0.0,
+                        max: 128.0,
+                        step: 1.0,
+                        int: true,
+                        format: px,
+                    },
+                    Value::Int(t.outer_gap as i64),
+                    Value::Int(dt.outer_gap as i64),
+                )
+                .sub("Space between tiled windows and the edges of the screen")
+                .advanced(),
+            ],
+        ),
+    ]
 }
 
 fn clock_position(v: cnde_config::ClockPosition) -> Value {

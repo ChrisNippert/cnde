@@ -175,6 +175,11 @@ impl State {
             self.normalize_workspaces();
             self.queue_redraw();
         }
+        // Settings' slider: show every monitor's zones at their new size.
+        if old.is_some_and(|old| old.snap != self.config.snap) {
+            self.edge_hint = Some(crate::snap::EdgeHint::new(std::time::Instant::now()));
+            self.queue_redraw();
+        }
         if let Some(old) = old.filter(|old| old.tiling != self.config.tiling) {
             self.tiling_config_changed(&old.tiling);
         }
