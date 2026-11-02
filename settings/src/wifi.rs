@@ -181,7 +181,7 @@ impl Phase2 {
 
 /// Everything needed to join a network that isn't saved (or to replace
 /// what's saved).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct Join {
     pub ssid: String,
     /// Doesn't announce itself: look for it by name.
@@ -199,6 +199,25 @@ pub struct Join {
     pub domain: String,
     pub client_cert: String,
     pub private_key: String,
+}
+
+/// Without the password: commands are logged.
+impl std::fmt::Debug for Join {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Join")
+            .field("ssid", &self.ssid)
+            .field("hidden", &self.hidden)
+            .field("security", &self.security)
+            .field("password", &if self.password.is_empty() { "" } else { "<hidden>" })
+            .field("eap", &self.eap)
+            .field("phase2", &self.phase2)
+            .field("identity", &self.identity)
+            .field("ca_cert", &self.ca_cert)
+            .field("domain", &self.domain)
+            .field("client_cert", &self.client_cert)
+            .field("private_key", &self.private_key)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Join {
