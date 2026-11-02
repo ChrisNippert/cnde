@@ -1,93 +1,85 @@
-# Known issues and polish backlog
+# Known issues
 
-Things we know about and chose to defer. Fix them in a polish pass; delete
-entries when they're done.
+What we know is broken, missing or untested. Delete entries when they're
+fixed; add one when you defer something.
+
+## Beta caveats
+
+- **Tested on one setup.** Daily use is on AMD (Mesa radeonsi) with a
+  2560x1440 180 Hz and a 1920x1080 165 Hz monitor. Intel was last tried on
+  an older build; **NVIDIA hasn't been tried at all**.
+- **Multi-GPU laptops** (render on one GPU, display on another) aren't
+  supported; only the primary GPU is driven.
+- **No screen reader support.** cnde's own surfaces (bar, dock, Settings,
+  Files) aren't exposed to AT-SPI yet. Zoom and high contrast don't exist.
+- **No input methods** (text-input / input-method), so IMEs for Chinese,
+  Japanese, Korean and other languages don't work in Wayland apps yet.
+- **No primary selection** (middle-click paste).
+
+## Security (from the November 2026 audit, still open)
+
+The serious findings were fixed. These are lower risk and known:
+
+- **Lock screen:** no brute-force lockout beyond pam_unix's delay (add
+  `pam_faillock` to `/etc/pam.d/cnde-lock` if you want one). The locker is
+  told "locked" after the first monitor shows a locked frame, so another
+  monitor may show the desktop for a frame or two longer.
+- **Native apps are trusted:** any unsandboxed app of yours can use the IPC
+  socket (window list, lock, log out, activation tokens) and capture the
+  screen. Sandboxed (Flatpak) apps can't.
+- **X11:** the abstract X11 socket's access control is xwayland-satellite's
+  and Xwayland's defaults; not yet checked on multi-user machines.
+- **Polkit prompt** shows polkit's message and the user, not the action id
+  or details, and doesn't check that the request came from polkitd.
+- **Bluetooth pairing** accepts without showing the confirmation number
+  (no protection against a nearby device impersonating the one you picked).
+- **Limits not yet set** on tray items registered and on concurrent file
+  pickers a sandboxed app can open.
+- **install.sh** builds as root if run with sudo; build as yourself first and
+  run `sudo sh packaging/install.sh --no-build`.
 
 ## Bugs
 
 - **Stale frame flash when dragging a window off fullscreen/maximized.**
-  Rare (about 1 in 20 tries, seen with alacritty, real hardware). The window is
-  shown squeezed to its new size until the client acks the configure *and*
-  changes size, or 500 ms pass (`PendingSize` in `effects.rs`). Something still
-  lets one full-size frame through. Suspects: a commit that changes size to an
-  intermediate value; the rect briefly using the live geometry between
-  `map_element` and the first render; multi-output render ordering.
+  Rare (about 1 in 20 tries, seen with alacritty). The window is shown
+  squeezed to its new size until the client acks the configure *and*
+  changes size, or 500 ms pass (`PendingSize` in `effects.rs`). Something
+  still lets one full-size frame through.
+- **Fullscreen X11 games may not get direct scanout**, so they're
+  composited (a little more latency and GPU time). The compositor logs
+  `direct scanout` per monitor when it changes; a Proton game was seen
+  never reaching it.
+- **Some Proton games unmap themselves when they lose focus** (Wine
+  minimizes; xwayland-satellite has no iconify), so they drop off the dock
+  until clicked back.
 
 ## Rough edges
 
-- **Lock screen** (Super+L, `cnde-lock`) is tested only in a nested session
-  with a test password: real PAM, multiple monitors and the udev backend are
-  untested. No idle lock or lock-before-suspend yet (logind's Lock signal),
-  and no fingerprint.
-
-- **Maximized windows crossing monitors of different resolution** visibly
-  change as the app redraws at the new size when a workspace slide settles.
-  The squeeze (`PendingSize`) keeps it from overflowing, but a crossfade from
-  a snapshot (like the maximize animation's) would hide the redraw entirely.
-
-- **Overview polish:** windows closing while it's open animate at their
-  unzoomed spot; windows on hidden workspaces don't update live; the search
-  box is only on the main monitor; no app grid button yet; no hover
-  highlight on windows.
-- **cnde's title bars** (`appearance.titlebars = "cnde"`) are new: the bar
-  vanishes at once when a window closes instead of fading with it; the
-  window's bottom corners stay square; X11 apps get no bar yet; there's no
-  minimize button (nothing to minimize to). Apps that ask to draw their own
-  (GNOME apps' header bars) keep theirs.
-- **Frosted dock** frosts the wallpaper only, not windows behind it.
-- **Wi-Fi settings** were tried against NetworkManager (reading networks
-  and connection details only); iwd and actually joining networks haven't
-  been tried yet, and enterprise (802.1X) and WEP joining are checked only by
-  tests of the settings sent. With iwd, enterprise networks must first be set
-  up as root in /var/lib/iwd (iwd's rule), and WEP isn't supported. Changing
-  Wi-Fi may need polkit rules when there's no logind session.
-- **Three-finger swipes up and down** and the **launch feedback** haven't
-  been tried on real hardware yet (the busy pointer only shows on a real
-  session, not nested).
-- **Right-click menus and edit mode** haven't been tried with a real mouse
-  yet (only rendered nested). Moving the dock by its grip outlines where it'll
-  land, but the dock itself jumps there on release rather than sliding. A clock
-  dragged in edit mode follows the pointer but only lands in thirds of the bar.
-- **App grid:** fades in, but going back from it is instant (the shell's
-  surface shrinks to the search box at once); the workspace thumbnails do
-  animate both ways.
-- **Settings app:** no resize cursors at the window edges (the compositor
-  lacks cursor-shape-v1); no keyboard navigation between controls (Tab) and
-  no AccessKit yet; the light style isn't drawn (the switch only picks the
-  wallpaper); dock favorites and autostart aren't editable in the GUI yet;
-  no "add picture" for wallpapers (needs a file chooser); thumbnails are
-  decoded on every launch; a second launch opens a second window.
-- **Screenshots:** no "saved" notification yet (notifications don't exist);
-  a region can't span two monitors (it's cut to the one holding its
-  centre); no option to include the pointer; pasting from the clipboard
-  hasn't been tested with a real app yet.
-- **Dock:** no name tooltips yet, no right-click menu (pin/unpin, quit),
-  no drag to reorder; favorites are edited in the config. The intellihide
-  and autohide options are accepted but act as "always". Edge docks are on
-  the main monitor only.
-- **Wallpaper changes** swap instantly instead of crossfading.
-
 - **Screen capture:**
-  - Any client can capture the screen (as with wlroots compositors); a
-    permission prompt and a "screen is shared" indicator should come with
-    our own portal.
-  - A captured window on a hidden workspace doesn't get frame callbacks,
-    so most apps stop drawing and the share freezes until it's shown.
+  - Native (unsandboxed) apps can capture the screen without asking, as
+    with wlroots compositors. Sandboxed apps can't and must go through the
+    portal.
+  - A captured window on a hidden workspace doesn't get frame callbacks, so
+    most apps stop drawing and the share freezes until it's shown.
   - Captures always report full damage, so encoders redo the whole frame.
-  - The GPU (dma-buf) capture path hasn't been seen working yet; the shm
-    path was checked end to end with a test client.
   - With GNOME running in another session on the same systemd user bus,
     start cnde under `dbus-run-session`, or apps get GNOME's portal.
-
-- **Monitor names:** make and model are "Unknown"; `smithay-drm-extras`'s EDID
-  feature needs an older libdisplay-info than Arch ships.
-- **Multi-GPU laptops** (render on one GPU, display on another) aren't supported;
-  only the primary GPU is driven.
+- **Wi-Fi:** joining has been tried with NetworkManager. iwd and enterprise
+  (802.1X) joining are only covered by tests of the settings sent. With iwd,
+  enterprise networks must first be set up as root in /var/lib/iwd, and WEP
+  isn't supported.
+- **Maximized windows crossing monitors of different resolution** visibly
+  redraw at the new size when a workspace slide settles. A crossfade from a
+  snapshot would hide it.
+- **Screenshots:** a region can't span two monitors (it's cut to the one
+  holding its centre).
+- **Monitor names:** make and model are "Unknown". `smithay-drm-extras`'s
+  EDID feature needs an older libdisplay-info than Arch ships.
 - **Animated cursors** (e.g. "wait") only advance when something else redraws.
 - **Popups of layer surfaces** (waybar tray menus) aren't constrained to the screen.
 - **Cursor images** use buffer scale 1, so they're blurry on scaled outputs.
 - **Frame pacing:** we render right at vblank rather than as late as is safe
-  before the next one (ARCHITECTURE.md §4.2's "frame clock"). Fine at 165/180 Hz;
-  revisit with Tracy data.
-- **Config errors** are only logged; they should show as a notification once
-  the shell exists.
+  before the next one (ARCHITECTURE.md §4.2's "frame clock"). Fine at
+  165/180 Hz; worth revisiting for latency.
+- **Vertically stacked monitors** get a fallback workspace mapping, not a
+  designed one (ARCHITECTURE.md §5.2).

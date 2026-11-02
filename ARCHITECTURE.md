@@ -11,12 +11,19 @@ A Wayland desktop environment that:
 - **Feels like GNOME.** It's smooth, animations come from the compositor, and the defaults are minimal and look finished.
 - **Weighs less than Xfce.** Target is **≤ 300 MB total idle RAM after login**.
 - **Is extensible like KDE**, but only on request. Extensions cost nothing when none are installed.
-- **Ships no apps.** No file manager, terminal, text editor or software store. Users bring their own.
+- **Ships only what a desktop needs.** A settings app, a lock screen, a
+  screen-share picker and a light file manager (which is also the file
+  picker apps open). No terminal, text editor or software store; users bring
+  their own, and every built-in piece can be swapped for another program.
+
+Measured (November 2026, two monitors, idle): the compositor uses about
+138 MB PSS (much of it the GL driver), the shell about 25 MB, and both close
+to 0% CPU.
 
 ### Non-goals
 
 - An X11 session. Wayland only. X11 *apps* still run through XWayland (see §7).
-- Bundled applications. We ship a settings app only because a desktop needs one.
+- A suite of bundled applications beyond the ones above.
 - Supporting every niche Wayland protocol on day one.
 
 ## 2. Process model
@@ -30,7 +37,9 @@ long-lived processes**, plus helpers that start only when needed.
 | `cnde-shell` | whole session; auto-restarted | Panel, launcher, overview UI, notifications, OSDs, quick settings, polkit prompts | ≤ 80 MB |
 | `cnde-lock` | while locked | Lock screen (ext-session-lock client) | small, exits on unlock |
 | `cnde-settings` | on demand | Settings app | exits when closed |
-| `xdg-desktop-portal-cnde` | started by D-Bus activation | Screenshots, screencast, output config for portals | small |
+| `cnde-files` | on demand | File manager; owns `org.freedesktop.FileManager1` while running | exits when closed |
+| `cnde-files-portal` | started by D-Bus activation | FileChooser portal backend (opens `cnde-files --pick`) | small |
+| `cnde-share-picker` | per screen-share request | Picks the monitor or window for xdg-desktop-portal-wlr | exits after picking |
 | `xwayland-satellite` | started on first X11 client | XWayland bridge | only if X11 apps are used |
 
 **Modular installs**
@@ -68,19 +77,24 @@ One Cargo workspace:
 
 ```
 cnde/
+├── README.md
 ├── ARCHITECTURE.md
+├── KNOWN_ISSUES.md
 ├── Cargo.toml              # workspace
 ├── compositor/             # cnde-compositor (smithay)
 ├── shell/                  # cnde-shell
 ├── lock/                   # cnde-lock
 ├── settings/               # cnde-settings
-├── portal/                 # xdg-desktop-portal-cnde
+├── files/                  # cnde-files and cnde-files-portal
+├── share-picker/           # cnde-share-picker
 ├── ui/                     # shared crate: our widget toolkit (see §5.1)
+├── apps/                   # shared crate: .desktop entries, MIME defaults, launching
 ├── ipc/                    # shared crate: compositor <-> shell/settings protocol types
-├── config/                 # shared crate: config schema, load/save, defaults
-├── data/                   # session file, desktop entries, portal configs
+├── config/                 # shared crate: config schema, load/save, defaults, data paths
+├── data/                   # session file, desktop entries, portal configs, PAM file
 ├── icons/                  # cnde's symbolic icon theme (and its generator)
-└── packaging/              # distro packages (Arch split PKGBUILD)
+├── tools/                  # development tools (tools/perf: performance sampling)
+└── packaging/              # Arch split PKGBUILD; install.sh for other distros
 ```
 
 ## 4. Compositor
@@ -127,18 +141,26 @@ These are requirements, not polish:
 - **Overview** (Super key): workspaces plus scaled window thumbnails, rendered by the compositor and animated with springs. The search box is drawn by the shell on a layer surface over it.
 - **Decorations:** prefer client-side decorations (GTK and libadwaita apps draw their own). Draw minimal server-side titlebars for clients that ask for them (via `xdg-decoration`).
 
-### 4.5 Wayland protocols (initial set)
+### 4.5 Wayland protocols
 
 Core: `wl_compositor`, `wl_subcompositor`, `wl_shm`, `xdg_shell`, `wl_seat`, `wl_data_device`, `wl_output` plus `xdg_output`.
 
-Required for a usable desktop:
+Implemented:
 `linux-dmabuf`, `viewporter`, `fractional-scale`, `presentation-time`,
-`xdg-decoration`, `wlr-layer-shell`, `ext-session-lock`, `idle-notify`,
-`idle-inhibit`, `primary-selection`, `pointer-constraints`,
-`relative-pointer`, `text-input` / `input-method` (IMEs), `xdg-activation`,
-`foreign-toplevel` (ext and wlr), `wlr-screencopy` / `ext-image-copy-capture`,
-`wlr-output-management`, `cursor-shape`, `single-pixel-buffer`,
+`xdg-decoration`, `xdg-dialog`, `wlr-layer-shell`, `ext-session-lock`,
+`idle-notify`, `idle-inhibit`, `pointer-constraints`, `relative-pointer`,
+`xdg-activation`, `ext-foreign-toplevel-list`, `ext-image-copy-capture`
+(with `ext-image-capture-source`), `ext-workspace`, `cursor-shape`,
 `security-context`.
+
+Wanted, not yet implemented: `primary-selection`, `text-input` /
+`input-method` (IMEs), `wlr-output-management`, `single-pixel-buffer`,
+`tearing-control`.
+
+**Sandboxed clients.** A client that connects through a
+`security-context` socket (Flatpak) doesn't see the privileged globals:
+layer-shell, session-lock, the image-capture and foreign-toplevel globals,
+and ext-workspace (`State::client_is_unrestricted`).
 
 Add others when a real app needs them, not speculatively.
 
@@ -184,8 +206,9 @@ so all three look like one product.
   not the client.
 - **Text:** `cosmic-text` for shaping, layout and editing, plus `text-input-v3`
   for input methods.
-- **Accessibility:** `AccessKit` (AT-SPI on Linux) from the start. Retrofitting
-  it later is far harder.
+- **Accessibility:** `AccessKit` (AT-SPI on Linux) is the plan, but it is
+  **not wired in yet**: no cnde surface is visible to a screen reader today.
+  The longer this waits, the harder it gets.
 - **Widget set:** only what we need, grown on demand. Label, button, toggle,
   slider, list row, text entry, scroll view, popover, icon.
 - **Model:** immediate mode. A client repaints its whole surface when something
@@ -305,8 +328,8 @@ Every default listed here can be rebound or reconfigured.
 - **Privacy indicators:** a small, minimal icon in the panel while the mic,
   camera, or screen capture is active. Sources: PipeWire stream state and our
   own portal or screencopy sessions.
-- **Network: deferred past v1, but designed now.** The shell talks to a
-  `NetworkBackend` trait with one implementation per daemon:
+- **Network:** a Wi-Fi tile in quick settings and a Wi-Fi page in Settings.
+  They talk to a `NetworkBackend` trait with one implementation per daemon:
   **NetworkManager** (desktop) and **iwd** (laptop; with
   `EnableNetworkConfiguration=true` so it handles DHCP itself). NM can itself
   run on iwd, so these two cover nearly everything. ConnMan and raw
@@ -369,14 +392,12 @@ Every default listed here can be rebound or reconfigured.
   unpin, drag the move grip to a screen edge, −/+ or the wheel for icon size. Bar:
   drag the bottom edge for height, drag the clock to the left, centre or right.
 
-### 5.4 Explicitly not in v1
+### 5.4 Explicitly not in the beta
 
-- Accessibility *features* (zoom, high contrast, screen reader workflows).
-  Note: the `ui` toolkit still wires in AccessKit from the start (§5.1).
-  It's cheap to do now and painful to retrofit.
+- Accessibility *features* (zoom, high contrast, screen reader workflows),
+  and AccessKit itself (§5.1).
 - Fingerprint unlock (see the lock screen above).
-- Wi-Fi / network UI (see quick settings above).
-- Screen recording.
+- Screen recording (use OBS through the ScreenCast portal).
 - Clipboard history.
 
 ## 6. Compositor ↔ shell IPC
@@ -391,7 +412,11 @@ Every default listed here can be rebound or reconfigured.
 ## 7. Other system integration
 
 - **XWayland:** run `xwayland-satellite` on demand, as niri does. This keeps X11 code out of the compositor.
-- **Portals:** `xdg-desktop-portal-cnde` implements Screenshot, ScreenCast (via PipeWire) and RemoteDesktop (later). FileChooser and other portals are delegated to `xdg-desktop-portal-gtk`.
+- **Portals** (`data/cnde-portals.conf`): Screenshot and ScreenCast go to
+  `xdg-desktop-portal-wlr`, which captures through `ext-image-copy-capture`
+  and asks `cnde-share-picker` what to share. FileChooser goes to
+  `cnde-files-portal`, falling back to GTK. Everything else (Settings,
+  appearance) goes to `xdg-desktop-portal-gtk`.
 - **Appearance:** publish `org.freedesktop.appearance` (`color-scheme`, `accent-color`) through the portal Settings interface, which libadwaita and Qt 6 apps follow. Set GTK and Qt themes and fonts so apps look consistent out of the box.
 - **Session startup: no hard systemd dependency.** It must run on Alpine (OpenRC,
   musl, seatd or elogind) as well as systemd distros.
@@ -472,25 +497,29 @@ No native `.so` plugins, no monkey-patching, and no always-on scripting runtime.
 
 ## 11. Milestones
 
-Each milestone ends in something you can use.
+Each milestone ends in something you can use. Milestones 1–6 are done; cnde
+is in **public beta** (November 2026).
 
 1. **Nested compositor:** a winit window that shows a terminal, with floating window move/resize, focus, a keyboard layout, and basic open/close animations.
-2. **Real hardware:** udev backend, multi-monitor, proper frame pacing, damage tracking, cursor.
-   Also `wlr-layer-shell`, which `cnde-shell` needs later anyway. Until the shell
-   exists (Milestone 3), the **temporary stand-ins** are **fuzzel** on Super (tap)
-   as the launcher and **waybar** for clock and battery. Both get removed when the shell lands.
+2. **Real hardware:** udev backend, multi-monitor, proper frame pacing, damage tracking, cursor, `wlr-layer-shell`.
 3. **Shell v1:** panel, launcher, notifications, OSDs, a lock screen.
-4. **Daily driver:** XWayland, portals (screenshot and screencast), session files, idle and suspend, fractional scaling. *This is the real finish line.*
+4. **Daily driver:** XWayland, portals (screenshot and screencast), session files, idle and suspend, fractional scaling.
 5. **Workspaces, overview and tiling mode.**
-6. **Settings app.**
-7. **Extension API** (IPC applets first, then WASM).
+6. **Settings app** (and, beyond the original plan, cnde-files and the share picker).
+7. **Public beta:** security audit, README, testing on other people's hardware. *In progress.*
+8. **Extension API** (IPC applets first, then WASM).
 
 ## 12. Conventions (for humans and AI sessions)
 
 - Rust stable, edition 2024. Run `cargo fmt` and `cargo clippy -D warnings` before every commit.
 - No `unwrap()` in the compositor outside tests and startup. A misbehaving client must never crash the session. Disconnect the client instead.
-- Each Wayland protocol gets its own module in `compositor/src/protocols/`.
-- Keep modules under ~800 lines. Split before it hurts.
+- Protocol handlers live in `compositor/src/handlers/`; a protocol with
+  real logic of its own gets its own module (`ext_workspace.rs`, `capture.rs`).
+- Aim for modules under ~800 lines. Several are past that (`layout.rs`,
+  `switcher.rs`, `workspaces.rs`); split them when next touched.
+- **How it's built.** The code is written by Claude (Anthropic) through
+  Claude Code, directed and tested on real hardware by the owner (see
+  README). Sessions read this file first.
 - Every non-obvious decision gets a line in this doc or a `// Why:` comment.
 - **License: GPL-3.0-or-later.** Chosen so we can adapt code from niri.
 - **Track where code came from.** Any code adapted from niri gets a comment on

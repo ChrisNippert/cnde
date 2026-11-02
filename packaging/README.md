@@ -26,7 +26,7 @@ Optional (what each gives you):
 
 | Generic                      | Debian/Ubuntu                  | Fedora                        | For                                   |
 | ---------------------------- | ------------------------------ | ----------------------------- | ------------------------------------- |
-| Xwayland                     | `xwayland`                     | `xorg-x11-server-Xwayland`    | X11 apps                              |
+| Xwayland, xwayland-satellite | `xwayland xwayland-satellite`  | `xorg-x11-server-Xwayland xwayland-satellite` | X11 apps and most games  |
 | xdg-desktop-portal, -gtk     | `xdg-desktop-portal xdg-desktop-portal-gtk` | `xdg-desktop-portal xdg-desktop-portal-gtk` | app settings, file pickers |
 | xdg-desktop-portal-wlr       | `xdg-desktop-portal-wlr`       | `xdg-desktop-portal-wlr`      | screen sharing                        |
 | freedesktop sound theme      | `sound-theme-freedesktop`      | `sound-theme-freedesktop`     | event sounds                          |
