@@ -8,7 +8,12 @@ compact, but it should never feel cheap.*
 > Expect rough edges, and please [report them](#reporting-bugs).
 > "cnde" is a working name.
 
-<!-- Screenshots: desktop, overview, quick settings, files, settings -->
+<!-- To come: the desktop, the overview, Alt+Tab, the dock -->
+
+| | |
+|---|---|
+| ![Quick settings](docs/screenshots/quick-settings.png) | ![Settings](docs/screenshots/settings.png) |
+| ![Files](docs/screenshots/files.png) | ![Files, light style](docs/screenshots/files-light.png) |
 
 ## What it's for
 
