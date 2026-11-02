@@ -109,6 +109,9 @@ struct Surface {
     redraw: RedrawState,
     /// Pending throttled frame callbacks after an empty render.
     frame_callback_timer: Option<RegistrationToken>,
+    /// The last frame showed a window's buffer straight on the display
+    /// (direct scanout), not composited.
+    direct: bool,
 }
 
 /// Per-output frame scheduling. We only render when something changed, and
@@ -545,6 +548,7 @@ impl State {
                 global,
                 redraw: RedrawState::Idle,
                 frame_callback_timer: None,
+                direct: false,
             },
         );
         self.apply_output_layout();
@@ -1061,19 +1065,35 @@ impl State {
             }
         }
         let start = crate::perf::now();
-        let rendered = match surface.drm_output.render_frame(
+        let (rendered, direct) = match surface.drm_output.render_frame(
             &mut gpu.renderer,
             &elements,
             CLEAR_COLOR,
             FrameFlags::DEFAULT,
         ) {
-            Ok(result) => !result.is_empty,
+            Ok(result) => (
+                !result.is_empty,
+                matches!(
+                    result.primary_element,
+                    smithay::backend::drm::compositor::PrimaryPlaneElement::Element(_)
+                ),
+            ),
             Err(err) => {
                 warn!(?err, "render failed");
-                false
+                (false, surface.direct)
             }
         };
         crate::perf::since("frame.draw", start);
+        // Said as it changes: whether a fullscreen game or video reaches the
+        // display without being composited.
+        if rendered && direct != surface.direct {
+            surface.direct = direct;
+            let fullscreen = State::fullscreen_in(&self.space, &output);
+            info!(name = %output.name(), direct, fullscreen, "direct scanout");
+        }
+        if rendered && direct {
+            crate::perf::since("frame.direct_scanout", crate::perf::now());
+        }
         if filtered {
             elements.remove(cursor_count);
         }
