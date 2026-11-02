@@ -188,14 +188,9 @@ impl SceneBlur {
         self.held.clear();
     }
 
-    /// Draw `scene` (top first, as the renderer takes it), small, and blur it.
-    pub fn capture(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        output: &Output,
-        scene: &[OutputElement],
-    ) {
-        let started = std::time::Instant::now();
+    /// Compile the shader now, not on first use (where it shows as a
+    /// stutter).
+    pub fn prepare(&mut self, renderer: &mut GlesRenderer) {
         if self.shader.is_none() && !self.broken {
             match renderer
                 .compile_custom_texture_shader(BLUR, &[UniformName::new("step", UniformType::_2f)])
@@ -210,6 +205,17 @@ impl SceneBlur {
                 }
             }
         }
+    }
+
+    /// Draw `scene` (top first, as the renderer takes it), small, and blur it.
+    pub fn capture(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        scene: &[OutputElement],
+    ) {
+        let started = std::time::Instant::now();
+        self.prepare(renderer);
         let (Some(shader), Some(mode)) = (self.shader.clone(), output.current_mode()) else {
             return;
         };

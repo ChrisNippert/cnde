@@ -211,6 +211,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Draw the first frames before blocking for events.
     state.on_loop_iteration();
+    // Then, once the desktop is up, what the first Alt+Tab would wait for.
+    {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        let soon = Timer::from_duration(std::time::Duration::from_secs(2));
+        let _ = event_loop.handle().insert_source(soon, |_, _, state| {
+            state.prepare_effects();
+            TimeoutAction::Drop
+        });
+    }
     let result = event_loop.run(None, &mut state, State::on_loop_iteration);
     if !nested {
         portals::unregister_file_manager();

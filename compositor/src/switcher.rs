@@ -995,6 +995,26 @@ impl Switcher {
         buffer
     }
 
+    fn load_fonts(&mut self) {
+        self.fonts.get_or_insert_with(|| {
+            Fonts::new(&[
+                "Adwaita Sans",
+                "Cantarell",
+                "Inter",
+                "Noto Sans",
+                "DejaVu Sans",
+            ])
+        });
+    }
+
+    /// Load what the first switch or dock preview would otherwise stop to
+    /// load: fonts, icons, the blur shader.
+    pub fn prepare(&mut self, renderer: &mut GlesRenderer) {
+        self.load_fonts();
+        self.icons.get_or_insert_with(Icons::new);
+        self.blur.prepare(renderer);
+    }
+
     fn paint(&mut self, key: &Key) -> Option<MemoryRenderBuffer> {
         let scale = f64::from_bits(key.scale);
         let (w, h) = (
@@ -1003,15 +1023,8 @@ impl Switcher {
         );
         let mut pixels = vec![0u8; (w * h * 4) as usize];
         {
-            let fonts = self.fonts.get_or_insert_with(|| {
-                Fonts::new(&[
-                    "Adwaita Sans",
-                    "Cantarell",
-                    "Inter",
-                    "Noto Sans",
-                    "DejaVu Sans",
-                ])
-            });
+            self.load_fonts();
+            let fonts = self.fonts.as_mut()?;
             let icons = self.icons.get_or_insert_with(Icons::new);
             icons.set_theme(&key.appearance.icon_theme);
             let theme = cnde_ui::Theme::for_appearance(&key.appearance);

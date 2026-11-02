@@ -421,6 +421,17 @@ impl State {
         crate::watchdog::beat(Phase::Dispatch);
     }
 
+    /// A moment after startup: compile shaders and load fonts the switcher,
+    /// dock preview and thumbnails use, so their first showing doesn't
+    /// stutter.
+    pub fn prepare_effects(&mut self) {
+        let Some(renderer) = self.backend.renderer() else {
+            return;
+        };
+        self.switcher.prepare(renderer);
+        self.decorations.downscale.program(renderer);
+    }
+
     /// Whether the syncs may run now; if not, a timer brings the loop back
     /// when they may, so the last change still goes out.
     fn sync_due(&mut self) -> bool {
