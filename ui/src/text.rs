@@ -29,7 +29,20 @@ impl Fonts {
     /// Loads font metadata from the standard directories and picks the first
     /// installed family from `families`. Glyphs are only loaded when drawn.
     pub fn new(families: &[&str]) -> Self {
-        let system = FontSystem::new();
+        let mut system = FontSystem::new();
+        // Without fontconfig only /usr/share/fonts and the home font
+        // folders are read; NixOS (and other prefixes) keep fonts under the
+        // data dirs instead.
+        for dir in cnde_config::paths::data_dirs() {
+            if dir.starts_with("/usr/share") || dir.starts_with("/usr/local/share") {
+                continue;
+            }
+            for fonts in [dir.join("fonts"), dir.join("X11/fonts")] {
+                if fonts.is_dir() {
+                    system.db_mut().load_fonts_dir(fonts);
+                }
+            }
+        }
         let installed = |name: &str| {
             system
                 .db()

@@ -38,8 +38,9 @@ const AGENT_PATH: &str = "/org/cnde/PolicyKit1/AuthenticationAgent";
 /// polkit 126+: the helper is started by systemd for each connection.
 const HELPER_SOCKET: &str = "/run/polkit/agent-helper.socket";
 /// Older polkit (and systems without systemd): a setuid helper.
-/// (Arch, Alpine, Fedora, Debian.)
-const HELPER_PATHS: [&str; 4] = [
+/// (Arch, Alpine, Fedora, Debian; NixOS keeps setuid programs in wrappers.)
+const HELPER_PATHS: [&str; 5] = [
+    "/run/wrappers/bin/polkit-agent-helper-1",
     "/usr/lib/polkit-1/polkit-agent-helper-1",
     "/usr/libexec/polkit-agent-helper-1",
     "/usr/libexec/polkit-1/polkit-agent-helper-1",
