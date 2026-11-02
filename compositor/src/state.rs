@@ -16,7 +16,9 @@ use smithay::{
     output::Output,
     reexports::{
         calloop::{
-            EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction, generic::Generic,
+            EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction,
+            generic::Generic,
+            timer::{TimeoutAction, Timer},
         },
         wayland_server::{
             Display, DisplayHandle,
@@ -52,6 +54,12 @@ use crate::{
 };
 
 /// How long the pointer stays busy after a launch with no window opening.
+/// The most often the shell is told about windows, edges and workspaces,
+/// and window colours are sampled: the loop runs over a thousand times a
+/// second while apps are busy, and nothing these feed needs more than a
+/// refresh's worth.
+const SYNC_EVERY: Duration = Duration::from_millis(8);
+
 pub const LAUNCH_FEEDBACK: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub struct State {
@@ -107,6 +115,10 @@ pub struct State {
     pub tints: crate::tint::Tints,
     /// A timer is set to sample a window `tints` held back.
     pub tint_wake: bool,
+    /// When the shell sync and the adaptive colours may next run (see
+    /// `SYNC_EVERY`), and whether a timer will wake the loop for it.
+    sync_at: Instant,
+    sync_wake: bool,
     pub crossfade: crate::crossfade::Crossfade,
     /// Dark mode on a timer.
     pub schedules: crate::schedule::Schedules,
@@ -258,6 +270,8 @@ impl State {
             dock_frost: Default::default(),
             tints: Default::default(),
             tint_wake: false,
+            sync_at: Instant::now(),
+            sync_wake: false,
             crossfade: Default::default(),
             schedules: Default::default(),
             night_light: Default::default(),
@@ -389,13 +403,15 @@ impl State {
                 crate::capture::capture_toplevels(&mut self.capture, renderer, &self.space)
             });
         }
-        crate::perf::time("adaptive_tints", || self.update_tints());
-        let start = crate::perf::now();
-        self.refresh_ext_workspaces();
-        self.sync_ipc_windows();
-        self.sync_ipc_edges();
+        if self.sync_due() {
+            crate::perf::time("adaptive_tints", || self.update_tints());
+            let start = crate::perf::now();
+            self.refresh_ext_workspaces();
+            self.sync_ipc_windows();
+            self.sync_ipc_edges();
+            crate::perf::since("ipc_sync", start);
+        }
         self.screenshot_ready_check();
-        crate::perf::since("ipc_sync", start);
         // Last, so frame callbacks sent while rendering go out now.
         let start = crate::perf::now();
         if let Err(err) = self.display_handle.flush_clients() {
@@ -403,6 +419,25 @@ impl State {
         }
         crate::perf::since("flush", start);
         crate::watchdog::beat(Phase::Dispatch);
+    }
+
+    /// Whether the syncs may run now; if not, a timer brings the loop back
+    /// when they may, so the last change still goes out.
+    fn sync_due(&mut self) -> bool {
+        let now = Instant::now();
+        if now >= self.sync_at {
+            self.sync_at = now + SYNC_EVERY;
+            return true;
+        }
+        if !self.sync_wake {
+            self.sync_wake = true;
+            let timer = Timer::from_deadline(self.sync_at);
+            let _ = self.loop_handle.insert_source(timer, |_, _, state| {
+                state.sync_wake = false;
+                TimeoutAction::Drop
+            });
+        }
+        false
     }
 
     /// Presentation-time feedback for everything visible on `output`, to
