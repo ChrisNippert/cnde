@@ -54,7 +54,7 @@ const SERVICES: [&str; 2] = ["cnde-lock", "login"];
 /// PAM refuses every password, so locking would mean never unlocking.
 fn pam_service() -> Option<&'static str> {
     SERVICES.into_iter().find(|s| {
-        ["/etc/pam.d", "/usr/lib/pam.d"]
+        ["/etc/pam.d", "/usr/lib/pam.d", "/usr/etc/pam.d"]
             .iter()
             .any(|dir| std::path::Path::new(dir).join(s).exists())
     })
