@@ -1,5 +1,6 @@
 //! Builds the per-output list of render elements, front to back.
 
+use crate::downscale::Downscaled;
 use std::time::{Duration, Instant};
 
 use smithay::{
@@ -103,6 +104,10 @@ render_elements! {
     PopupSolid = RescaleRenderElement<PixelShaderElement>,
     Night = crate::night_light::Filter,
     Titlebar = RescaleRenderElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
+    // Drawn small (thumbnails): averaged down, see `downscale`.
+    SmallWindow = Downscaled<RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>>,
+    SmallWindowClipped = Downscaled<CropRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>>>,
+    SmallTitlebar = Downscaled<RescaleRenderElement<MemoryRenderBufferRenderElement<GlesRenderer>>>,
 }
 
 /// The pointer, if it's on this output: a themed image, or the surface a
@@ -477,6 +482,28 @@ pub(crate) fn window_elements(
             {
                 elements.push(element);
             }
+        }
+        // Drawn well below its size: averaged, so it stays legible.
+        let shrink = 1.0 / stretch.x.min(stretch.y).max(1e-3);
+        if shrink >= crate::downscale::MIN_SHRINK
+            && let Some(program) = decorations.downscale.program(renderer)
+        {
+            let program = &program;
+            elements = elements
+                .into_iter()
+                .map(|element| match element {
+                    OutputElement::Window(e) => {
+                        OutputElement::SmallWindow(Downscaled::new(e, program.clone(), shrink))
+                    }
+                    OutputElement::WindowClipped(e) => OutputElement::SmallWindowClipped(
+                        Downscaled::new(e, program.clone(), shrink),
+                    ),
+                    OutputElement::Titlebar(e) => {
+                        OutputElement::SmallTitlebar(Downscaled::new(e, program.clone(), shrink))
+                    }
+                    other => other,
+                })
+                .collect();
         }
         // Last, so under it all: the blurred wallpaper its see-through
         // parts show.

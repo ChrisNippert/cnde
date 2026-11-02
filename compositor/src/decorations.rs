@@ -155,6 +155,8 @@ pub struct Decorations {
     pub all_buttons: bool,
     /// The overview's close button, per scale and hover state.
     close_buttons: Vec<((u64, bool), MemoryRenderBuffer)>,
+    /// Averages windows drawn small (`render::window_elements`).
+    pub downscale: crate::downscale::Downscale,
 }
 
 /// A press on a bar that may yet become a drag (or a double-click).

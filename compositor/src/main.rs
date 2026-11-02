@@ -9,6 +9,7 @@ mod config;
 mod crossfade;
 mod cursor;
 mod decorations;
+mod downscale;
 mod effects;
 mod ext_workspace;
 mod frost;
