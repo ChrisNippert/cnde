@@ -796,7 +796,7 @@ impl State {
             })
             .unwrap_or_default();
         for crtc in queued {
-            self.render_output(crtc);
+            crate::perf::time("frame", || self.render_output(crtc));
         }
     }
 
@@ -810,7 +810,9 @@ impl State {
                 .gpu
                 .as_ref()
                 .and_then(|gpu| gpu.surfaces.get(&crtc))
-                .and_then(|surface| self.scene(&surface.output, now)),
+                .and_then(|surface| {
+                    crate::perf::time("frame.scene", || self.scene(&surface.output, now))
+                }),
             Backend::Winit(_) => None,
         };
         let bar_tint = match &self.backend {
@@ -918,6 +920,7 @@ impl State {
             // is cut from. Otherwise the frame it arrives in has no frost,
             // and nothing redraws to add it.
             let wallpaper = self.wallpapers.element(&mut gpu.renderer, &output);
+            let start = crate::perf::now();
             let frost = self.dock_frost.elements(
                 &mut gpu.renderer,
                 &self.wallpapers,
@@ -927,6 +930,8 @@ impl State {
                 &crate::frost::Behind::new(&self.space, &output, bar_tint),
                 now,
             );
+            crate::perf::since("frame.dock_frost", start);
+            let start = crate::perf::now();
             let backdrop = match self.space.output_geometry(&output) {
                 Some(geo) => crate::overview::backdrop(
                     &mut self.overview,
@@ -938,6 +943,7 @@ impl State {
                 ),
                 None => Vec::new(),
             };
+            crate::perf::since("frame.overview_backdrop", start);
             let mut over_windows: Vec<_> = match (
                 scene.as_ref().and_then(|s| s.close.as_ref()),
                 self.space.output_geometry(&output),
@@ -956,6 +962,7 @@ impl State {
                 _ => Vec::new(),
             };
             over_windows.extend(edge_hint);
+            let start = crate::perf::now();
             elements.extend(render::output_elements(
                 &mut gpu.renderer,
                 &self.space,
@@ -977,10 +984,12 @@ impl State {
                 &output,
                 now,
             ));
+            crate::perf::since("frame.windows", start);
             if let Some(wallpaper) = wallpaper {
                 elements.push(render::OutputElement::Wallpaper(wallpaper));
             }
             // The window switcher goes over everything, under the pointer.
+            let start = crate::perf::now();
             let switcher = self.switcher.elements(
                 &mut gpu.renderer,
                 &mut self.decorations,
@@ -996,6 +1005,7 @@ impl State {
                 ),
                 now,
             );
+            crate::perf::since("frame.switcher", start);
             for (i, element) in switcher.into_iter().enumerate() {
                 elements.insert(cursor_count + i, element);
             }
@@ -1043,6 +1053,7 @@ impl State {
                 }
             }
         }
+        let start = crate::perf::now();
         let rendered = match surface.drm_output.render_frame(
             &mut gpu.renderer,
             &elements,
@@ -1055,10 +1066,12 @@ impl State {
                 false
             }
         };
+        crate::perf::since("frame.draw", start);
         if filtered {
             elements.remove(cursor_count);
         }
         // Screen captures copy what this frame showed.
+        let start = crate::perf::now();
         crate::capture::capture_output(
             &mut self.capture,
             &mut gpu.renderer,
@@ -1067,6 +1080,7 @@ impl State {
             cursor_count,
             rendered,
         );
+        crate::perf::since("frame.screen_capture", start);
 
         if rendered {
             let feedback = State::presentation_feedback(&self.space, &output);

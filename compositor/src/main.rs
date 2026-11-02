@@ -23,6 +23,7 @@ mod layout;
 mod lock;
 mod night_light;
 mod overview;
+mod perf;
 mod popup_anim;
 mod portals;
 mod power;

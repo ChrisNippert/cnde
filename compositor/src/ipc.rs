@@ -237,6 +237,7 @@ impl State {
             Request::NewToken => {}
             Request::LockScreen => self.lock_screen(),
             Request::LogOut => self.loop_signal.stop(),
+            Request::Perf { on } => crate::perf::set(on),
             Request::Launching => {
                 self.launching = Some(std::time::Instant::now());
                 self.queue_redraw();

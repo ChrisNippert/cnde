@@ -277,6 +277,11 @@ pub enum Request {
     LockScreen,
     /// End the session: stop the compositor, as Ctrl+Alt+Backspace does.
     LogOut,
+    /// Start (afresh) or stop recording where the compositor's time goes,
+    /// to `$XDG_RUNTIME_DIR/cnde-perf.csv` (see the compositor's `perf`).
+    Perf {
+        on: bool,
+    },
     /// Testing aid, honoured only by debug builds: move the pointer to
     /// (x, y) in the global space, then press or release the left button
     /// (the right one with `right`).

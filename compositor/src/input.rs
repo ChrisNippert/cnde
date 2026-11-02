@@ -39,6 +39,10 @@ const BTN_RIGHT: u32 = 0x111;
 
 impl State {
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+        crate::perf::time("input", || self.handle_input_event(event));
+    }
+
+    fn handle_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
         // Anything the user does; waking a dark screen with a click
         // shouldn't also press whatever is under the pointer.
         let woke = self.idle_activity();

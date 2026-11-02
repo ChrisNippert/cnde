@@ -327,7 +327,9 @@ impl State {
             |_, display, state| {
                 // Safety: the display is owned by this source and never dropped while dispatching.
                 unsafe {
+                    let start = crate::perf::now();
                     display.get_mut().dispatch_clients(state)?;
+                    crate::perf::since("clients", start);
                 }
                 Ok(PostAction::Continue)
             },
@@ -339,6 +341,7 @@ impl State {
     /// Runs after every batch of events: housekeeping, then ask for a frame if needed.
     pub fn on_loop_iteration(&mut self) {
         crate::watchdog::beat(Phase::Housekeeping);
+        let start = crate::perf::now();
         self.space.refresh();
         self.trim_window_outputs();
         self.popups.cleanup();
@@ -371,9 +374,10 @@ impl State {
         // Why render here and not in an idle callback: calloop runs idles
         // *before* this hook, so an idle queued from here sat until some
         // unrelated event woke the loop. Typing showed up late.
+        crate::perf::since("housekeeping", start);
         crate::watchdog::beat(Phase::Render);
         if matches!(self.backend, Backend::Udev(_)) {
-            self.udev_render_queued();
+            crate::perf::time("render", || self.udev_render_queued());
         }
         crate::watchdog::beat(Phase::Finish);
         // Window captures don't wait for a monitor to redraw: the window may
@@ -381,17 +385,23 @@ impl State {
         if self.capture.has_pending()
             && let Some(renderer) = self.backend.renderer()
         {
-            crate::capture::capture_toplevels(&mut self.capture, renderer, &self.space);
+            crate::perf::time("window_capture", || {
+                crate::capture::capture_toplevels(&mut self.capture, renderer, &self.space)
+            });
         }
-        self.update_tints();
+        crate::perf::time("adaptive_tints", || self.update_tints());
+        let start = crate::perf::now();
         self.refresh_ext_workspaces();
         self.sync_ipc_windows();
         self.sync_ipc_edges();
         self.screenshot_ready_check();
+        crate::perf::since("ipc_sync", start);
         // Last, so frame callbacks sent while rendering go out now.
+        let start = crate::perf::now();
         if let Err(err) = self.display_handle.flush_clients() {
             warn!(?err, "failed to flush clients");
         }
+        crate::perf::since("flush", start);
         crate::watchdog::beat(Phase::Dispatch);
     }
 
