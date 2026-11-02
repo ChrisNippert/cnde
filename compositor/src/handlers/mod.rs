@@ -175,10 +175,11 @@ impl PointerConstraintsHandler for State {
         }
         let location = pointer.current_location();
         let origin = self.surface_under(location).filter(|(s, _)| s == surface);
+        let use_region = self.confine_region_applies(surface);
         with_pointer_constraint(surface, pointer, |constraint| {
             if let (Some(constraint), Some((_, origin))) = (constraint, origin) {
                 let point = (location - origin).to_i32_round();
-                if constraint.region().is_none_or(|r| r.contains(point)) {
+                if !use_region || constraint.region().is_none_or(|r| r.contains(point)) {
                     constraint.activate();
                 }
             }

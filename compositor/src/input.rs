@@ -73,7 +73,8 @@ impl State {
                 };
                 let current = pointer.current_location();
                 let under = self.surface_under(current);
-                let constraint = active_constraint(&pointer, current, under.as_ref());
+                let use_region = under.as_ref().is_none_or(|(s, _)| self.confine_region_applies(s));
+                let constraint = active_constraint(&pointer, current, under.as_ref(), use_region);
                 // Unaccelerated deltas for games and 3D apps (relative-pointer).
                 pointer.relative_motion(
                     self,
@@ -94,7 +95,7 @@ impl State {
                         let (surface, origin) = under.as_ref().expect("a constraint has a surface");
                         let new_under = self.surface_under(location);
                         new_under.as_ref().map(|(s, _)| s) != Some(surface)
-                            || region.as_ref().is_some_and(|r| {
+                            || region.as_ref().filter(|_| use_region).is_some_and(|r| {
                                 !r.contains((location - *origin).to_i32_round())
                             })
                     }
@@ -511,16 +512,34 @@ impl State {
         if !self.keyboard_on_window(&surface) {
             return;
         }
+        let use_region = self.confine_region_applies(&surface);
         with_pointer_constraint(&surface, pointer, |constraint| {
             if let Some(constraint) = constraint
                 && !constraint.is_active()
             {
                 let point = (location - origin).to_i32_round();
-                if constraint.region().is_none_or(|r| r.contains(point)) {
+                if !use_region || constraint.region().is_none_or(|r| r.contains(point)) {
                     constraint.activate();
                 }
             }
         });
+    }
+
+    /// Whether a lock or confinement on `surface` keeps to the region the
+    /// client gave. Not for a fullscreen window: a game drawing at a lower
+    /// resolution, scaled up to the monitor, can give its region in its own
+    /// unscaled pixels (Halo's covered the top-left 1920x1080 of a 2560x1440
+    /// screen), and a fullscreen game only ever means its whole window.
+    pub(crate) fn confine_region_applies(&self, surface: &WlSurface) -> bool {
+        let mut root = surface.clone();
+        while let Some(parent) = smithay::wayland::compositor::get_parent(&root) {
+            root = parent;
+        }
+        !self
+            .space
+            .elements()
+            .find(|w| w.toplevel().is_some_and(|t| t.wl_surface() == &root))
+            .is_some_and(|w| Self::placement_of(w) == crate::window::Placement::Fullscreen)
     }
 
     /// Whether the keyboard is with `surface`'s window (a game's subsurface
@@ -1002,12 +1021,14 @@ fn active_constraint(
     pointer: &smithay::input::pointer::PointerHandle<State>,
     location: Point<f64, Logical>,
     under: Option<&(WlSurface, Point<f64, Logical>)>,
+    // Whether the client's region counts (see `confine_region_applies`).
+    use_region: bool,
 ) -> Option<Constraint> {
     let (surface, origin) = under?;
     with_pointer_constraint(surface, pointer, |constraint| {
         let constraint = constraint.filter(|c| c.is_active())?;
         let point = (location - *origin).to_i32_round();
-        if !constraint.region().is_none_or(|r| r.contains(point)) {
+        if use_region && !constraint.region().is_none_or(|r| r.contains(point)) {
             return None;
         }
         Some(match &*constraint {
