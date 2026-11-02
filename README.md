@@ -107,6 +107,11 @@ dependencies on Debian, Ubuntu and Fedora.
 games), `xdg-desktop-portal-wlr` (screen sharing), `xdg-desktop-portal-gtk`,
 PipeWire with WirePlumber, polkit, udisks2.
 
+**Games:** Proton games work through X11, but X11 apps can't minimize
+under cnde (see [KNOWN_ISSUES.md](KNOWN_ISSUES.md)). If you have GE-Proton
+10 or newer, try running games as native Wayland apps with the launch option
+`PROTON_ENABLE_WAYLAND=1 %command%`.
+
 ## Using it
 
 | Keys | Action |
@@ -130,9 +135,9 @@ every option, are in
 
 ## How this was built
 
-cnde's code was written by Claude (Anthropic's AI model) through Claude
+cnde's code was written by Claude 5.5 Opus and Sonnet (Anthropic's AI models) through Claude
 Code, directed by me. I set the design and priorities, use it as my daily
-desktop, and test every change on real hardware. Claude implemented,
+desktop, and test every change on my own PC. Claude implemented,
 debugged and profiled it. Bug reports are reviewed, and fixes are tested,
 the same way.
 

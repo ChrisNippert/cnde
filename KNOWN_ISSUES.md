@@ -49,9 +49,18 @@ The serious findings were fixed. These are lower risk and known:
   composited (a little more latency and GPU time). The compositor logs
   `direct scanout` per monitor when it changes; a Proton game was seen
   never reaching it.
-- **Some Proton games unmap themselves when they lose focus** (Wine
-  minimizes; xwayland-satellite has no iconify), so they drop off the dock
-  until clicked back.
+- **X11 apps can't minimize themselves.** xwayland-satellite has no
+  minimize, so:
+  - an X11 app's own minimize button does nothing (Steam, Spotify,
+    JetBrains IDEs, Zoom); cnde's minimize still works on them;
+  - a Wine or Proton program that minimizes (a fullscreen game losing
+    focus, a launcher) hides its window instead, and it drops off the dock
+    with no way back but restarting it.
+
+  For games, use Wine's Wayland driver, which skips X11: in Steam, set the
+  game's launch options to `PROTON_ENABLE_WAYLAND=1 %command%` (GE-Proton
+  10 or newer; experimental, best with Direct3D games). Or run the game in
+  gamescope. A fix would be minimize support in xwayland-satellite.
 
 ## Rough edges
 
