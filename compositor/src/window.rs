@@ -434,8 +434,13 @@ impl State {
             }
             return;
         }
+        // The window asked for, or the modal dialog that is holding it up.
+        let target = window.map(|w| self.modal_focus_target(w));
         if let Some(window) = window {
             self.raise_window(window);
+        }
+        let window = target.as_ref();
+        if let Some(window) = window {
             with_state(window, |s| s.urgent = false);
             if let Some(output) = self.output_for(window) {
                 self.workspace_monitor = Some(output.name());
@@ -730,6 +735,36 @@ impl State {
     /// Move a mapped window, keeping its place in the stack. Why not just
     /// `map_element`: that puts it on top, so re-fitting maximized windows
     /// after a setting changed buried the window being used.
+    /// Where focus should go when `window` is asked to take it: the topmost
+    /// mapped modal dialog among its descendants (xdg-dialog), since the
+    /// window ignores input while one is up and focusing it would leave the
+    /// app looking frozen. `window` itself when it has none.
+    fn modal_focus_target(&self, window: &Window) -> Window {
+        let stack: Vec<(Window, Option<Window>, bool)> = self
+            .space
+            .elements()
+            .map(|w| {
+                let toplevel = w.toplevel();
+                let parent = toplevel.and_then(|t| t.parent()).and_then(|p| {
+                    self.space
+                        .elements()
+                        .find(|o| o.toplevel().is_some_and(|t| t.wl_surface() == &p))
+                        .cloned()
+                });
+                let modal = toplevel.is_some_and(|t| {
+                    smithay::wayland::compositor::with_states(t.wl_surface(), |states| {
+                        states
+                            .data_map
+                            .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
+                            .is_some_and(|d| d.lock().unwrap().modal)
+                    })
+                });
+                (w.clone(), parent, modal)
+            })
+            .collect();
+        topmost_modal_descendant(&stack, window).unwrap_or_else(|| window.clone())
+    }
+
     /// Bring `window` to the top, and its dialogs (the toplevels it's the
     /// parent of, and theirs) above it: one left under its window can
     /// neither be seen nor dismissed, and a modal one holds the window open.
@@ -771,6 +806,34 @@ impl State {
             self.space.raise_element(other, false);
         }
     }
+}
+
+/// The topmost modal among `root`'s descendants in `stack` (bottom to top,
+/// each entry its parent and whether it is modal), at any depth.
+fn topmost_modal_descendant<T: PartialEq + Clone>(
+    stack: &[(T, Option<T>, bool)],
+    root: &T,
+) -> Option<T> {
+    stack
+        .iter()
+        .rev()
+        .filter(|(_, _, modal)| *modal)
+        .find(|(w, _, _)| {
+            let mut at = w;
+            // A few levels deep: a client could make parents a loop.
+            for _ in 0..8 {
+                let Some(parent) = stack.iter().find(|(o, _, _)| o == at).and_then(|e| e.1.as_ref())
+                else {
+                    return false;
+                };
+                if parent == root {
+                    return true;
+                }
+                at = parent;
+            }
+            false
+        })
+        .map(|(w, _, _)| w.clone())
 }
 
 /// The rectangle a non-floating placement occupies within `area`, with the
@@ -832,4 +895,32 @@ fn with_trimmed<R>(window: &Window, f: impl FnOnce(&mut Vec<Output>) -> R) -> R 
     let data = window.user_data();
     data.insert_if_missing(Trimmed::default);
     f(&mut data.get::<Trimmed>().unwrap().0.borrow_mut())
+}
+
+#[cfg(test)]
+mod modal_tests {
+    use super::topmost_modal_descendant as pick;
+
+    #[test]
+    fn modal_descendant_at_any_depth_and_only_if_modal() {
+        // 2 is a plain child of 1, 3 a modal child of 2, 5 a modal child
+        // of 1, and 4 a modal with no parent.
+        let stack = [
+            (1, None, false),
+            (4, None, true),
+            (2, Some(1), false),
+            (3, Some(2), true),
+            (5, Some(1), true),
+        ];
+        assert_eq!(pick(&stack, &1), Some(5));
+        assert_eq!(pick(&stack, &2), Some(3));
+        assert_eq!(pick(&stack, &3), None);
+        assert_eq!(pick(&stack, &4), None);
+    }
+
+    #[test]
+    fn plain_children_and_parent_loops_are_ignored() {
+        assert_eq!(pick(&[(1, None, false), (2, Some(1), false)], &1), None);
+        assert_eq!(pick(&[(1, Some(2), true), (2, Some(1), true)], &3), None);
+    }
 }
