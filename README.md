@@ -96,6 +96,31 @@ Then pick **cnde** at your login screen. The PKGBUILD splits the desktop into
 packages (compositor, shell, lock, settings, files, icons), so you can leave
 pieces out.
 
+**NixOS**
+
+Add the flake to your system flake and enable the module:
+
+```nix
+{
+  inputs.cnde.url = "github:<owner>/cnde";
+
+  outputs = { nixpkgs, cnde, ... }: {
+    nixosConfigurations.<host> = nixpkgs.lib.nixosSystem {
+      modules = [
+        cnde.nixosModules.default
+        { programs.cnde.enable = true; }
+        ./configuration.nix
+      ];
+    };
+  };
+}
+```
+
+Rebuild and pick **cnde** at the login screen. The module brings the
+session, portals, the lock screen's PAM service, polkit, XWayland and
+fonts. `nix build` gives just the package, and `nix develop` a shell to hack
+on it.
+
 **Other distributions**
 
 `packaging/install.sh` builds and installs to `/usr/local` (or any
