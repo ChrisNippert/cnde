@@ -318,17 +318,17 @@ impl State {
                     state.run_suspend();
                     return TimeoutAction::Drop;
                 }
+                // Waking up unlocked would be worse than not sleeping: the
+                // screens stay off instead.
                 if started.elapsed() > LOCK_WAIT {
-                    warn!("the screen didn't lock in time; suspending anyway");
-                    state.run_suspend();
+                    warn!("the screen didn't lock in time; not suspending");
                     return TimeoutAction::Drop;
                 }
                 TimeoutAction::ToDuration(Duration::from_millis(200))
             },
         );
         if let Err(err) = result {
-            warn!(?err, "can't wait for the lock; suspending now");
-            self.run_suspend();
+            warn!(?err, "can't wait for the lock; not suspending");
         }
     }
 

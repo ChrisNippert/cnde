@@ -204,7 +204,15 @@ impl SessionLockHandler for State {
         if self.overview.is_open() {
             self.set_overview(false);
         }
+        // End any grab first: an open menu's popup grab ignores focus
+        // changes, so it would keep the keyboard (and the password typed at
+        // the locker) for its app. A move or resize ends where it is.
+        if let Some(pointer) = self.seat.get_pointer() {
+            let time = self.start_time.elapsed().as_millis() as u32;
+            pointer.unset_grab(self, SERIAL_COUNTER.next_serial(), time);
+        }
         if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.unset_grab(self);
             keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
         }
         self.queue_redraw();
