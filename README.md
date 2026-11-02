@@ -87,7 +87,7 @@ compact, but it should never feel cheap.*
 **Arch Linux**
 
 ```sh
-git clone <repo-url> cnde
+git clone https://github.com/ChrisNippert/cnde.git
 cd cnde/packaging/arch
 makepkg -si
 ```
@@ -102,7 +102,7 @@ Add the flake to your system flake and enable the module:
 
 ```nix
 {
-  inputs.cnde.url = "github:<owner>/cnde";
+  inputs.cnde.url = "github:ChrisNippert/cnde";
 
   outputs = { nixpkgs, cnde, ... }: {
     nixosConfigurations.<host> = nixpkgs.lib.nixosSystem {
