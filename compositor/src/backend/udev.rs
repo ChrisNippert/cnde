@@ -963,6 +963,7 @@ impl State {
             };
             over_windows.extend(edge_hint);
             let start = crate::perf::now();
+            let mut panels = 0;
             elements.extend(render::output_elements(
                 &mut gpu.renderer,
                 &self.space,
@@ -983,6 +984,7 @@ impl State {
                 ),
                 &output,
                 now,
+                &mut panels,
             ));
             crate::perf::since("frame.windows", start);
             if let Some(wallpaper) = wallpaper {
@@ -1006,7 +1008,12 @@ impl State {
                 now,
             );
             crate::perf::since("frame.switcher", start);
-            for (i, element) in switcher.into_iter().enumerate() {
+            // A peek goes under the bar and dock, the panels over all.
+            let under_at = cursor_count + panels;
+            for (i, element) in switcher.under.into_iter().enumerate() {
+                elements.insert(under_at + i, element);
+            }
+            for (i, element) in switcher.over.into_iter().enumerate() {
                 elements.insert(cursor_count + i, element);
             }
             if self.screenshot.wants_freeze(&output) {

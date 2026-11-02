@@ -218,7 +218,12 @@ pub fn output_elements(
     mut window_frost: Option<crate::frost::WindowFrost<'_>>,
     output: &Output,
     now: Instant,
+    // Set to how many of the elements, from the top, are the panels (the
+    // overlay and top layers: the bar, the dock), so a dock preview's peek
+    // can go just under them.
+    panels: &mut usize,
 ) -> Vec<OutputElement> {
+    *panels = 0;
     let Some(output_geo) = space.output_geometry(output) else {
         return Vec::new();
     };
@@ -309,6 +314,7 @@ pub fn output_elements(
         elements.extend(layer(renderer, Layer::Top));
         elements.extend(frost);
     }
+    *panels = elements.len();
     elements.extend(over_windows);
     elements.extend(window_elements);
     if fullscreen {

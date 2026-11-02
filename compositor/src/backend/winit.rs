@@ -249,6 +249,7 @@ impl State {
             };
             over_windows.extend(edge_hint);
             let frozen = self.screenshot.frozen_element(&backend.output);
+            let mut panels = 0;
             let locked = self.lock.is_locked();
             let mut elements = if locked {
                 // Locked: the locker, and nothing else.
@@ -284,6 +285,7 @@ impl State {
                     ),
                     &backend.output,
                     now,
+                    &mut panels,
                 )
             };
             if self.screenshot.frozen_element(&backend.output).is_none()
@@ -309,7 +311,10 @@ impl State {
                     ),
                     now,
                 );
-                for (i, element) in switcher.into_iter().enumerate() {
+                for (i, element) in switcher.under.into_iter().enumerate() {
+                    elements.insert(panels + i, element);
+                }
+                for (i, element) in switcher.over.into_iter().enumerate() {
                     elements.insert(i, element);
                 }
             }

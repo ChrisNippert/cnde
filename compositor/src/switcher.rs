@@ -209,6 +209,15 @@ pub struct Switcher {
     close: Option<((u64, bool), MemoryRenderBuffer)>,
 }
 
+/// The switcher's or dock preview's elements on one monitor, top first.
+#[derive(Default)]
+pub struct SwitcherElements {
+    /// Over everything but the pointer.
+    pub over: Vec<OutputElement>,
+    /// Just under the bar and dock (a dock preview's peek).
+    pub under: Vec<OutputElement>,
+}
+
 /// How the panel is drawn this frame.
 struct Look {
     /// 0 (gone) to 1 (up): its opacity, and how far it has grown.
@@ -412,7 +421,7 @@ impl Switcher {
         scene: &[OutputElement],
         mut frost: Option<crate::frost::WindowFrost<'_>>,
         now: Instant,
-    ) -> Vec<OutputElement> {
+    ) -> SwitcherElements {
         let started = Instant::now();
         if self.leaving.as_ref().is_some_and(|l| {
             now.saturating_duration_since(l.since) >= FADE || self.session.is_some()
@@ -420,7 +429,7 @@ impl Switcher {
             self.leaving = None;
         }
         let Some(size) = space.output_geometry(output).map(|g| g.size.to_f64()) else {
-            return Vec::new();
+            return SwitcherElements::default();
         };
         let open = self.session.is_some();
         let fading = self.leaving.is_some() && !open;
@@ -440,10 +449,10 @@ impl Switcher {
                     false,
                     l.lit.clone(),
                 ),
-                _ => return Vec::new(),
+                _ => return SwitcherElements::default(),
             };
             if level <= 0.0 {
-                return Vec::new();
+                return SwitcherElements::default();
             }
             // The panel lives on one output; the others just dim and blur.
             let here = &session.output == output;
@@ -557,76 +566,97 @@ impl Switcher {
                 blurred = self.blur.has(output),
                 "switcher frame built (cpu side)"
             );
-            return elements;
+            return SwitcherElements {
+                over: elements,
+                ..Default::default()
+            };
         }
-        let Some(preview) = self.preview.as_ref().filter(|p| &p.output == output) else {
-            return Vec::new();
+        let Some(preview) = self.preview.as_ref() else {
+            return SwitcherElements::default();
         };
+        let here = &preview.output == output;
+        let level = eased(preview.since, now);
+        let peek = preview.peek.level(now) * level;
+        let peeked = preview.peek.window.clone().filter(|w| w.alive());
+        let home = preview.output.clone();
         let windows: Vec<Window> = preview
             .windows
             .iter()
             .filter(|w| w.alive())
             .cloned()
             .collect();
-        if windows.is_empty() {
-            return Vec::new();
+        let (anchor, side, hover, close_hot) =
+            (preview.anchor, preview.side, preview.hover, preview.close_hot);
+        // The thumbnails, on the dock's monitor.
+        let mut over = Vec::new();
+        if here && !windows.is_empty() {
+            let geometry = layout(windows.len(), size, Place::Beside(anchor, side));
+            let look = Look {
+                level,
+                highlight: None,
+            };
+            over = self.panel_elements(
+                renderer,
+                decorations,
+                space,
+                output,
+                &windows,
+                &geometry,
+                hover,
+                Some(close_hot),
+                &look,
+                &mut frost,
+                false,
+                now,
+            );
         }
-        let geometry = layout(
-            windows.len(),
-            size,
-            Place::Beside(preview.anchor, preview.side),
-        );
-        let (hover, close_hot) = (preview.hover, preview.close_hot);
-        let look = Look {
-            level: eased(preview.since, now),
-            highlight: None,
-        };
-        let peek = preview.peek.level(now) * look.level;
-        let peeked = preview.peek.window.clone().filter(|w| w.alive());
-        if peek > 0.0 && frost.is_some() && !self.blur.has(output) {
+        if peek <= 0.0 {
+            return SwitcherElements {
+                over,
+                ..Default::default()
+            };
+        }
+        // Peeking: every monitor dims and blurs, as Alt+Tab does, with the
+        // window lit where it is. The bar and dock stay over it all.
+        if frost.is_some() && !self.blur.has(output) {
             self.blur.capture(renderer, output, scene);
         }
-        let mut elements = self.panel_elements(
-            renderer,
-            decorations,
-            space,
-            output,
-            &windows,
-            &geometry,
-            hover,
-            Some(close_hot),
-            &look,
-            &mut frost,
-            false,
-            now,
-        );
-        if peek <= 0.0 {
-            return elements;
-        }
-        // Peeking: the window lit over the dim, as the switcher does it.
         let scale = Scale::from(output.current_scale().fractional_scale());
         let output_loc = space
             .output_geometry(output)
             .map_or_else(Default::default, |g| g.loc.to_f64());
-        if let Some(window) = peeked
-            && let Some(rect) = space
-                .elements_for_output(output)
-                .find(|w| **w == window)
-                .and_then(|w| space.element_geometry(w))
-        {
-            elements.extend(crate::render::window_elements(
-                renderer,
-                decorations,
-                None,
-                None,
-                &window,
-                rect.to_f64(),
-                Zoom::IDENTITY,
-                output_loc,
-                scale,
-                now,
-                1.0,
-            ));
+        let mut under = Vec::new();
+        if let Some(window) = peeked {
+            // On screen: where it is. On another workspace: where it sits on
+            // its monitor, shown on the dock's.
+            let rect = match space.element_geometry(&window) {
+                Some(rect) => space
+                    .elements_for_output(output)
+                    .any(|w| *w == window)
+                    .then_some(rect.to_f64()),
+                None => (&home == output).then(|| {
+                    let local = with_state(&window, |s| s.local);
+                    Rectangle::new(
+                        output_loc + local.to_f64(),
+                        window.geometry().size.to_f64(),
+                    )
+                }),
+            };
+            if let Some(rect) = rect {
+                under.extend(crate::render::window_elements(
+                    renderer,
+                    decorations,
+                    None,
+                    None,
+                    &window,
+                    rect,
+                    Zoom::IDENTITY,
+                    output_loc,
+                    scale,
+                    now,
+                    1.0,
+                ));
+            }
         }
         let dim = self.dim.get_or_insert_with(|| {
             SolidColorBuffer::new(Size::from((1, 1)), [0.0, 0.0, 0.0, 1.0])
@@ -634,15 +664,15 @@ impl Switcher {
         let size = size.to_i32_round::<i32>();
         dim.resize(Size::from((size.w.max(1), size.h.max(1))));
         let blurred = self.blur.element(output, peek as f32);
-        elements.push(OutputElement::Solid(SolidColorRenderElement::from_buffer(
+        under.push(OutputElement::Solid(SolidColorRenderElement::from_buffer(
             dim,
             (0, 0),
             scale,
             if blurred.is_some() { DIM_BLURRED } else { DIM } * peek as f32,
             Kind::Unspecified,
         )));
-        elements.extend(blurred.map(OutputElement::Wallpaper));
-        elements
+        under.extend(blurred.map(OutputElement::Wallpaper));
+        SwitcherElements { over, under }
     }
 
     /// The panel `geometry` with a thumbnail of each of `windows`: shared by
