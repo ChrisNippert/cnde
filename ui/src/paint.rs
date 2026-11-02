@@ -242,9 +242,11 @@ impl<'a> Canvas<'a> {
             .draw_pixmap(0, 0, layer, &paint, transform, None);
     }
 
-    /// `image`, already at this canvas's pixel scale, with its top-left at
-    /// (`x`, `y`), drawn only inside `clip` (x, y, w, h); all logical.
-    pub fn pixmap_clipped(
+    /// `image`, already at this canvas's pixel scale, copied in with its
+    /// top-left at (`x`, `y`), replacing what's there, only inside `clip`
+    /// (x, y, w, h); all logical. A plain copy of rows: far quicker than
+    /// drawing it, for moving a whole layer every frame.
+    pub fn copy_pixmap_clipped(
         &mut self,
         image: PixmapRef<'_>,
         x: f32,
@@ -252,25 +254,55 @@ impl<'a> Canvas<'a> {
         clip: (f32, f32, f32, f32),
     ) {
         let s = self.scale;
-        let (tx, ty) = ((x * s).round(), (y * s).round());
-        let (l, t) = ((clip.0 * s).max(tx), (clip.1 * s).max(ty));
-        let r = ((clip.0 + clip.2) * s).min(tx + image.width() as f32);
-        let b = ((clip.1 + clip.3) * s).min(ty + image.height() as f32);
-        let Some(rect) = Rect::from_ltrb(l, t, r, b) else {
+        let px = |v: f32| (v * s).round() as i64;
+        let (tx, ty) = (px(x), px(y));
+        let (w, h) = (self.pixmap.width() as i64, self.pixmap.height() as i64);
+        let (iw, ih) = (image.width() as i64, image.height() as i64);
+        let left = px(clip.0).max(tx).max(0);
+        let top = px(clip.1).max(ty).max(0);
+        let right = px(clip.0 + clip.2).min(tx + iw).min(w);
+        let bottom = px(clip.1 + clip.3).min(ty + ih).min(h);
+        if right <= left || bottom <= top {
+            return;
+        }
+        let bytes = (right - left) as usize * 4;
+        let src = image.data();
+        let dst = self.pixmap.data_mut();
+        for row in top..bottom {
+            let from = (((row - ty) * iw + (left - tx)) * 4) as usize;
+            let to = ((row * w + left) * 4) as usize;
+            dst[to..to + bytes].copy_from_slice(&src[from..from + bytes]);
+        }
+    }
+
+    /// [`Canvas::rounded_rect`] behind what's already drawn.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rounded_rect_behind(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        color: Color,
+    ) {
+        let s = self.scale;
+        let (x, y, w, h) = (x * s, y * s, w * s, h * s);
+        let r = (radius * s).min(w / 2.0).min(h / 2.0).max(0.0);
+        let Some(path) = rounded_rect_path(x, y, w, h, r) else {
             return;
         };
-        let paint = Paint {
-            shader: Pattern::new(
-                image,
-                SpreadMode::Pad,
-                FilterQuality::Nearest,
-                1.0,
-                Transform::from_translate(tx, ty),
-            ),
-            anti_alias: false,
-            ..Paint::default()
-        };
-        self.pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+        let mut paint = Paint::default();
+        paint.set_color(skia_color(color));
+        paint.anti_alias = true;
+        paint.blend_mode = tiny_skia::BlendMode::DestinationOver;
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 
     pub fn circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color) {

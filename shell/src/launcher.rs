@@ -694,6 +694,21 @@ impl Launcher {
             self.frame_pending = true;
             surface.commit();
         }
+        // Still, and that frame sent: draw the pages either side now, so a
+        // slide to one doesn't stop to draw it.
+        if self.page_slide.is_none()
+            && self.grid_opened.is_none()
+            && let Some(grid) = &layout.grid
+        {
+            for page in [self.page.checked_sub(1), Some(self.page + 1)]
+                .into_iter()
+                .flatten()
+                .filter(|p| *p < grid.pages)
+            {
+                self.pages
+                    .get(page, grid, fonts, icons, theme, apps, scale as f32);
+            }
+        }
     }
 }
 
@@ -895,13 +910,67 @@ fn paint_pill(
 /// moves finished images instead of laying out every name each frame.
 #[derive(Default)]
 struct PageCache {
-    /// Key (page, size, scale, its apps) and the page, card-sized; the few
-    /// last used.
+    /// Key (page, size, scale, its apps) and the page, card-sized; least
+    /// recently used first.
     pages: Vec<(u64, cnde_ui::tiny_skia::Pixmap)>,
 }
 
-/// Pages kept: the two a slide shows, and one it just left.
-const PAGES_KEPT: usize = 3;
+/// Pages kept: the one shown, those either side of it, and one just left.
+const PAGES_KEPT: usize = 4;
+
+impl PageCache {
+    /// Grid page `page`, drawn now if it isn't already.
+    #[allow(clippy::too_many_arguments)]
+    fn get(
+        &mut self,
+        page: usize,
+        grid: &GridLayout,
+        fonts: &mut Fonts,
+        icons: &mut Icons,
+        theme: &Theme,
+        apps: &[AppEntry],
+        scale: f32,
+    ) -> Option<&cnde_ui::tiny_skia::Pixmap> {
+        let first = page * grid.per_page;
+        let card = grid.card;
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            page.hash(&mut hasher);
+            scale.to_bits().hash(&mut hasher);
+            for v in [
+                card.w,
+                card.h,
+                grid.origin.0 - card.x,
+                grid.origin.1 - card.y,
+                grid.cell.0,
+                grid.cell.1,
+                theme.grid_icon_size,
+            ] {
+                v.to_bits().hash(&mut hasher);
+            }
+            grid.columns.hash(&mut hasher);
+            for app in apps.iter().skip(first).take(grid.per_page) {
+                (&app.id, &app.name, &app.icon).hash(&mut hasher);
+            }
+            hasher.finish()
+        };
+        match self.pages.iter().position(|(k, _)| *k == key) {
+            Some(at) => {
+                let hit = self.pages.remove(at);
+                self.pages.push(hit);
+            }
+            None => {
+                let image = paint_page(grid, fonts, icons, theme, apps, first, scale)?;
+                if self.pages.len() >= PAGES_KEPT {
+                    self.pages.remove(0);
+                }
+                self.pages.push((key, image));
+            }
+        }
+        self.pages.last().map(|(_, image)| image)
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 fn paint_grid(
@@ -927,8 +996,16 @@ fn paint_grid(
         .take(if near[0] == near[1] { 1 } else { 2 })
     {
         let dx = (page as f32 - shown) * card.w;
+        if let Some(image) = pages.get(page, grid, fonts, icons, theme, state.apps, scale) {
+            canvas.copy_pixmap_clipped(
+                image.as_ref(),
+                card.x + dx,
+                card.y,
+                (card.x, card.y, card.w, card.h),
+            );
+        }
+        // The selection, behind its page's icon.
         let first = page * grid.per_page;
-        // The selection, under its page.
         let selected = state.grid_selected;
         if (first..first + grid.per_page).contains(&selected) && selected < state.apps.len() {
             let mut cell = grid.slot(selected - first);
@@ -936,7 +1013,7 @@ fn paint_grid(
             // Slid past the card's edge: hidden, as its page is.
             let inside = cell.x + cell.w > card.x && cell.x < card.x + card.w;
             if inside {
-                canvas.rounded_rect(
+                canvas.rounded_rect_behind(
                     cell.x + 6.0,
                     cell.y + 4.0,
                     cell.w - 12.0,
@@ -946,48 +1023,6 @@ fn paint_grid(
                 );
             }
         }
-        let key = {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            page.hash(&mut hasher);
-            scale.to_bits().hash(&mut hasher);
-            for v in [
-                card.w,
-                card.h,
-                grid.origin.0 - card.x,
-                grid.origin.1 - card.y,
-                grid.cell.0,
-                grid.cell.1,
-                theme.grid_icon_size,
-            ] {
-                v.to_bits().hash(&mut hasher);
-            }
-            grid.columns.hash(&mut hasher);
-            for app in state.apps.iter().skip(first).take(grid.per_page) {
-                (&app.id, &app.name, &app.icon).hash(&mut hasher);
-            }
-            hasher.finish()
-        };
-        let at = match pages.pages.iter().position(|(k, _)| *k == key) {
-            Some(at) => at,
-            None => {
-                let Some(image) = paint_page(grid, fonts, icons, theme, state.apps, first, scale)
-                else {
-                    continue;
-                };
-                if pages.pages.len() >= PAGES_KEPT {
-                    pages.pages.remove(0);
-                }
-                pages.pages.push((key, image));
-                pages.pages.len() - 1
-            }
-        };
-        canvas.pixmap_clipped(
-            pages.pages[at].1.as_ref(),
-            card.x + dx,
-            card.y,
-            (card.x, card.y, card.w, card.h),
-        );
     }
     // Page dots.
     if grid.pages > 1 {
