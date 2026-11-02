@@ -8,7 +8,7 @@ compositor record where its own time goes (its `perf` module).
     python3 tools/perf/sample.py [--out DIR] [--only NAME ...] [--list]
 
 Writes to DIR (default perf-runs/<time>):
-    scenarios.csv   name,start_ms,end_ms
+    scenarios.csv   name,start_ms,end_ms (a row with no end: started, then the run was cut short)
     processes.csv   unix_ms,pid,name,cpu_pct,rss_kb,pss_kb,gpu_pct,vram_kb,gtt_kb
     system.csv      unix_ms,cpu_pct,mem_used_kb,gpu_busy_pct,vram_used_kb
     compositor.csv  unix_ms,section,calls,total_us,max_us
@@ -22,6 +22,7 @@ import csv
 import glob
 import json
 import os
+import signal
 import socket
 import sys
 import threading
@@ -212,11 +213,11 @@ class Sampler(threading.Thread):
         self.uid = os.getuid()
         self.me = os.getpid()
         self.device = gpu_device()
-        self.processes = csv.writer(open(os.path.join(out, "processes.csv"), "w", newline=""))
+        self.processes = csv.writer(open(os.path.join(out, "processes.csv"), "w", newline="", buffering=1))
         self.processes.writerow(
             ["unix_ms", "pid", "name", "cpu_pct", "rss_kb", "pss_kb", "gpu_pct", "vram_kb", "gtt_kb"]
         )
-        self.system = csv.writer(open(os.path.join(out, "system.csv"), "w", newline=""))
+        self.system = csv.writer(open(os.path.join(out, "system.csv"), "w", newline="", buffering=1))
         self.system.writerow(["unix_ms", "cpu_pct", "mem_used_kb", "gpu_busy_pct", "vram_used_kb"])
 
     def run(self):
@@ -306,9 +307,17 @@ def main():
         print("cnde's compositor isn't running here: sampling processes only.")
     recording = compositor_perf(sock, True)
 
+    # Its terminal closing ends the run as Ctrl+C would: what's recorded is
+    # kept, and the compositor stops recording.
+    def interrupted(*_):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGHUP, interrupted)
+    signal.signal(signal.SIGTERM, interrupted)
+
     sampler = Sampler(out)
     sampler.start()
-    marks = csv.writer(open(os.path.join(out, "scenarios.csv"), "w", newline=""), lineterminator="\n")
+    marks = csv.writer(open(os.path.join(out, "scenarios.csv"), "w", newline="", buffering=1), lineterminator="\n")
     marks.writerow(["name", "start_ms", "end_ms"])
     print(f"Recording to {out}. For each one: get set up, press Enter to start, Enter again when done.")
     print("Type s then Enter to skip one, q then Enter to stop.\n")
@@ -321,6 +330,9 @@ def main():
             if answer == "s":
                 continue
             start = now_ms()
+            # Marked open-ended first, so a run cut short still shows where
+            # this one began.
+            marks.writerow([name, start, ""])
             answer = input("  recording... Enter when done > ").strip().lower()
             marks.writerow([name, start, now_ms()])
             if answer == "q":
@@ -337,7 +349,10 @@ def main():
             if data is not None:
                 with open(os.path.join(out, "compositor.csv"), "w") as f:
                     f.write(data)
-    print(f"Done: {out}")
+    try:
+        print(f"Done: {out}")
+    except OSError:
+        pass  # No terminal left to say it on.
 
 
 if __name__ == "__main__":
