@@ -203,6 +203,10 @@ pub struct Switcher {
     blur: crate::scene_blur::SceneBlur,
     /// The selection highlight: one cell, drawn on its own so it can slide.
     highlight: Option<(u64, MemoryRenderBuffer)>,
+    /// A dock preview cell's close button, drawn on its own over the
+    /// thumbnails (a window reaching the cell's top would hide it), and
+    /// whether it's lit.
+    close: Option<((u64, bool), MemoryRenderBuffer)>,
 }
 
 /// How the panel is drawn this frame.
@@ -221,8 +225,6 @@ struct Key {
     selected: Option<usize>,
     /// The selection is painted into the panel (else it's drawn apart).
     lit: bool,
-    /// Cells carry a close button (dock previews); is the hovered one's lit.
-    closable: Option<bool>,
     cols: usize,
     scale: u64,
     size: (i32, i32),
@@ -744,7 +746,6 @@ impl Switcher {
                 .collect(),
             selected,
             lit: look.highlight.is_none(),
-            closable,
             cols: geometry.cols,
             scale: scale.x.to_bits(),
             size: (geometry.panel.size.w as i32, geometry.panel.size.h as i32),
@@ -784,6 +785,33 @@ impl Switcher {
                 Ok(element) => elements.push(OutputElement::Titlebar(
                     RescaleRenderElement::from_element(element, around, scale_up),
                 )),
+                Err(err) => warn!(?err, "can't upload the window switcher"),
+            }
+        }
+        // In front of all: the hovered cell's close button.
+        if let (Some(hot), Some(cell)) = (closable, selected.and_then(|i| geometry.cells.get(i)))
+        {
+            let rect = close_rect(*cell);
+            let buffer = self.close_buffer(scale.x, hot, &decorations.appearance);
+            let location =
+                Point::<f64, Logical>::from((geometry.panel.loc.x + rect.loc.x, geometry.panel.loc.y + rect.loc.y))
+                    .to_physical(scale);
+            let pixels = (CLOSE * scale.x).round();
+            match MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                location,
+                &buffer,
+                Some(alpha),
+                Some(Rectangle::from_size(Size::from((pixels, pixels)))),
+                Some(Size::from((CLOSE as i32, CLOSE as i32))),
+                Kind::Unspecified,
+            ) {
+                Ok(element) => elements.insert(
+                    0,
+                    OutputElement::Titlebar(RescaleRenderElement::from_element(
+                        element, around, scale_up,
+                    )),
+                ),
                 Err(err) => warn!(?err, "can't upload the window switcher"),
             }
         }
@@ -884,6 +912,59 @@ impl Switcher {
         buffer
     }
 
+    /// A cell's close button, painted once per scale, style and lit-ness.
+    fn close_buffer(
+        &mut self,
+        scale: f64,
+        hot: bool,
+        appearance: &cnde_config::Appearance,
+    ) -> MemoryRenderBuffer {
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            scale.to_bits().hash(&mut hasher);
+            format!("{appearance:?}").hash(&mut hasher);
+            (hasher.finish(), hot)
+        };
+        if let Some((k, buffer)) = &self.close
+            && *k == key
+        {
+            return buffer.clone();
+        }
+        let theme = cnde_ui::Theme::for_appearance(appearance);
+        let size = (CLOSE * scale).round() as u32;
+        let mut pixels = vec![0u8; (size * size * 4) as usize];
+        let icons = self.icons.get_or_insert_with(Icons::new);
+        icons.set_theme(&appearance.icon_theme);
+        if let Some(mut canvas) = Canvas::new(&mut pixels, size, size, scale as f32) {
+            canvas.clear(Color::rgba(0, 0, 0, 0.0));
+            let r = (CLOSE / 2.0) as f32;
+            let fill = if hot {
+                theme.accent
+            } else {
+                // Over a thumbnail now, so solid rather than a tint.
+                theme.window_background.mix(theme.window_text, 0.18)
+            };
+            canvas.circle(r, r, r, fill);
+            let ink = if hot {
+                theme.on_accent
+            } else {
+                theme.window_text
+            };
+            canvas.icon(icons, "window-close-symbolic", r * 0.5, r * 0.5, r, ink);
+        }
+        let buffer = MemoryRenderBuffer::from_slice(
+            &pixels,
+            Fourcc::Abgr8888,
+            (size as i32, size as i32),
+            1,
+            Transform::Normal,
+            None,
+        );
+        self.close = Some((key, buffer.clone()));
+        buffer
+    }
+
     fn paint(&mut self, key: &Key) -> Option<MemoryRenderBuffer> {
         let scale = f64::from_bits(key.scale);
         let (w, h) = (
@@ -940,35 +1021,6 @@ impl Switcher {
                         THUMB_H as f32,
                         8.0,
                         theme.window_text.with_alpha(0.05),
-                    );
-                }
-                if key.selected == Some(i)
-                    && let Some(hot) = key.closable
-                {
-                    let close = close_rect(*cell);
-                    let (cx, cy) = (
-                        (close.loc.x + close.size.w / 2.0) as f32,
-                        (close.loc.y + close.size.h / 2.0) as f32,
-                    );
-                    let r = (CLOSE / 2.0) as f32;
-                    let fill = if hot {
-                        theme.accent
-                    } else {
-                        theme.window_text.with_alpha(0.18)
-                    };
-                    canvas.circle(cx, cy, r, fill);
-                    let ink = if hot {
-                        theme.on_accent
-                    } else {
-                        theme.window_text
-                    };
-                    canvas.icon(
-                        icons,
-                        "window-close-symbolic",
-                        cx - r * 0.5,
-                        cy - r * 0.5,
-                        r,
-                        ink,
                     );
                 }
                 let label_y = y + (THUMB_TOP + THUMB_H + 10.0) as f32;
@@ -1168,7 +1220,7 @@ impl State {
         else {
             return;
         };
-        let windows: Vec<Window> = ids
+        let mut windows: Vec<Window> = ids
             .iter()
             .filter_map(|id| {
                 self.workspaces
@@ -1179,6 +1231,14 @@ impl State {
                     .cloned()
             })
             .collect();
+        // Left to right as they sit across the monitors, so the thumbnails
+        // match the screen and don't swap as focus moves; ones off screen
+        // (minimized, other workspaces) last.
+        windows.sort_by_key(|w| {
+            self.space
+                .element_geometry(w)
+                .map_or((1, 0, 0), |g| (0, g.loc.x, g.loc.y))
+        });
         let area = {
             let map = smithay::desktop::layer_map_for_output(&output);
             map.layers()
