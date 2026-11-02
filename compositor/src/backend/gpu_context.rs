@@ -65,6 +65,12 @@ pub fn create_context(
 }
 
 fn robust_context(display: &EGLDisplay) -> Option<EGLContext> {
+    // A way back to the old context without a rebuild, should the
+    // reset-safe one misbehave on some driver.
+    if std::env::var_os("CNDE_PLAIN_GL_CONTEXT").is_some() {
+        info!("CNDE_PLAIN_GL_CONTEXT is set: using the plain GL context");
+        return None;
+    }
     let has = |name: &str| display.extensions().iter().any(|e| e == name);
     let strategy = if has("EGL_EXT_create_context_robustness") {
         CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT
@@ -164,25 +170,27 @@ pub enum ResetStatus {
 /// smithay's bindings, so it is looked up by name.
 fn status_now() -> Option<ResetStatus> {
     type Fn = unsafe extern "system" fn() -> u32;
-    let names: [&[u8]; 3] = [
-        b"glGetGraphicsResetStatusKHR\0",
-        b"glGetGraphicsResetStatus\0",
-        b"glGetGraphicsResetStatusEXT\0",
-    ];
-    for name in names {
-        // Safety: the name is NUL terminated.
-        let ptr = unsafe { ffi::egl::GetProcAddress(name.as_ptr().cast()) };
-        if ptr.is_null() {
-            continue;
-        }
-        // Safety: all three entry points have this signature.
-        let func: Fn = unsafe { std::mem::transmute(ptr) };
-        return match unsafe { func() } {
-            GUILTY_CONTEXT_RESET => Some(ResetStatus::Guilty),
-            INNOCENT_CONTEXT_RESET => Some(ResetStatus::Innocent),
-            UNKNOWN_CONTEXT_RESET => Some(ResetStatus::Unknown),
-            _ => None,
-        };
+    // Looked up once: it's asked every frame, and EGL's entry points don't
+    // depend on which context is current.
+    static FUNC: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    let func = (*FUNC.get_or_init(|| {
+        let names: [&[u8]; 3] = [
+            b"glGetGraphicsResetStatusKHR\0",
+            b"glGetGraphicsResetStatus\0",
+            b"glGetGraphicsResetStatusEXT\0",
+        ];
+        names.into_iter().find_map(|name| {
+            // Safety: the name is NUL terminated.
+            let ptr = unsafe { ffi::egl::GetProcAddress(name.as_ptr().cast()) };
+            (!ptr.is_null()).then_some(ptr as usize)
+        })
+    }))?;
+    // Safety: all three entry points have this signature.
+    let func: Fn = unsafe { std::mem::transmute(func) };
+    match unsafe { func() } {
+        GUILTY_CONTEXT_RESET => Some(ResetStatus::Guilty),
+        INNOCENT_CONTEXT_RESET => Some(ResetStatus::Innocent),
+        UNKNOWN_CONTEXT_RESET => Some(ResetStatus::Unknown),
+        _ => None,
     }
-    None
 }
