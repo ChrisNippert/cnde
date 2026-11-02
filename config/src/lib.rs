@@ -168,6 +168,22 @@ pub struct OutputConfig {
     /// for each frame instead of refreshing on a fixed clock.
     #[serde(default)]
     pub vrr: Vrr,
+    /// Which way the monitor is turned; the picture turns to match.
+    #[serde(default)]
+    pub rotation: Rotation,
+}
+
+/// `rotation = "normal" | "left" | "right" | "upside-down"`: which way the
+/// monitor itself was turned (its top now at the left, at the right, or at
+/// the bottom).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Rotation {
+    #[default]
+    Normal,
+    Left,
+    Right,
+    UpsideDown,
 }
 
 /// `vrr = "off" | "on" | "fullscreen"`.
@@ -1362,6 +1378,11 @@ mod tests {
         assert_eq!(output.position, Some(Position { x: 1920, y: 0 }));
         assert_eq!(output.scale, Some(1.5));
         assert_eq!(output.mode, None);
+        assert_eq!(output.rotation, Rotation::Normal);
+        let config =
+            Config::parse("[[output]]\nname = \"DP-2\"\nrotation = \"upside-down\"\n").unwrap();
+        assert_eq!(config.output("DP-2").unwrap().rotation, Rotation::UpsideDown);
+        assert!(Config::parse("[[output]]\nname = \"DP-2\"\nrotation = \"90\"\n").is_err());
         let config = Config::parse(
             "[[output]]\nname = \"DP-2\"\nmode = { width = 2560, height = 1440, refresh = 179.96 }\n",
         )

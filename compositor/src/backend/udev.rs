@@ -612,6 +612,15 @@ impl State {
         }
         self.apply_output_modes();
         let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        // First, so the sizes below are the turned ones.
+        for output in &outputs {
+            let rotation = self.config.output(&output.name()).map(|c| c.rotation);
+            let transform = output_transform(rotation.unwrap_or_default());
+            if output.current_transform() != transform {
+                info!(name = %output.name(), ?transform, "rotation changed");
+                output.change_current_state(None, Some(transform), None, None);
+            }
+        }
         let mut placed: Vec<(Output, Point<i32, smithay::utils::Logical>, f64)> = Vec::new();
         let mut auto = Vec::new();
         for output in outputs {
@@ -624,7 +633,8 @@ impl State {
         }
         let logical_width = |output: &Output, scale: f64| {
             output.current_mode().map_or(0, |mode| {
-                mode.size.to_f64().to_logical(scale).to_i32_round::<i32>().w
+                let size = output.current_transform().transform_size(mode.size);
+                size.to_f64().to_logical(scale).to_i32_round::<i32>().w
             })
         };
         for (output, scale) in auto {
@@ -1342,6 +1352,18 @@ impl State {
         {
             warn!(vt, ?err, "failed to switch VT");
         }
+    }
+}
+
+/// How a turned monitor's picture is turned back. wl_output's transforms
+/// name the panel's own rotation counter-clockwise: a monitor turned left
+/// is 90, turned right 270.
+fn output_transform(rotation: cnde_config::Rotation) -> Transform {
+    match rotation {
+        cnde_config::Rotation::Normal => Transform::Normal,
+        cnde_config::Rotation::Left => Transform::_90,
+        cnde_config::Rotation::UpsideDown => Transform::_180,
+        cnde_config::Rotation::Right => Transform::_270,
     }
 }
 

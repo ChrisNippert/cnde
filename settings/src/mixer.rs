@@ -1248,6 +1248,7 @@ mod tests {
             terminal: false,
             no_display: false,
             path: std::path::PathBuf::new(),
+            wm_class: None,
         }
     }
 

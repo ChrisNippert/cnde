@@ -330,7 +330,8 @@ pub fn output_elements(
     let output_geo = Rectangle::new(
         output_loc,
         output.current_mode().map_or_else(Default::default, |mode| {
-            mode.size.to_f64().to_logical(scale.x)
+            let size = output.current_transform().transform_size(mode.size);
+            size.to_f64().to_logical(scale.x)
         }),
     );
     let mut closing = popups.closing_elements(output_geo, scale, now);

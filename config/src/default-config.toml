@@ -36,6 +36,7 @@
 # mode = { width = 2560, height = 1440, refresh = 180 }   # default: preferred size, fastest refresh
 # main = true              # anchor for workspaces; default is the leftmost
 # vrr = "fullscreen"       # FreeSync: "off" (default), "on", or "fullscreen" (games/videos only)
+# rotation = "right"      # the monitor turned: "normal" (default), "left", "right" (its top at the right), "upside-down"
 
 [appearance]
 # color_scheme = "dark"    # or "light"; picks the wallpaper variant

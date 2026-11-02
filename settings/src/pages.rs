@@ -1731,6 +1731,27 @@ fn displays_page(c: &Config, displays: &[Display], brightness: Option<u32>) -> V
                 advanced: false,
                 disabled: !display.vrr_capable,
             });
+            let rotation = match output.map(|o| o.rotation) {
+                Some(cnde_config::Rotation::Left) => s("left"),
+                Some(cnde_config::Rotation::Right) => s("right"),
+                Some(cnde_config::Rotation::UpsideDown) => s("upside-down"),
+                _ => Value::Unset,
+            };
+            rows.push(Row {
+                key: output_key("rotation"),
+                title: "Rotation".into(),
+                subtitle: "For a monitor turned on its side".into(),
+                control: Control::Dropdown(choices(&[
+                    ("Landscape", Value::Unset),
+                    ("Portrait (turned right)", s("right")),
+                    ("Portrait (turned left)", s("left")),
+                    ("Landscape (upside down)", s("upside-down")),
+                ])),
+                value: rotation,
+                default: Value::Unset,
+                advanced: false,
+                disabled: false,
+            });
             rows.push(coordinate('x'));
             rows.push(coordinate('y'));
             Group {
