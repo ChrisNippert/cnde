@@ -65,6 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         set_session_environment();
     }
     init_logging();
+    // Desktop entries, read on a thread: Alt+Tab finds window icons by them.
+    cnde_apps::start();
 
     // Wayland's socket lives here. Without elogind/logind setting it (e.g.
     // Alpine with seatd), it has to come from the login shell.

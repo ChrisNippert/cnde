@@ -771,7 +771,7 @@ impl Switcher {
                 .iter()
                 .map(|w| {
                     let (title, app_id) = crate::capture::title_and_app_id(w);
-                    (with_state(w, |s| s.id), title, app_id)
+                    (with_state(w, |s| s.id), title, app_icon_name(app_id))
                 })
                 .collect(),
             selected,
@@ -1471,4 +1471,14 @@ mod tests {
         let right = layout(1, output, Place::Beside(side, Side::Right));
         assert!(right.panel.loc.x >= 72.0);
     }
+}
+
+/// The icon for a window's app ID: its desktop entry's (VS Code's windows
+/// are "com.microsoft.VSCode", its icon "vscode"), else the ID itself, which
+/// is often also the icon's name.
+fn app_icon_name(app_id: String) -> String {
+    cnde_apps::index()
+        .and_then(|index| index.icon_for_window(&app_id))
+        .map(String::from)
+        .unwrap_or(app_id)
 }

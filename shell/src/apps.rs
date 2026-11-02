@@ -211,6 +211,15 @@ impl App {
                 .rsplit('.')
                 .next()
                 .is_some_and(|last| last.eq_ignore_ascii_case(app_id))
+            // A Steam game's windows are "steam_app_<id>"; Steam's
+            // shortcut for it runs steam://rungameid/<id>.
+            || app_id.strip_prefix("steam_app_").is_some_and(|game| {
+                !game.is_empty()
+                    && self
+                        .exec
+                        .split_whitespace()
+                        .any(|arg| arg == format!("steam://rungameid/{game}"))
+            })
     }
 }
 
@@ -490,6 +499,16 @@ mod tests {
         assert_eq!(app.description, "Web Browser");
         assert_eq!(app.icon, "firefox");
         assert_eq!(command_line(&app.exec), "firefox");
+    }
+
+    #[test]
+    fn steam_games_match_their_shortcut() {
+        let game = app("[Desktop Entry]\nType=Application\nName=Halo\n\
+            Exec=steam steam://rungameid/2806050\nIcon=steam_icon_2806050\n")
+        .unwrap();
+        assert!(game.owns("steam_app_2806050"));
+        assert!(!game.owns("steam_app_280605"));
+        assert!(!game.owns("steam_app_"));
     }
 
     #[test]

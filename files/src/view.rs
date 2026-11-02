@@ -1930,6 +1930,7 @@ mod tests {
                 terminal: false,
                 no_display: false,
                 path: PathBuf::new(),
+                wm_class: None,
             };
             crate::apps::install(crate::apps::Index {
                 apps: vec![
@@ -2026,6 +2027,7 @@ mod tests {
                 terminal: false,
                 no_display: false,
                 path: PathBuf::new(),
+                wm_class: None,
             };
             crate::apps::install(crate::apps::Index {
                 apps: vec![

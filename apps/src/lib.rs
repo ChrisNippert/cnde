@@ -29,6 +29,39 @@ pub struct App {
     pub terminal: bool,
     pub no_display: bool,
     pub path: PathBuf,
+    /// `StartupWMClass`: the app ID its windows use, when that isn't the
+    /// desktop file's name.
+    pub wm_class: Option<String>,
+}
+
+impl App {
+    /// Whether a window with this Wayland app ID belongs to this app:
+    /// "firefox" for firefox.desktop, "org.gnome.Nautilus" for
+    /// org.gnome.Nautilus.desktop, the entry's StartupWMClass, or a Steam
+    /// game ("steam_app_<id>") for the shortcut that runs it.
+    pub fn owns(&self, app_id: &str) -> bool {
+        if app_id.is_empty() {
+            return false;
+        }
+        let stem = self.id.strip_suffix(".desktop").unwrap_or(&self.id);
+        stem.eq_ignore_ascii_case(app_id)
+            || self
+                .wm_class
+                .as_deref()
+                .is_some_and(|c| c.eq_ignore_ascii_case(app_id))
+            // Flatpak and reverse-DNS IDs often end in the app ID.
+            || stem
+                .rsplit('.')
+                .next()
+                .is_some_and(|last| last.eq_ignore_ascii_case(app_id))
+            || app_id.strip_prefix("steam_app_").is_some_and(|game| {
+                !game.is_empty()
+                    && self
+                        .exec
+                        .split_whitespace()
+                        .any(|arg| arg == format!("steam://rungameid/{game}"))
+            })
+    }
 }
 
 /// Parse one desktop file. `None` for what isn't a usable application:
@@ -90,6 +123,10 @@ pub fn parse_desktop(text: &str, id: &str, path: &Path) -> Option<App> {
         terminal: flag("Terminal"),
         no_display: flag("NoDisplay"),
         path: path.to_path_buf(),
+        wm_class: kv
+            .get("StartupWMClass")
+            .filter(|c| !c.is_empty())
+            .map(|c| c.to_string()),
     })
 }
 
@@ -355,6 +392,14 @@ impl Index {
         self.for_mime(mime).first().copied()
     }
 
+    /// The icon of the app a window with this app ID belongs to.
+    pub fn icon_for_window(&self, app_id: &str) -> Option<&str> {
+        self.apps
+            .iter()
+            .filter(|app| app.owns(app_id))
+            .find_map(|app| app.icon.as_deref())
+    }
+
     /// Everything that can be picked from "Other Application…".
     pub fn all(&self) -> Vec<usize> {
         (0..self.apps.len())
@@ -548,6 +593,7 @@ mod tests {
             terminal: false,
             no_display: false,
             path: PathBuf::from(format!("/usr/share/applications/{id}")),
+            wm_class: None,
         }
     }
 
