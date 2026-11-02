@@ -197,6 +197,19 @@ impl Wallpapers {
         }
     }
 
+    /// The GPU was reset: the textures are gone. The colours measured from the
+    /// image stay (the adaptive palette keeps its look), and the wallpaper is
+    /// decoded and uploaded again.
+    pub fn clear_gpu(&mut self) {
+        for entry in self.entries.values_mut() {
+            entry.texture = None;
+            entry.blurred = None;
+            entry.upload = None;
+        }
+        self.generation += 1;
+        self.requested.clear();
+    }
+
     /// The config changed; reload if it affects the wallpaper.
     pub fn update_config(&mut self, config: &Config) {
         let source = Source::from_config(config);

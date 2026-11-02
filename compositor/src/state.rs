@@ -421,6 +421,39 @@ impl State {
         crate::watchdog::beat(Phase::Dispatch);
     }
 
+    /// The GPU was reset and the renderer replaced: let go of everything
+    /// that belonged to the old GL context (shader programs, textures made
+    /// from them), so each is made again when next needed. Client buffers
+    /// and the cnde-drawn pixel images (title bars, cursors) are imported
+    /// again by the new renderer on their own.
+    pub fn clear_gpu_caches(&mut self) {
+        self.closing.clear();
+        self.wallpapers.clear_gpu();
+        self.dock_frost.clear_gpu();
+        self.crossfade.clear_gpu();
+        self.night_light.clear_gpu();
+        self.overview.clear_gpu();
+        self.switcher.clear_gpu();
+        self.decorations.clear_gpu();
+        self.popup_anims.clear_gpu();
+        self.screenshot.clear_gpu();
+        // Snapshots a window holds while it resizes.
+        let windows: Vec<smithay::desktop::Window> = self
+            .space
+            .elements()
+            .chain(&self.unmapped)
+            .chain(&self.mru)
+            .cloned()
+            .collect();
+        for window in &windows {
+            crate::window::with_state(window, crate::effects::clear_gpu);
+        }
+        self.queue_redraw();
+        // Compile the shaders that are compiled at startup, now, instead of
+        // as a stutter on first use.
+        self.prepare_effects();
+    }
+
     /// A moment after startup: compile shaders and load fonts the switcher,
     /// dock preview and thumbnails use, so their first showing doesn't
     /// stutter.

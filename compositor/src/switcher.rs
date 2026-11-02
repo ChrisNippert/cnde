@@ -1009,6 +1009,12 @@ impl Switcher {
 
     /// Load what the first switch or dock preview would otherwise stop to
     /// load: fonts, icons, the blur shader.
+    /// The GPU was reset: the blur shader and the held blurs belonged to the
+    /// lost context.
+    pub fn clear_gpu(&mut self) {
+        self.blur.clear_gpu();
+    }
+
     pub fn prepare(&mut self, renderer: &mut GlesRenderer) {
         self.load_fonts();
         self.icons.get_or_insert_with(Icons::new);

@@ -157,6 +157,14 @@ pub struct NightLight {
 pub struct Filter(PixelShaderElement);
 
 impl NightLight {
+    /// The GPU was reset: the shader and the elements using it belonged to
+    /// the lost context.
+    pub fn clear_gpu(&mut self) {
+        self.shader = None;
+        self.broken = false;
+        self.elements.clear();
+    }
+
     /// Turn on at `temperature` kelvin, or off with `None`. Whether that's
     /// a change (needing frames to fade).
     pub fn set(&mut self, target: Option<u32>) -> bool {

@@ -100,6 +100,15 @@ pub struct Frost {
 }
 
 impl DockFrost {
+    /// The GPU was reset: both shaders and the backings built on them
+    /// belonged to the lost context.
+    pub fn clear_gpu(&mut self) {
+        self.shader = None;
+        self.solid_shader = None;
+        self.broken = false;
+        self.solids.clear();
+    }
+
     /// The frost under the dock and the top bar on `output`, where the
     /// config asks for it.
     #[allow(clippy::too_many_arguments)]

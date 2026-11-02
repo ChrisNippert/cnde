@@ -173,6 +173,14 @@ fn shrink(full: Size<i32, Physical>, by: i32) -> Size<i32, Physical> {
 }
 
 impl SceneBlur {
+    /// The GPU was reset: the shader and the held copies belonged to the
+    /// lost context. The next switcher or dock preview blurs afresh.
+    pub fn clear_gpu(&mut self) {
+        self.shader = None;
+        self.broken = false;
+        self.held.clear();
+    }
+
     /// Whether a blurred copy of `output` is held.
     pub fn has(&self, output: &Output) -> bool {
         self.find(output).is_some()
