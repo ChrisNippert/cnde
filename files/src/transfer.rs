@@ -202,17 +202,22 @@ impl Run<'_> {
     }
 }
 
-fn copy_item(run: &mut Run<'_>, src: &Path, dst: &Path) -> Result<(), Fail> {
+/// `made` turns true once `dst` exists because of us: only then is it
+/// ours to delete after a failure (something else may have taken the name
+/// since it was picked).
+fn copy_item(run: &mut Run<'_>, src: &Path, dst: &Path, made: &mut bool) -> Result<(), Fail> {
     run.check()?;
     let meta = fs::symlink_metadata(src)?;
     let kind = meta.file_type();
     if kind.is_symlink() {
         symlink(fs::read_link(src)?, dst)?;
+        *made = true;
     } else if kind.is_dir() {
         fs::create_dir(dst)?;
+        *made = true;
         for entry in fs::read_dir(src)? {
             let entry = entry?;
-            copy_item(run, &entry.path(), &dst.join(entry.file_name()))?;
+            copy_item(run, &entry.path(), &dst.join(entry.file_name()), &mut false)?;
         }
         // Last, so a read-only folder could still be filled.
         fs::set_permissions(dst, meta.permissions())?;
@@ -226,6 +231,7 @@ fn copy_item(run: &mut Run<'_>, src: &Path, dst: &Path) -> Result<(), Fail> {
             .create_new(true)
             .mode(meta.permissions().mode() & 0o7777)
             .open(dst)?;
+        *made = true;
         let mut buf = vec![0u8; CHUNK];
         loop {
             run.check()?;
@@ -270,10 +276,13 @@ pub fn move_exact(from: &Path, to: &Path) -> io::Result<()> {
                 name: String::new(),
                 report: &mut report,
             };
-            match copy_item(&mut run, from, to) {
+            let mut made = false;
+            match copy_item(&mut run, from, to, &mut made) {
                 Ok(()) => remove_any(from),
                 Err(Fail::Io(e)) => {
-                    let _ = remove_any(to);
+                    if made {
+                        let _ = remove_any(to);
+                    }
                     Err(e)
                 }
                 Err(Fail::Cancel) => unreachable!(),
@@ -353,7 +362,8 @@ pub fn run(
         let dst = unique_path(dest, name, is_dir);
         state.name = shown.clone();
         state.tick(true);
-        match copy_item(&mut state, src, &dst) {
+        let mut made = false;
+        match copy_item(&mut state, src, &dst, &mut made) {
             Ok(()) => {
                 if mode == Mode::Move
                     && let Err(e) = remove_any(src)
@@ -365,12 +375,16 @@ pub fn run(
                 out.made.push((src.clone(), dst));
             }
             Err(Fail::Cancel) => {
-                let _ = remove_any(&dst);
+                if made {
+                    let _ = remove_any(&dst);
+                }
                 out.cancelled = true;
                 break;
             }
             Err(Fail::Io(e)) => {
-                let _ = remove_any(&dst);
+                if made {
+                    let _ = remove_any(&dst);
+                }
                 let verb = if mode == Mode::Move { "move" } else { "copy" };
                 errors.push(format!("Can't {verb} “{shown}”: {e}"));
             }
