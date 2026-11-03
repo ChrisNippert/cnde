@@ -569,19 +569,18 @@ impl State {
         };
         let minimized = crate::window::with_state(&window, |s| std::mem::take(&mut s.minimized));
         if minimized {
-            // Grows out of its dock icon (set before the layout, which
-            // leaves opening windows to their own animation).
-            let from = self.dock_icon_rect(&window);
+            // Comes back out of its dock icon, or rises from below
+            // without one (set before the layout, which leaves opening
+            // windows to their own animation).
+            let from = self.hide_target(&window);
             tracing::debug!(?from, "restoring minimized window");
             crate::window::with_state(&window, |s| {
-                s.open_from = from;
-                if from.is_some() {
-                    s.open_anim = Some(crate::animation::Animation::new(
-                        0.0,
-                        1.0,
-                        crate::animation::presets::WINDOW_RESTORE,
-                    ));
-                }
+                s.open_from = Some(from);
+                s.open_anim = Some(crate::animation::Animation::new(
+                    0.0,
+                    1.0,
+                    crate::animation::presets::WINDOW_RESTORE,
+                ));
             });
         }
         // Shown on any monitor (a minimized window isn't in the space, so ask

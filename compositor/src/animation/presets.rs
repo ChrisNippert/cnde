@@ -32,11 +32,12 @@ pub const WINDOW_CLOSE: Params = Params {
 /// Closing windows shrink to this scale while fading out.
 pub const WINDOW_CLOSE_END_SCALE: f64 = 0.9;
 
-/// Minimizing flies the window into its dock icon; restoring grows it back
-/// out. Both only when the icon is known and on screen.
+/// Minimizing flies the window into its dock icon (or drifts it down when
+/// there's none on screen); restoring is the same motion backwards, on the
+/// same curve so it feels like one gesture.
 pub const WINDOW_MINIMIZE: Params = Params {
     duration: Duration::from_millis(280),
-    curve: Curve::EaseInCubic,
+    curve: Curve::EaseOutCubic,
 };
 pub const WINDOW_RESTORE: Params = Params {
     duration: Duration::from_millis(280),

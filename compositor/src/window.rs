@@ -48,9 +48,9 @@ pub struct WindowState {
     /// fullscreen returns to, instead of floating.
     pub before_fullscreen: Option<Placement>,
     pub open_anim: Option<Animation>,
-    /// With `open_anim`: the dock icon (global coordinates) it grows out of,
-    /// when restored from minimized.
-    pub open_from: Option<Rectangle<f64, Logical>>,
+    /// With `open_anim`: where it comes back from when restored from
+    /// minimized (its dock icon, or below), instead of a plain open.
+    pub open_from: Option<effects::Hide>,
     pub resize_anim: Option<ResizeAnim>,
     pub pending_size: Option<PendingSize>,
     /// Position relative to its monitor's origin; kept for hidden windows
@@ -180,8 +180,8 @@ impl State {
     }
 
     /// [`start_close_animation`](Self::start_close_animation), flying into
-    /// the dock icon `icon` (global coordinates) if given.
-    fn start_close_animation_to(&mut self, window: &Window, icon: Option<Rectangle<f64, Logical>>) {
+    /// the place `hide` names if given.
+    fn start_close_animation_to(&mut self, window: &Window, hide: Option<effects::Hide>) {
         let Some(below) = self.space.elements().position(|w| w == window) else {
             return;
         };
@@ -208,12 +208,12 @@ impl State {
         debug!(
             captured = snapshot.is_some(),
             ?rect,
-            ?icon,
+            ?hide,
             "window closing"
         );
         if let Some(snapshot) = snapshot {
             self.closing
-                .push(ClosingWindow::new(snapshot, rect, icon, below));
+                .push(ClosingWindow::new(snapshot, rect, hide, below));
             self.queue_redraw();
         }
     }
@@ -534,14 +534,23 @@ impl State {
         (shown && output_geo.contains_rect(rect)).then_some(rect)
     }
 
+    /// Where `window` goes when minimized: its dock icon, or a drift down
+    /// when there's no dock showing it.
+    pub(crate) fn hide_target(&self, window: &Window) -> effects::Hide {
+        self.dock_icon_rect(window)
+            .map_or(effects::Hide::Drift, effects::Hide::Icon)
+    }
+
     /// Hide `window` until it's activated again; it flies into its dock
-    /// icon, or shrinks away like a closing one without it.
+    /// icon, or drifts down and fades without one.
     pub fn minimize(&mut self, window: &Window) {
         if !self.space.elements().any(|w| w == window) {
+            // Not on screen (another workspace): nothing to animate.
+            with_state(window, |s| s.minimized = true);
             return;
         }
-        let icon = self.dock_icon_rect(window);
-        self.start_close_animation_to(window, icon);
+        let hide = self.hide_target(window);
+        self.start_close_animation_to(window, Some(hide));
         with_state(window, |s| s.minimized = true);
         self.space.unmap_elem(window);
         self.relayout_visible(true);
