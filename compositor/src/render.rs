@@ -103,6 +103,7 @@ render_elements! {
     // A popup's solid backing over a window (see `frost`).
     PopupSolid = RescaleRenderElement<PixelShaderElement>,
     Night = crate::night_light::Filter,
+    // Compositor-painted window details: title bars and their soft shadows.
     Titlebar = RescaleRenderElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
     // Drawn small (thumbnails): averaged down, see `downscale`.
     SmallWindow = Downscaled<RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>>,
@@ -517,6 +518,30 @@ pub(crate) fn window_elements(
                 elements.push(element);
             }
         }
+        let focused = win.toplevel().is_some_and(|toplevel| {
+            toplevel
+                .current_state()
+                .states
+                .contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated)
+        });
+        if wants_window_shadow(
+            decorations.focused_shadow,
+            focused,
+            state.placement,
+            state.tiled,
+        ) && let Some(shadow) = decorations.shadow_element(
+            renderer,
+            Rectangle::new(
+                Point::from((frame.rect.loc.x, frame.rect.loc.y - bar)),
+                Size::from((frame.rect.size.w, frame.rect.size.h + bar)),
+            ),
+            zoom,
+            output_loc,
+            scale,
+            frame.alpha,
+        ) {
+            elements.push(shadow);
+        }
         // Drawn well below its size: averaged, so it stays legible.
         let shrink = 1.0 / stretch.x.min(stretch.y).max(1e-3);
         if shrink >= crate::downscale::MIN_SHRINK
@@ -572,6 +597,10 @@ fn snapshot_element(
     OutputElement::Snapshot(RescaleRenderElement::from_element(element, origin, stretch))
 }
 
+fn wants_window_shadow(enabled: bool, focused: bool, placement: Placement, tiled: bool) -> bool {
+    enabled && focused && placement == Placement::Floating && !tiled
+}
+
 /// Whether anything needs another frame soon.
 pub fn animations_running(
     space: &Space<Window>,
@@ -586,4 +615,33 @@ pub fn animations_running(
         || space
             .elements()
             .any(|w| with_state(w, |s| effects::is_animating(s)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focused_shadow_is_limited_to_enabled_floating_windows() {
+        assert!(wants_window_shadow(true, true, Placement::Floating, false));
+        assert!(!wants_window_shadow(
+            false,
+            true,
+            Placement::Floating,
+            false
+        ));
+        assert!(!wants_window_shadow(
+            true,
+            false,
+            Placement::Floating,
+            false
+        ));
+        assert!(!wants_window_shadow(
+            true,
+            true,
+            Placement::Maximized,
+            false
+        ));
+        assert!(!wants_window_shadow(true, true, Placement::Floating, true));
+    }
 }
