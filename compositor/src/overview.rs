@@ -971,6 +971,9 @@ impl State {
 
     /// Top-left corner of the main monitor opens the overview.
     pub fn check_hot_corner(&mut self, pos: Point<f64, Logical>) {
+        if !self.config.workspaces.hot_corner {
+            return;
+        }
         let (outputs, main) = self.strip_outputs();
         let Some(corner) = outputs
             .get(main)

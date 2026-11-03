@@ -9,7 +9,8 @@
 //! screen sharing (it's applied after they're copied), like gamma would.
 //! The hardware cursor isn't tinted.
 //!
-//! Turning on and off, or a new temperature, fades over a few seconds.
+//! Turning on or off fades over a moment; a new temperature or intensity
+//! applies at once.
 
 use std::{
     collections::HashMap,
@@ -33,7 +34,7 @@ use tracing::warn;
 use crate::animation::{Animation, Curve, Params};
 
 const FADE: Params = Params {
-    duration: std::time::Duration::from_secs(3),
+    duration: std::time::Duration::from_millis(1500),
     curve: Curve::Linear,
 };
 
@@ -132,14 +133,15 @@ impl Intro {
     }
 }
 
-#[derive(Default)]
 pub struct NightLight {
     dim: Dim,
     intro: Intro,
     /// The temperature it's on at, or `None` when off.
     target: Option<u32>,
+    /// How much of the warm colour is applied, in percent.
+    intensity: u8,
     /// It has been set since startup: the first setting is on at once,
-    /// not a 3 s warm shift after logging in.
+    /// not a warm shift after logging in.
     started: bool,
     /// What's on screen: fading from `from` towards the target's colour.
     from: [f32; 3],
@@ -150,6 +152,23 @@ pub struct NightLight {
     /// One element per monitor, kept so damage tracking sees the same one
     /// from frame to frame (a new uniform value damages it all).
     elements: HashMap<String, (PixelShaderElement, [f32; 3])>,
+}
+
+impl Default for NightLight {
+    fn default() -> Self {
+        Self {
+            dim: Dim::default(),
+            intro: Intro::default(),
+            target: None,
+            intensity: 100,
+            started: false,
+            from: WHITE,
+            fade: None,
+            shader: None,
+            broken: false,
+            elements: HashMap::new(),
+        }
+    }
 }
 
 /// The filter over one monitor: a pixel-shader quad drawn with a
@@ -165,17 +184,25 @@ impl NightLight {
         self.elements.clear();
     }
 
-    /// Turn on at `temperature` kelvin, or off with `None`. Whether that's
-    /// a change (needing frames to fade).
-    pub fn set(&mut self, target: Option<u32>) -> bool {
+    /// Turn on at `temperature` kelvin and `intensity` percent, or off with
+    /// `None`. Turning on or off fades; a new temperature or intensity
+    /// while on applies at once. Whether that's a change (needing frames).
+    pub fn set(&mut self, target: Option<u32>, intensity: u8) -> bool {
         let first = !std::mem::replace(&mut self.started, true);
-        if self.target == target {
+        if self.target == target && self.intensity == intensity {
             return false;
         }
         let now = Instant::now();
-        self.from = self.temperature_color(now);
+        let toggled = self.target.is_some() != target.is_some();
+        if toggled && !first {
+            self.from = self.temperature_color(now);
+            self.fade = Some((now, Self::color_of(target, intensity)));
+        } else if let Some((start, _)) = self.fade {
+            // Still fading on or off: aim at the new colour.
+            self.fade = Some((start, Self::color_of(target, intensity)));
+        }
         self.target = target;
-        self.fade = (!first).then(|| (now, Self::color_of(target)));
+        self.intensity = intensity;
         true
     }
 
@@ -232,10 +259,10 @@ impl NightLight {
         }
     }
 
-    fn color_of(target: Option<u32>) -> [f32; 3] {
+    fn color_of(target: Option<u32>, intensity: u8) -> [f32; 3] {
         target.map_or(WHITE, |kelvin| {
             let (r, g, b) = color_temperature(kelvin as f64);
-            [r as f32, g as f32, b as f32]
+            apply_intensity([r as f32, g as f32, b as f32], intensity)
         })
     }
 
@@ -248,7 +275,7 @@ impl NightLight {
 
     fn temperature_color(&self, now: Instant) -> [f32; 3] {
         let Some((start, to)) = self.fade else {
-            return Self::color_of(self.target);
+            return Self::color_of(self.target, self.intensity);
         };
         let t = Animation::progress_since(start, FADE, now) as f32;
         std::array::from_fn(|i| self.from[i] + (to[i] - self.from[i]) * t)
@@ -343,6 +370,13 @@ impl NightLight {
 /// the screen's own white point) is (1, 1, 1): what to multiply a white
 /// pixel by to make it look lit by that light. Tanner Helland's fit to
 /// the CIE 1964 blackbody colours, in sRGB.
+/// `color` blended with no change by `intensity` percent (0 is none, 100
+/// all of it).
+fn apply_intensity(color: [f32; 3], intensity: u8) -> [f32; 3] {
+    let k = intensity.min(100) as f32 / 100.0;
+    color.map(|c| 1.0 + (c - 1.0) * k)
+}
+
 pub fn color_temperature(kelvin: f64) -> (f64, f64, f64) {
     fn raw(kelvin: f64) -> (f64, f64, f64) {
         let t = kelvin.clamp(1000.0, 40000.0) / 100.0;
@@ -483,15 +517,35 @@ mod tests {
     fn fades_between_settings() {
         crate::animation::set_speed(1.0);
         let mut light = NightLight::default();
-        assert!(!light.set(None), "off is the start");
-        assert!(light.set(Some(4000)));
+        assert!(!light.set(None, 100), "off is the start");
+        assert!(light.set(Some(4000), 100));
         let (start, to) = light.fade.unwrap();
         assert_eq!(light.current(start), WHITE);
         let end = start + FADE.duration;
         assert_eq!(light.current(end), to);
         let mid = light.current(start + FADE.duration / 2);
         assert!(mid[2] < 1.0 && mid[2] > to[2]);
-        assert!(!light.set(Some(4000)), "no change");
+        assert!(!light.set(Some(4000), 100), "no change");
+    }
+
+    #[test]
+    fn intensity_blends_and_applies_at_once() {
+        let warm = [1.0, 0.6, 0.3];
+        assert_eq!(apply_intensity(warm, 100), warm);
+        assert_eq!(apply_intensity(warm, 0), WHITE);
+        let half = apply_intensity(warm, 50);
+        assert!(close(half[1] as f64, 0.8) && close(half[2] as f64, 0.65));
+        assert_eq!(apply_intensity(warm, 200), warm, "clamped");
+
+        let mut light = NightLight::default();
+        light.set(Some(4000), 100);
+        light.set(Some(4000), 0);
+        assert!(light.fade.is_none(), "no fade for intensity");
+        assert_eq!(light.current(Instant::now()), WHITE);
+        light.set(Some(3000), 100);
+        assert!(light.fade.is_none(), "no fade for temperature");
+        assert!(light.set(None, 100));
+        assert!(light.fade.is_some(), "off fades");
     }
 
     #[test]
@@ -516,9 +570,9 @@ mod tests {
     #[test]
     fn first_setting_is_at_once_then_fades() {
         let mut light = NightLight::default();
-        assert!(light.set(Some(4400)));
+        assert!(light.set(Some(4400), 100));
         assert!(light.fade.is_none(), "on at once at startup");
-        assert!(light.set(None));
+        assert!(light.set(None, 100));
         assert!(light.fade.is_some(), "later changes fade");
     }
 
