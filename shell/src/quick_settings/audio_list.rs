@@ -139,7 +139,7 @@ pub fn row_action(kind: Kind, devices: &[Device], row: Row) -> Option<crate::act
 
 /// How far along row `n` of the list is, 0-1: later rows start a little
 /// after the ones above.
-fn row_progress(progress: f32, n: usize) -> f32 {
+pub(super) fn row_progress(progress: f32, n: usize) -> f32 {
     let delay = STAGGER * n.min(6) as f32;
     ((progress - delay) / (1.0 - STAGGER * 6.0)).clamp(0.0, 1.0)
 }
