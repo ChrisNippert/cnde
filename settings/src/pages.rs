@@ -1970,6 +1970,32 @@ fn is_touchpad(db: &str) -> bool {
     db.lines().any(|l| l.trim() == "E:ID_INPUT_TOUCHPAD=1")
 }
 
+/// Whether the kernel lists a battery of the computer itself. Read once;
+/// when /sys can't be read at all, assume there is one.
+fn has_battery() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        let Ok(dir) = std::fs::read_dir("/sys/class/power_supply") else {
+            return true;
+        };
+        dir.flatten().any(|e| {
+            let read = |name: &str| {
+                std::fs::read_to_string(e.path().join(name))
+                    .ok()
+                    .map(|v| v.trim().to_string())
+            };
+            is_battery(read("type").as_deref(), read("scope").as_deref())
+        })
+    })
+}
+
+/// Whether a power supply's `type` and `scope` files describe the
+/// computer's own battery. A mouse's or headset's battery says `scope`
+/// "Device".
+fn is_battery(kind: Option<&str>, scope: Option<&str>) -> bool {
+    kind.is_some_and(|k| k.contains("Battery")) && scope != Some("Device")
+}
+
 fn mouse(c: &Config, d: &Config) -> Vec<Group> {
     let (m, dm) = (&c.input.mouse, &d.input.mouse);
     let (t, dt) = (&c.input.touchpad, &d.input.touchpad);
@@ -3165,7 +3191,7 @@ fn power(c: &Config, d: &Config, power_mode: Option<&crate::power_mode::State>) 
             ),
         ]
     };
-    vec![
+    let mut groups = vec![
         power_mode_group(c, d, power_mode),
         group(
             "Locking",
@@ -3246,7 +3272,12 @@ fn power(c: &Config, d: &Config, power_mode: Option<&crate::power_mode::State>) 
                 &d.power.ac,
             ),
         ),
-    ]
+    ];
+    // A desktop has no battery to set these for.
+    if !has_battery() {
+        groups.retain(|g| !matches!(g.title.as_str(), "Battery" | "On battery"));
+    }
+    groups
 }
 
 fn accessibility(c: &Config, d: &Config) -> Vec<Group> {
@@ -3380,6 +3411,15 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn only_the_computers_own_battery_counts() {
+        assert!(is_battery(Some("Battery"), Some("System")));
+        assert!(is_battery(Some("Battery"), None));
+        assert!(!is_battery(Some("Battery"), Some("Device")));
+        assert!(!is_battery(Some("Mains"), None));
+        assert!(!is_battery(None, None));
     }
 
     #[test]
