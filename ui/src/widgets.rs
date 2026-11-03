@@ -84,6 +84,23 @@ impl Painter<'_, '_> {
         weight: Weight,
         color: Color,
     ) -> f32 {
+        let (w, h) = self.canvas.size();
+        self.label_v_clipped(text, x, cy, max_width, size, weight, color, (0.0, 0.0, w, h))
+    }
+
+    /// [`Painter::label_v`], drawing only inside `clip` (logical x, y, w, h).
+    #[allow(clippy::too_many_arguments)]
+    pub fn label_v_clipped(
+        &mut self,
+        text: &str,
+        x: f32,
+        cy: f32,
+        max_width: f32,
+        size: f32,
+        weight: Weight,
+        color: Color,
+        clip: (f32, f32, f32, f32),
+    ) -> f32 {
         let scale = self.canvas.scale();
         let mut layout = self.fonts.layout(text, size, weight, scale);
         if layout.width > max_width && max_width > 0.0 {
@@ -95,7 +112,8 @@ impl Painter<'_, '_> {
             }
         }
         let y = cy - layout.height / 2.0;
-        self.canvas.text(self.fonts, &mut layout, x, y, color);
+        self.canvas
+            .text_clipped(self.fonts, &mut layout, x, y, color, clip);
         layout.width
     }
 
@@ -108,6 +126,28 @@ impl Painter<'_, '_> {
             cy - size / 2.0,
             size,
             color,
+        );
+    }
+
+    /// [`Painter::icon`], drawing only inside `clip` (logical x, y, w, h).
+    #[allow(clippy::too_many_arguments)]
+    pub fn icon_clipped(
+        &mut self,
+        name: &str,
+        cx: f32,
+        cy: f32,
+        size: f32,
+        color: Color,
+        clip: (f32, f32, f32, f32),
+    ) {
+        self.canvas.icon_clipped(
+            self.icons,
+            name,
+            cx - size / 2.0,
+            cy - size / 2.0,
+            size,
+            color,
+            clip,
         );
     }
 
@@ -257,11 +297,31 @@ impl Painter<'_, '_> {
         hover: impl Fn(usize) -> f32,
         appear: f32,
     ) -> Vec<Rect> {
+        let h = Self::popover_height(labels.len());
+        self.popover_scrolled(x, y, width, h, 0.0, labels, selected, hover, appear)
+    }
+
+    /// [`Painter::popover`] in a box `h` tall, with its choices scrolled
+    /// `scroll` px up. Choices are drawn only inside the box. The rects are
+    /// returned for every choice, whether or not it's visible.
+    #[allow(clippy::too_many_arguments)]
+    pub fn popover_scrolled(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        h: f32,
+        scroll: f32,
+        labels: &[&str],
+        selected: Option<usize>,
+        hover: impl Fn(usize) -> f32,
+        appear: f32,
+    ) -> Vec<Rect> {
         let t = self.theme;
         let row = 36.0;
         let pad = 6.0;
-        let h = Self::popover_height(labels.len());
         let y = y - 6.0 * (1.0 - appear);
+        let clip = (x, y, width, h);
         let fade = |c: Color| c.with_alpha(c.a * appear);
         // A soft shadow: a few widening, fading outlines.
         for i in 1..=4 {
@@ -288,20 +348,30 @@ impl Painter<'_, '_> {
         );
         let mut rects = Vec::with_capacity(labels.len());
         for (i, label) in labels.iter().enumerate() {
-            let rect = Rect::new(x + pad, y + pad + row * i as f32, width - pad * 2.0, row);
+            let rect = Rect::new(
+                x + pad,
+                y + pad + row * i as f32 - scroll,
+                width - pad * 2.0,
+                row,
+            );
+            rects.push(rect);
+            if rect.bottom() <= y || rect.y >= y + h {
+                continue;
+            }
             let amount = hover(i) * appear;
             if amount > 0.0 {
-                self.canvas.rounded_rect(
+                self.canvas.rounded_rect_clipped(
                     rect.x,
                     rect.y,
                     rect.w,
                     rect.h,
                     6.0,
                     t.hover.with_alpha(t.hover.a * amount),
+                    clip,
                 );
             }
             let cy = rect.y + row / 2.0;
-            self.label_v(
+            self.label_v_clipped(
                 label,
                 rect.x + 10.0,
                 cy,
@@ -309,17 +379,18 @@ impl Painter<'_, '_> {
                 t.font_size,
                 Weight::Normal,
                 fade(t.window_text),
+                clip,
             );
             if selected == Some(i) {
-                self.icon(
+                self.icon_clipped(
                     "object-select-symbolic",
                     rect.right() - 16.0,
                     cy,
                     16.0,
                     fade(t.window_text),
+                    clip,
                 );
             }
-            rects.push(rect);
         }
         rects
     }
