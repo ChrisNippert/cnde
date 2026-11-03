@@ -65,7 +65,8 @@ impl Page {
             Page::Wifi => "Wi-Fi",
             Page::Bluetooth => "Bluetooth",
             Page::Sound => "Sound",
-            Page::Mouse => "Mouse & Touchpad",
+            Page::Mouse if has_touchpad() => "Mouse & Touchpad",
+            Page::Mouse => "Mouse",
             Page::Keyboard => "Keyboard",
             Page::Windows => "Windows",
             Page::Panel => "Top Bar",
@@ -1880,10 +1881,30 @@ fn speed_slider() -> Control {
     }
 }
 
+/// Whether udev's database lists a touchpad among the input devices. Read
+/// once; when the database can't be read at all, assume there is one.
+fn has_touchpad() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        let Ok(dir) = std::fs::read_dir("/run/udev/data") else {
+            return true;
+        };
+        dir.flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("c13:"))
+            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .any(|db| is_touchpad(&db))
+    })
+}
+
+/// Whether one udev database entry marks its device as a touchpad.
+fn is_touchpad(db: &str) -> bool {
+    db.lines().any(|l| l.trim() == "E:ID_INPUT_TOUCHPAD=1")
+}
+
 fn mouse(c: &Config, d: &Config) -> Vec<Group> {
     let (m, dm) = (&c.input.mouse, &d.input.mouse);
     let (t, dt) = (&c.input.touchpad, &d.input.touchpad);
-    vec![
+    let mut groups = vec![
         group(
             "Mouse",
             vec![
@@ -1909,7 +1930,9 @@ fn mouse(c: &Config, d: &Config) -> Vec<Group> {
                 ),
             ],
         ),
-        group(
+    ];
+    if has_touchpad() {
+        groups.push(group(
             "Touchpad",
             vec![
                 Row::new(
@@ -1971,8 +1994,9 @@ fn mouse(c: &Config, d: &Config) -> Vec<Group> {
                 .sub("How far three fingers travel per workspace; longer feels slower")
                 .advanced(),
             ],
-        ),
-    ]
+        ));
+    }
+    groups
 }
 
 fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
@@ -3409,6 +3433,16 @@ mod tests {
         assert!(matches!(groups[0].rows[0].control, Control::Mixer));
         assert_eq!(groups[1].title, "System sounds");
         assert_eq!(groups[1].rows.len(), 1);
+    }
+
+    #[test]
+    fn touchpad_in_udev_data() {
+        let pad = "I:1\nE:ID_INPUT=1\nE:ID_INPUT_TOUCHPAD=1\nG:seat\n";
+        let mouse = "I:1\nE:ID_INPUT=1\nE:ID_INPUT_MOUSE=1\n";
+        assert!(is_touchpad(pad));
+        assert!(!is_touchpad(mouse));
+        assert!(!is_touchpad("E:ID_INPUT_TOUCHPAD=0\n"));
+        assert!(!is_touchpad(""));
     }
 
     #[test]

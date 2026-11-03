@@ -2,8 +2,6 @@
 //! paint also records where each control ended up ([`Target`]s), which is
 //! what the pointer is tested against until the next paint.
 
-use std::collections::HashSet;
-
 use cnde_config::Config;
 use cnde_ui::{
     Animator, Canvas, Color, Fonts, Icons, Painter, Rect, Theme, Weight,
@@ -98,8 +96,8 @@ pub struct Ui {
     pub displays: Vec<Display>,
     pub thumbs: Vec<Thumb>,
     pub page: Page,
-    /// Pages showing their advanced settings.
-    pub advanced: HashSet<Page>,
+    /// Advanced rows are shown, on every page.
+    pub advanced: bool,
     pub scroll: f32,
     pub hover: Option<Target>,
     /// The dropdown that's open.
@@ -169,6 +167,8 @@ pub struct Painted {
     pub sliders: Vec<(usize, Rect)>,
     /// The mixer as last painted, to resolve drops against.
     pub mixer: Option<crate::mixer::Layout>,
+    /// The Bluetooth device groups, as last painted.
+    pub device_list: Option<Rect>,
     /// How far the page can scroll.
     pub max_scroll: f32,
     /// Window px per logical px on the arrangement canvas.
@@ -304,6 +304,38 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         t.window_text,
     );
     let size = 22.0;
+    let shown_buttons = match ui.config.appearance.window_buttons {
+        cnde_config::WindowButtons::All => 3.0,
+        cnde_config::WindowButtons::Close => 1.0,
+    };
+    // The global Advanced toggle, left of the window buttons.
+    let label_w = p.measure("Advanced", t.subtitle_size, Weight::Normal);
+    let toggle_w = label_w + 8.0 + t.switch_width;
+    let toggle = Rect::new(
+        w - 10.0 - shown_buttons * (size + 8.0) - 8.0 - toggle_w,
+        (hh - t.switch_height) / 2.0,
+        toggle_w,
+        t.switch_height,
+    );
+    if toggle.x > title_x + 120.0 {
+        p.label_v(
+            "Advanced",
+            toggle.x,
+            hh / 2.0,
+            label_w + 2.0,
+            t.subtitle_size,
+            Weight::Normal,
+            t.window_dim,
+        );
+        let on = a.get(
+            AnimKey::Switch(Key::Path("advanced")),
+            if ui.advanced { 1.0 } else { 0.0 },
+            SHORT,
+        );
+        p.switch(toggle.right() - t.switch_width, toggle.y, on);
+        let hit = Rect::new(toggle.x - 6.0, 0.0, toggle.w + 12.0, hh);
+        out.hits.push((hit, Target::Advanced));
+    }
     let maximize_icon = if ui.rounded {
         "window-maximize-symbolic"
     } else {
@@ -474,14 +506,16 @@ fn page(
         ui.default_apps.as_ref(),
         ui.sound.as_ref(),
     );
-    let show_advanced = ui.advanced.contains(&ui.page);
-    let has_advanced = groups.iter().flat_map(|g| &g.rows).any(|r| r.advanced);
+    let show_advanced = ui.advanced;
     let col_w = (area.w - 2.0 * SIDE_PAD).min(MAX_COLUMN);
     let x = area.x + (area.w - col_w) / 2.0;
     let top = area.y + 12.0;
     let mut y = top - ui.scroll + offset;
 
+    let mut list: Option<(f32, f32)> = None;
     for group in groups {
+        let group_top = y;
+        let devices = ui.page == Page::Bluetooth && group.title.ends_with(" Devices");
         let rows: Vec<Row> = group
             .rows
             .into_iter()
@@ -515,6 +549,9 @@ fn page(
         }
         if rows.is_empty() {
             y += GROUP_GAP - 12.0;
+            if devices {
+                list = Some((list.map_or(group_top, |l| l.0), y));
+            }
             continue;
         }
         let heights: Vec<f32> = rows.iter().map(|r| row_height(ui, r, t, col_w)).collect();
@@ -548,43 +585,11 @@ fn page(
             ry += rh;
         }
         y += card_h + GROUP_GAP;
-    }
-
-    if has_advanced {
-        let rect = Rect::new(x, y, col_w, t.row_height);
-        let hovered = hover(a, ui, Target::Advanced);
-        let radius = if boxed(t) {
-            t.card_radius
-        } else {
-            t.button_radius
-        };
-        if boxed(t) {
-            p.canvas
-                .rounded_rect(x, y, col_w, rect.h, radius, t.card_background);
+        if devices {
+            list = Some((list.map_or(group_top, |l| l.0), y - GROUP_GAP));
         }
-        if hovered > 0.0 {
-            let fill = t.hover.with_alpha(t.hover.a * hovered);
-            p.canvas.rounded_rect(x, y, col_w, rect.h, radius, fill);
-        }
-        p.label_v(
-            "Advanced settings",
-            x + t.row_padding,
-            y + rect.h / 2.0,
-            col_w - 100.0,
-            t.font_size,
-            Weight::Normal,
-            t.window_text,
-        );
-        let sx = rect.right() - t.row_padding - t.switch_width;
-        let on = a.get(
-            AnimKey::Switch(Key::Path("advanced")),
-            if show_advanced { 1.0 } else { 0.0 },
-            SHORT,
-        );
-        p.switch(sx, y + (rect.h - t.switch_height) / 2.0, on);
-        out.hits.push((rect, Target::Advanced));
-        y += rect.h + GROUP_GAP;
     }
+    out.device_list = list.map(|(top, bottom)| Rect::new(x, top, col_w, bottom - top));
 
     let content_h = y + ui.scroll - offset - top + 24.0 - GROUP_GAP;
     out.max_scroll = (content_h - area.h + 24.0).max(0.0);
@@ -879,7 +884,35 @@ fn paint_row(
     }
 
     let tx = rect.x + t.row_padding;
-    let max = (text_right - tx).max(0.0);
+    let mut max = (text_right - tx).max(0.0);
+    if row.advanced {
+        // A small tag after the title.
+        let title_w = p.measure(&row.title, t.font_size, Weight::Normal);
+        let size = t.subtitle_size - 2.0;
+        let tag_w = p.measure("Advanced", size, Weight::Bold) + 12.0;
+        let tag_x = tx + title_w.min(max - tag_w - 8.0).max(0.0) + 8.0;
+        if tag_x + tag_w <= tx + max {
+            let ty = if row.subtitle.is_empty() { cy } else { cy - 10.0 };
+            p.canvas.rounded_rect(
+                tag_x,
+                ty - 8.0,
+                tag_w,
+                16.0,
+                8.0,
+                t.accent.with_alpha(0.18),
+            );
+            p.label_v(
+                "Advanced",
+                tag_x + 6.0,
+                ty,
+                tag_w,
+                size,
+                Weight::Bold,
+                t.accent,
+            );
+            max = (tag_x - 8.0 - tx).max(0.0);
+        }
+    }
     if row.subtitle.is_empty() {
         p.label_v(
             &row.title,
@@ -1354,7 +1387,7 @@ mod tests {
             ],
             thumbs: Vec::new(),
             page,
-            advanced: HashSet::new(),
+            advanced: false,
             scroll: 0.0,
             hover: None,
             popover: None,
@@ -1620,7 +1653,7 @@ mod tests {
             let mut ui = ui(page);
             let painted = render(&ui, &format!("{page:?}"));
             assert!(painted.hit((20.0, 90.0)).is_some(), "{page:?}: sidebar");
-            ui.advanced.insert(page);
+            ui.advanced = true;
             render(&ui, &format!("{page:?}-advanced"));
         }
     }
@@ -1628,7 +1661,7 @@ mod tests {
     #[test]
     fn dropdown_popover_and_entry() {
         let mut ui = ui(Page::Panel);
-        ui.advanced.insert(Page::Panel);
+        ui.advanced = true;
         let painted = render(&ui, "panel");
         let clock = painted
             .rows
