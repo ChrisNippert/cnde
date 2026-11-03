@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use crate::{Config, DEFAULT_CONFIG, Error};
 
@@ -92,6 +92,64 @@ impl ConfigFile {
         if outputs.is_empty() {
             self.doc.remove("output");
         }
+    }
+
+    /// Add a `[[shortcuts.custom]]` entry for `command`, with no keys yet.
+    pub fn add_custom_shortcut(&mut self, command: &str) {
+        let mut table = Table::new();
+        table.insert("keys", Item::Value(Value::Array(Array::new())));
+        table.insert("command", toml_edit::value(command));
+        self.custom_shortcuts_mut().push(table);
+    }
+
+    /// Set the keys and command of the `index`th custom shortcut (none if
+    /// there isn't one). The keys are always written as a list.
+    pub fn set_custom_shortcut(&mut self, index: usize, keys: &[String], command: &str) {
+        let entries = self.custom_shortcuts_mut();
+        let Some(table) = entries.get_mut(index) else {
+            return;
+        };
+        let mut list = Array::new();
+        for key in keys {
+            list.push(key.as_str());
+        }
+        set_in(table, "keys", Value::Array(list));
+        set_in(table, "command", command.into());
+    }
+
+    /// Remove the `index`th custom shortcut; the list goes with the last one.
+    pub fn remove_custom_shortcut(&mut self, index: usize) {
+        let entries = self.custom_shortcuts_mut();
+        if index >= entries.len() {
+            return;
+        }
+        entries.remove(index);
+        if entries.is_empty()
+            && let Some(shortcuts) = self.doc.get_mut("shortcuts").and_then(Item::as_table_mut)
+        {
+            shortcuts.remove("custom");
+        }
+    }
+
+    fn custom_shortcuts_mut(&mut self) -> &mut ArrayOfTables {
+        let shortcuts = self.doc.entry("shortcuts").or_insert_with(|| {
+            let mut new = Table::new();
+            new.set_implicit(true);
+            Item::Table(new)
+        });
+        if !shortcuts.is_table() {
+            *shortcuts = Item::Table(Table::new());
+        }
+        let table = shortcuts.as_table_mut().expect("just made it a table");
+        let custom = table
+            .entry("custom")
+            .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        if !custom.is_array_of_tables() {
+            *custom = Item::ArrayOfTables(ArrayOfTables::new());
+        }
+        custom
+            .as_array_of_tables_mut()
+            .expect("just made it an array of tables")
     }
 
     fn outputs_mut(&mut self) -> &mut ArrayOfTables {
@@ -233,6 +291,63 @@ mod tests {
         assert!(config.output("DP-1").unwrap().main);
         f.remove_output("HDMI-A-1", "scale");
         assert!(f.config().unwrap().output("HDMI-A-1").is_none());
+    }
+
+    #[test]
+    fn custom_shortcuts_keep_comments() {
+        let mut f = file(concat!(
+            "# my keys\n",
+            "[shortcuts]\n",
+            "terminal = [\"Super+Q\"] # keep\n",
+            "\n",
+            "[[shortcuts.custom]]\n",
+            "keys = [\"Super+B\"] # browser\n",
+            "command = \"firefox\"\n",
+        ));
+        f.add_custom_shortcut("foot");
+        let config = f.config().unwrap();
+        assert_eq!(config.shortcuts.custom.len(), 2);
+        assert!(config.shortcuts.custom[1].keys.is_empty());
+        assert_eq!(config.shortcuts.custom[1].command, "foot");
+
+        f.set_custom_shortcut(1, &["Super+G".into(), "Ctrl+G".into()], "foot -e htop");
+        f.set_custom_shortcut(0, &[], "firefox --private-window");
+        let config = f.config().unwrap();
+        assert!(config.shortcuts.custom[0].keys.is_empty());
+        assert_eq!(config.shortcuts.custom[0].command, "firefox --private-window");
+        assert_eq!(config.shortcuts.custom[1].keys, ["Super+G", "Ctrl+G"]);
+        assert_eq!(config.shortcuts.custom[1].command, "foot -e htop");
+        assert_eq!(config.shortcuts.bindings["terminal"], ["Super+Q"]);
+        assert!(f.text().starts_with("# my keys\n"));
+        assert!(f.text().contains("terminal = [\"Super+Q\"] # keep"));
+
+        f.remove_custom_shortcut(0);
+        let config = f.config().unwrap();
+        assert_eq!(config.shortcuts.custom.len(), 1);
+        assert_eq!(config.shortcuts.custom[0].command, "foot -e htop");
+        assert!(!f.text().contains("firefox"));
+        assert!(f.text().contains("# keep"));
+    }
+
+    #[test]
+    fn last_custom_shortcut_leaves_no_list() {
+        let mut f = file("[[shortcuts.custom]]\nkeys = [\"Super+B\"]\ncommand = \"firefox\"\n");
+        f.remove_custom_shortcut(0);
+        f.remove_custom_shortcut(3);
+        assert!(!f.text().contains("custom"));
+        assert!(f.config().unwrap().shortcuts.custom.is_empty());
+        f.add_custom_shortcut("foot");
+        assert_eq!(f.config().unwrap().shortcuts.custom[0].command, "foot");
+    }
+
+    #[test]
+    fn custom_shortcut_on_the_default_file() {
+        let mut f = file(DEFAULT_CONFIG);
+        f.add_custom_shortcut("foot");
+        f.set_custom_shortcut(0, &["Super+G".into()], "foot");
+        let config = f.config().unwrap();
+        assert_eq!(config.shortcuts.custom[0].keys, ["Super+G"]);
+        assert_eq!(config.shortcuts.bindings["terminal"], ["Super+Q"]);
     }
 
     #[test]

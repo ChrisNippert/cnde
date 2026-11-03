@@ -52,17 +52,35 @@ pub fn refuse(combo: &str) -> Option<&'static str> {
 /// The label of another action already using `combo` (`name` itself may
 /// keep it).
 pub fn conflict(shortcuts: &Shortcuts, name: &str, combo: &str) -> Option<String> {
+    find_conflict(shortcuts, Some(name), None, combo)
+}
+
+/// Like [`conflict`], for the custom shortcut at `index`: its own combos
+/// may keep `combo`.
+pub fn custom_conflict(shortcuts: &Shortcuts, index: usize, combo: &str) -> Option<String> {
+    find_conflict(shortcuts, None, Some(index), combo)
+}
+
+/// The label or command of whatever else uses `combo`, skipping the action
+/// `own_action` and the custom shortcut `own_custom`.
+fn find_conflict(
+    shortcuts: &Shortcuts,
+    own_action: Option<&str>,
+    own_custom: Option<usize>,
+    combo: &str,
+) -> Option<String> {
     let uses = |keys: &[String]| keys.iter().any(|k| same(k, combo));
     for (other, _, label) in SHORTCUT_DEFAULTS {
-        if *other != name && shortcuts.bindings.get(*other).is_some_and(|k| uses(k)) {
+        if Some(*other) != own_action && shortcuts.bindings.get(*other).is_some_and(|k| uses(k)) {
             return Some(label.to_string());
         }
     }
     shortcuts
         .custom
         .iter()
-        .find(|c| uses(&c.keys))
-        .map(|c| c.command.clone())
+        .enumerate()
+        .find(|(index, c)| Some(*index) != own_custom && uses(&c.keys))
+        .map(|(_, c)| c.command.clone())
 }
 
 /// `keys` with `combo` as the first: an action's other combos stay.
@@ -75,6 +93,7 @@ pub fn with_first(keys: &[String], combo: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cnde_config::CustomShortcut;
 
     #[test]
     fn combos_compare_like_the_compositor() {
@@ -97,6 +116,29 @@ mod tests {
         assert_eq!(conflict(&s, "terminal", "Super+Z"), None);
         // The second combo of "close" counts too.
         assert!(conflict(&s, "terminal", "alt+f4").is_some());
+    }
+
+    #[test]
+    fn custom_conflicts_skip_their_own_entry() {
+        let mut s = Shortcuts::default();
+        s.custom.push(CustomShortcut {
+            keys: vec!["Super+G".into()],
+            command: "foot".into(),
+        });
+        s.custom.push(CustomShortcut {
+            keys: vec!["Super+H".into()],
+            command: "htop".into(),
+        });
+        // Its own combo is fine; another entry's and a built-in's are not.
+        assert_eq!(custom_conflict(&s, 0, "super+g"), None);
+        assert_eq!(custom_conflict(&s, 0, "Super+H").as_deref(), Some("htop"));
+        assert_eq!(
+            custom_conflict(&s, 1, "Super+Q").as_deref(),
+            Some("Open a terminal")
+        );
+        assert_eq!(custom_conflict(&s, 1, "Super+Z"), None);
+        // A built-in's own shortcut is still a clash for a custom one.
+        assert!(custom_conflict(&s, 0, "alt+f4").is_some());
     }
 
     #[test]

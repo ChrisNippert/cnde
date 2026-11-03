@@ -208,6 +208,13 @@ pub enum Key {
     DefaultApp(&'static str),
     /// `shortcuts.<action>`: its combos, comma-separated in the value.
     Shortcut(&'static str),
+    /// `[[shortcuts.custom]]` number n: its combos, comma-separated like the
+    /// built-ins. Unset removes the entry.
+    CustomShortcut(usize),
+    /// `[[shortcuts.custom]]` number n: its command.
+    CustomCommand(usize),
+    /// Not in the config: a new custom shortcut running the command typed.
+    NewCustomShortcut,
     /// Not in the config: the sidebar's search field.
     Search,
 }
@@ -309,6 +316,39 @@ impl Key {
                         keys.push(key);
                     }
                     file.set(&path, keys);
+                }
+            }
+            Key::CustomShortcut(index) => {
+                if *value == Value::Unset {
+                    file.remove_custom_shortcut(*index);
+                } else {
+                    let keys: Vec<String> = value
+                        .as_str()
+                        .split(", ")
+                        .filter(|k| !k.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                    let command = config
+                        .shortcuts
+                        .custom
+                        .get(*index)
+                        .map_or_else(String::new, |c| c.command.clone());
+                    file.set_custom_shortcut(*index, &keys, &command);
+                }
+            }
+            Key::CustomCommand(index) => {
+                // A shortcut with no command does nothing, so none is saved.
+                let command = value.as_str();
+                if let Some(custom) = config.shortcuts.custom.get(*index)
+                    && !command.is_empty()
+                {
+                    file.set_custom_shortcut(*index, &custom.keys, command);
+                }
+            }
+            Key::NewCustomShortcut => {
+                let command = value.as_str();
+                if !command.is_empty() {
+                    file.add_custom_shortcut(command);
                 }
             }
             Key::Search => {}
@@ -2181,20 +2221,13 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
             ],
         ),
         shortcuts_group(&c.shortcuts),
+        custom_shortcuts_group(&c.shortcuts),
     ]
 }
 
-/// The shortcuts as set. The built-in ones are edited here by clicking;
-/// custom ones (which run a command) are edited in config.toml.
+/// The built-in shortcuts as set, edited here by clicking.
 fn shortcuts_group(shortcuts: &cnde_config::Shortcuts) -> Group {
-    let text = |keys: &[String]| {
-        if keys.is_empty() {
-            "Off".to_string()
-        } else {
-            keys.join(", ")
-        }
-    };
-    let mut rows: Vec<Row> = cnde_config::SHORTCUT_DEFAULTS
+    let rows: Vec<Row> = cnde_config::SHORTCUT_DEFAULTS
         .iter()
         .map(|(name, default, label)| {
             let keys = shortcuts.bindings.get(*name).map_or(&[][..], |k| k);
@@ -2212,17 +2245,60 @@ fn shortcuts_group(shortcuts: &cnde_config::Shortcuts) -> Group {
             }
         })
         .collect();
-    rows.extend(shortcuts.custom.iter().map(|custom| {
-        wifi_row(
-            WifiKey::Detail(custom.command.clone()),
-            &custom.command,
-            Control::Info,
-            Value::Str(text(&custom.keys)),
-        )
-    }));
     Group {
         title: "Shortcuts".into(),
         description: "Click one to press a new combo; Backspace turns it off. Super is Alt when running nested.".into(),
+        rows,
+    }
+}
+
+/// Custom shortcuts, each running a command from its combo, and a row to
+/// add one. Each has its command (a text field) and its combos (clicked to
+/// capture, like the built-ins).
+fn custom_shortcuts_group(shortcuts: &cnde_config::Shortcuts) -> Group {
+    let mut rows = Vec::new();
+    for (index, custom) in shortcuts.custom.iter().enumerate() {
+        let keys = custom.keys.join(", ");
+        rows.push(Row {
+            key: Key::CustomCommand(index),
+            title: "Command".into(),
+            subtitle: String::new(),
+            control: Control::Text {
+                placeholder: "Command to run",
+                int: false,
+            },
+            value: Value::Str(custom.command.clone()),
+            default: Value::Str(custom.command.clone()),
+            advanced: false,
+            disabled: false,
+        });
+        rows.push(Row {
+            key: Key::CustomShortcut(index),
+            title: custom.command.clone(),
+            subtitle: String::new(),
+            control: Control::Shortcut,
+            value: Value::Str(keys.clone()),
+            default: Value::Str(keys),
+            advanced: false,
+            disabled: false,
+        });
+    }
+    rows.push(Row {
+        key: Key::NewCustomShortcut,
+        title: "Add a shortcut".into(),
+        subtitle: String::new(),
+        control: Control::Text {
+            placeholder: "Command to run",
+            int: false,
+        },
+        value: Value::Str(String::new()),
+        default: Value::Str(String::new()),
+        advanced: false,
+        disabled: false,
+    });
+    Group {
+        title: "Your shortcuts".into(),
+        description: "Each runs its command. Click its keys to press a new combo; Backspace removes the shortcut.".into(),
         rows,
     }
 }
@@ -3437,6 +3513,35 @@ mod tests {
             row.key.write(&mut file, &config, &row.value);
             assert!(file.config().is_ok(), "{}", row.title);
         }
+    }
+
+    #[test]
+    fn custom_shortcut_rows_write() {
+        let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();
+        // Each write sees the file as it is now, like the settings app does.
+        let write = |file: &mut ConfigFile, key: Key, value: Value| {
+            let before = file.config().unwrap();
+            key.write(file, &before, &value);
+            file.config().unwrap()
+        };
+        // Added with a command and no keys yet; an empty command adds nothing.
+        let config = write(&mut file, Key::NewCustomShortcut, Value::Str("htop".into()));
+        assert_eq!(config.shortcuts.custom.len(), 1);
+        assert!(config.shortcuts.custom[0].keys.is_empty());
+        let config = write(&mut file, Key::NewCustomShortcut, Value::Str(String::new()));
+        assert_eq!(config.shortcuts.custom.len(), 1);
+        // Keys typed in, then the command edited; keys are kept.
+        let keys = Value::Str("Super+G, Ctrl+G".into());
+        let config = write(&mut file, Key::CustomShortcut(0), keys);
+        assert_eq!(config.shortcuts.custom[0].keys, ["Super+G", "Ctrl+G"]);
+        let config = write(&mut file, Key::CustomCommand(0), Value::Str(String::new()));
+        assert_eq!(config.shortcuts.custom[0].command, "htop");
+        let config = write(&mut file, Key::CustomCommand(0), Value::Str("foot".into()));
+        assert_eq!(config.shortcuts.custom[0].command, "foot");
+        assert_eq!(config.shortcuts.custom[0].keys, ["Super+G", "Ctrl+G"]);
+        // Unset removes the entry.
+        let config = write(&mut file, Key::CustomShortcut(0), Value::Unset);
+        assert!(config.shortcuts.custom.is_empty());
     }
 
     #[test]
