@@ -1,5 +1,6 @@
 //! The on-screen display: a pill near the bottom of the screen showing the
-//! volume or brightness after its key is pressed, gone after a moment.
+//! volume or brightness after its key is pressed, gone after a moment. It
+//! also names the keyboard layout after a switch.
 
 use std::time::{Duration, Instant};
 
@@ -40,6 +41,13 @@ const NAMESPACE: &str = "cnde-osd";
 const SHOWN_FOR: Duration = Duration::from_millis(1500);
 /// Each press moves the level this much (percent).
 const STEP: u32 = 5;
+
+/// Whether the active layout changed from `previous` (the labels and active
+/// index last seen) to `active` of the same `labels`: not on the first
+/// report, nor when the set of layouts itself changed.
+pub fn layout_switched(previous: &(Vec<String>, usize), labels: &[String], active: usize) -> bool {
+    !labels.is_empty() && previous.0 == labels && previous.1 != active
+}
 
 pub struct Osd {
     pub layer: LayerSurface,
@@ -146,7 +154,7 @@ impl App {
         }
     }
 
-    fn show_osd(&mut self, icon: &str, level: Option<u32>, label: &str) {
+    pub fn show_osd(&mut self, icon: &str, level: Option<u32>, label: &str) {
         if self.osd.is_none() {
             let Some(panel) = self.panels.first() else {
                 return;
@@ -323,7 +331,14 @@ impl App {
         if let Some(mut canvas) = Canvas::new(scratch.data_mut(), sw, sh, scale as f32) {
             let t = &self.theme;
             let (lw, lh) = (SIZE.0 as f32, SIZE.1 as f32);
-            canvas.rounded_rect(0.0, 0.0, lw, lh, lh / 2.0, t.qs_background);
+            canvas.rounded_rect(
+                0.0,
+                0.0,
+                lw,
+                lh,
+                (lh / 2.0).min(t.qs_radius),
+                t.qs_background,
+            );
             let mut p = Painter {
                 canvas: &mut canvas,
                 fonts: &mut self.fonts,
@@ -415,10 +430,31 @@ impl App {
                 cards: vec![cnde_ipc::CardFrost {
                     rect: [0.0, drop.into(), SIZE.0.into(), SIZE.1.into()],
                     alpha: presence,
-                    radius: Some(SIZE.1 as f64 / 2.0),
+                    radius: Some((SIZE.1 as f64 / 2.0).min(self.theme.qs_radius.into())),
                 }],
                 layer: NAMESPACE.to_string(),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labels(l: &[&str]) -> Vec<String> {
+        l.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn layout_switch_only_on_an_active_change_among_the_same_layouts() {
+        let us_de = labels(&["US", "DE"]);
+        let seen = (us_de.clone(), 0);
+        assert!(layout_switched(&seen, &us_de, 1));
+        assert!(!layout_switched(&seen, &us_de, 0));
+        // First report, one layout, or a different set: nothing to announce.
+        assert!(!layout_switched(&(Vec::new(), 0), &us_de, 1));
+        assert!(!layout_switched(&seen, &[], 0));
+        assert!(!layout_switched(&seen, &labels(&["US", "FR"]), 1));
     }
 }

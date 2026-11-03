@@ -607,7 +607,14 @@ impl App {
                 active,
             } => {
                 let labels = panel::layout_labels(&codes, &names);
-                self.layouts = (if labels.len() > 1 { labels } else { Vec::new() }, active);
+                let labels = if labels.len() > 1 { labels } else { Vec::new() };
+                let switched = osd::layout_switched(&self.layouts, &labels, active);
+                self.layouts = (labels, active);
+                if switched {
+                    let name = names.get(active).filter(|n| !n.is_empty());
+                    let name = name.or(codes.get(active)).cloned().unwrap_or_default();
+                    self.show_osd("input-keyboard-symbolic", None, &name);
+                }
                 self.redraw_panels();
             }
             cnde_ipc::Event::Windows { windows } => {
