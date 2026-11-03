@@ -2151,11 +2151,12 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
                     Control::Dropdown(choices(&[
                         ("Span all monitors", s("continuous")),
                         ("Separate per monitor", s("individual")),
+                        ("One across all monitors", s("joined")),
                     ])),
                     workspace_mode(c.workspaces.mode),
                     workspace_mode(d.workspaces.mode),
                 )
-                .sub("Span: monitors show neighbouring workspaces and switch together. Separate: each monitor has its own, and switching moves the one you used last"),
+                .sub("Span: monitors show neighbouring workspaces and switch together. Separate: each monitor has its own, and switching moves the one you used last. One: every monitor shows the same workspace, with its own windows on it, and switching moves them all"),
                 Row::new(
                     "workspaces.hot_corner",
                     "Hot corner",
@@ -2238,6 +2239,7 @@ fn workspace_mode(v: cnde_config::WorkspaceMode) -> Value {
     s(match v {
         cnde_config::WorkspaceMode::Continuous => "continuous",
         cnde_config::WorkspaceMode::Individual => "individual",
+        cnde_config::WorkspaceMode::Joined => "joined",
     })
 }
 
