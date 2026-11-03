@@ -1,0 +1,59 @@
+# Pushing a tag like v0.1.0-beta1 builds cnde on Arch and attaches
+# cnde-<version>-x86_64.tar.zst (files laid out under usr/ and etc/, as
+# installed) and its .sha256 to a GitHub release. The AUR's cnde-bin
+# installs from that tarball.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    steps:
+      - name: Install build dependencies
+        run: >
+          pacman -Syu --noconfirm --needed
+          git rust libdrm libinput libxkbcommon mesa pam seatd systemd-libs
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --release --locked --workspace
+
+      - name: Test
+        run: cargo test --release --locked --workspace
+
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="cnde-$version-x86_64"
+          root="dist/$name"
+          for bin in cnde-compositor cnde-share-picker cnde-shell cnde-settings \
+              cnde-lock cnde-files cnde-files-portal; do
+              install -Dm755 "target/release/$bin" -t "$root/usr/bin"
+          done
+          install -Dm644 data/cnde.desktop -t "$root/usr/share/wayland-sessions"
+          install -Dm644 data/cnde-settings.desktop files/cnde-files.desktop \
+              -t "$root/usr/share/applications"
+          install -Dm644 data/cnde.portal -t "$root/usr/share/xdg-desktop-portal/portals"
+          install -Dm644 data/org.freedesktop.impl.portal.desktop.cnde.service \
+              -t "$root/usr/share/dbus-1/services"
+          install -Dm644 data/pam.d/cnde-lock -t "$root/etc/pam.d"
+          install -Dm644 LICENSE -t "$root/usr/share/licenses/cnde"
+          install -dm755 "$root/usr/share/icons"
+          cp -r icons/cnde "$root/usr/share/icons/cnde"
+          tar --zstd -cf "dist/$name.tar.zst" -C dist "$name"
+          (cd dist && sha256sum "$name.tar.zst" > "$name.tar.zst.sha256")
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/*.tar.zst
+            dist/*.sha256

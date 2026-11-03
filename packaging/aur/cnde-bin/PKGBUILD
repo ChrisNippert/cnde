@@ -1,0 +1,143 @@
+# Maintainer: MAINTAINER_NAME <MAINTAINER_EMAIL>
+#
+# Prebuilt cnde from the GitHub release (built on Arch by the repository's
+# release workflow). Split like cnde-git: install only the parts you want.
+#
+#   cnde-compositor-bin  the session itself (required by the rest)
+#   cnde-shell-bin       top bar, dock, overview search, quick settings
+#   cnde-settings-bin    the Settings app
+#   cnde-lock-bin        the lock screen
+#   cnde-files-bin       the file manager and file picker
+#   cnde-icons-bin       cnde's symbolic icons (else Adwaita's are used)
+#   cnde-bin             all of the above
+#
+# New release: set _tag and pkgver, then run updpkgsums.
+
+pkgbase=cnde-bin
+pkgname=(
+    cnde-compositor-bin
+    cnde-shell-bin
+    cnde-settings-bin
+    cnde-lock-bin
+    cnde-files-bin
+    cnde-icons-bin
+    cnde-bin
+)
+_tag=v0.1.0-beta1
+pkgver=0.1.0beta1
+pkgrel=1
+pkgdesc="A light Wayland desktop with an adaptive, smooth design (prebuilt)"
+arch=(x86_64)
+url="https://github.com/ChrisNippert/cnde"
+license=(GPL-3.0-or-later)
+options=(!debug)
+_dist="cnde-${_tag#v}-x86_64"
+source=("$_dist.tar.zst::$url/releases/download/$_tag/$_dist.tar.zst")
+sha256sums=('UPDATE_WITH_UPDPKGSUMS')
+
+package_cnde-compositor-bin() {
+    pkgdesc="cnde's compositor: the session itself (prebuilt)"
+    depends=(gcc-libs glibc libdrm libinput libxkbcommon mesa seatd systemd-libs)
+    optdepends=(
+        'xwayland-satellite: X11 apps and most games'
+        'xorg-xwayland: X11 apps and most games (with xwayland-satellite)'
+        'xdg-desktop-portal-wlr: screen sharing'
+        'xdg-desktop-portal-gtk: settings for apps, and file pickers without cnde-files'
+        'pipewire: sound and screen sharing'
+        'wireplumber: sound and screen sharing'
+        'sound-theme-freedesktop: event sounds'
+        'cnde-shell-bin: the top bar and dock'
+        'cnde-lock-bin: the lock screen'
+        'cnde-icons-bin: cnde-style icons on title bars'
+    )
+    provides=(cnde-compositor)
+    conflicts=(cnde-compositor)
+
+    cd "$_dist"
+    install -Dm755 usr/bin/cnde-compositor usr/bin/cnde-share-picker -t "$pkgdir/usr/bin"
+    install -Dm644 usr/share/wayland-sessions/cnde.desktop -t "$pkgdir/usr/share/wayland-sessions"
+}
+
+package_cnde-shell-bin() {
+    pkgdesc="cnde's shell: top bar, dock, overview search, quick settings (prebuilt)"
+    depends=(cnde-compositor gcc-libs glibc libxkbcommon)
+    optdepends=(
+        'cnde-settings-bin: the Settings app'
+        'cnde-icons-bin: cnde-style icons'
+        'libpulse: volume and output devices (pactl)'
+        'polkit: password prompts'
+        'upower: battery'
+        'power-profiles-daemon: power modes'
+        'networkmanager: Wi-Fi (or iwd)'
+        'bluez: Bluetooth'
+    )
+    provides=(cnde-shell)
+    conflicts=(cnde-shell)
+
+    cd "$_dist"
+    install -Dm755 usr/bin/cnde-shell -t "$pkgdir/usr/bin"
+}
+
+package_cnde-settings-bin() {
+    pkgdesc="cnde's Settings app (prebuilt)"
+    depends=(cnde-compositor gcc-libs glibc libxkbcommon)
+    provides=(cnde-settings)
+    conflicts=(cnde-settings)
+
+    cd "$_dist"
+    install -Dm755 usr/bin/cnde-settings -t "$pkgdir/usr/bin"
+    install -Dm644 usr/share/applications/cnde-settings.desktop -t "$pkgdir/usr/share/applications"
+}
+
+package_cnde-lock-bin() {
+    pkgdesc="cnde's lock screen (prebuilt)"
+    depends=(cnde-compositor gcc-libs glibc libxkbcommon pam)
+    backup=(etc/pam.d/cnde-lock)
+    provides=(cnde-lock)
+    conflicts=(cnde-lock)
+
+    cd "$_dist"
+    install -Dm755 usr/bin/cnde-lock -t "$pkgdir/usr/bin"
+    install -Dm644 etc/pam.d/cnde-lock -t "$pkgdir/etc/pam.d"
+}
+
+package_cnde-files-bin() {
+    pkgdesc="cnde's file manager and file picker (prebuilt)"
+    depends=(gcc-libs glibc libxkbcommon)
+    optdepends=(
+        'xdg-desktop-portal: be the file picker apps open'
+        'udisks2: mount and eject drives'
+        'ffmpegthumbnailer: video thumbnails'
+        'libarchive: compress and extract archives'
+        'cnde-icons-bin: cnde-style icons'
+    )
+    provides=(cnde-files)
+    conflicts=(cnde-files)
+
+    cd "$_dist"
+    install -Dm755 usr/bin/cnde-files usr/bin/cnde-files-portal -t "$pkgdir/usr/bin"
+    install -Dm644 usr/share/applications/cnde-files.desktop -t "$pkgdir/usr/share/applications"
+    install -Dm644 usr/share/xdg-desktop-portal/portals/cnde.portal \
+        -t "$pkgdir/usr/share/xdg-desktop-portal/portals"
+    install -Dm644 usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.cnde.service \
+        -t "$pkgdir/usr/share/dbus-1/services"
+}
+
+package_cnde-icons-bin() {
+    pkgdesc="cnde's symbolic icons (prebuilt)"
+    arch=(any)
+    provides=(cnde-icons)
+    conflicts=(cnde-icons)
+
+    cd "$_dist"
+    install -dm755 "$pkgdir/usr/share/icons"
+    cp -r --no-preserve=ownership usr/share/icons/cnde "$pkgdir/usr/share/icons/cnde"
+}
+
+package_cnde-bin() {
+    pkgdesc="cnde desktop: compositor, shell, settings, lock screen, files and icons (prebuilt)"
+    arch=(any)
+    depends=(cnde-compositor cnde-shell cnde-settings cnde-lock cnde-files cnde-icons)
+    provides=(cnde)
+    conflicts=(cnde)
+}
