@@ -448,8 +448,8 @@ impl App {
         layer.set_anchor(Anchor::BOTTOM);
         layer.set_margin(0, 0, BOTTOM_MARGIN, 0);
         layer.set_size(width, height);
-        // Windows make room.
-        layer.set_exclusive_zone(height as i32 + BOTTOM_MARGIN);
+        // Drawn over windows, so it reserves no space.
+        layer.set_exclusive_zone(0);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.wl_surface().set_buffer_scale(scale);
         layer.commit();
