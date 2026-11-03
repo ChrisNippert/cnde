@@ -108,6 +108,7 @@ pub static ENTRIES: &[Entry] = &[
     option("Snap zones", "windows", "Windows", "Snap zone", &["edge", "half"]),
     option("Focus follows mouse", "windows", "Windows", "Focus follows mouse", &["hover", "focus on hover", "sloppy focus"]),
     option("Focused window shadow", "windows", "Windows", "Focused window shadow", &["drop shadow", "window shadow", "focused"]),
+    option("Shadow strength", "windows", "Windows", "Shadow strength", &["drop shadow", "opacity", "darkness"]),
     option("Title bar buttons", "windows", "Windows", "Title bar buttons", &["minimize", "maximize", "close"]),
     option("Workspaces", "windows", "Windows", "Workspaces", &["virtual desktops", "monitors"]),
     option("Clock format", "top bar", "Top Bar", "Clock format", &["time", "date", "24 hour"]),

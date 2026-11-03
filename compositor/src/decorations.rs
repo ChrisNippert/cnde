@@ -121,7 +121,11 @@ fn part_at(width: f64, x: f64, all: bool, tiled: bool) -> Part {
     } else if !all {
         Part::Title
     } else if on(close - step) {
-        if tiled { Part::Minimize } else { Part::Maximize }
+        if tiled {
+            Part::Minimize
+        } else {
+            Part::Maximize
+        }
     } else if !tiled && on(close - 2.0 * step) {
         Part::Minimize
     } else {
@@ -135,6 +139,7 @@ struct ShadowKey {
     height: i32,
     scale: u64,
     radius: u32,
+    strength: u32,
 }
 
 /// A bar's last drawing, redrawn when anything shown on it changes.
@@ -173,6 +178,8 @@ pub struct Decorations {
     shadow: Option<(ShadowKey, MemoryRenderBuffer, (u32, u32))>,
     /// Draw a shadow behind the focused floating window.
     pub focused_shadow: bool,
+    /// Shadow opacity, percent of full strength.
+    pub shadow_strength: u32,
     /// Averages windows drawn small (`render::window_elements`).
     pub downscale: crate::downscale::Downscale,
 }
@@ -349,7 +356,11 @@ impl Decorations {
         scale: Scale<f64>,
         alpha: f32,
     ) -> Option<OutputElement> {
-        if !self.focused_shadow || rect.size.w <= 0.0 || rect.size.h <= 0.0 {
+        if !self.focused_shadow
+            || self.shadow_strength == 0
+            || rect.size.w <= 0.0
+            || rect.size.h <= 0.0
+        {
             return None;
         }
         let width = rect.size.w.round().clamp(1.0, MAX_WIDTH as f64) as i32;
@@ -363,6 +374,7 @@ impl Decorations {
             height,
             scale: scale.x.to_bits(),
             radius,
+            strength: self.shadow_strength,
         };
         if self
             .shadow
@@ -483,7 +495,7 @@ fn shadow_pixels(key: ShadowKey, scale: f64) -> Option<(u32, u32, Vec<u8>)> {
         canvas.clear(Color::rgba(0, 0, 0, 0.0));
         for layer in (0..=SHADOW_LAYERS).rev() {
             let spread = layer as f32 * SHADOW_HALO / SHADOW_LAYERS as f32;
-            let alpha = 0.012 + (1.0 - spread / SHADOW_HALO) * 0.07;
+            let alpha = (0.012 + (1.0 - spread / SHADOW_HALO) * 0.07) * key.strength as f32 / 100.0;
             canvas.rounded_rect(
                 SHADOW_HALO - spread,
                 SHADOW_HALO - spread + 2.0,
@@ -699,7 +711,10 @@ impl State {
                         DecorationMode::ServerSide => HEIGHT,
                         _ => 0,
                     };
-                    let rect = content_rect(crate::window::window_placement_rect(&window, placement, area), bar);
+                    let rect = content_rect(
+                        crate::window::window_placement_rect(&window, placement, area),
+                        bar,
+                    );
                     self.move_window(&window, rect.loc);
                     Some(rect.size)
                 }
@@ -950,7 +965,10 @@ mod tests {
     fn buttons_sit_at_the_right_end() {
         let width = 600.0;
         assert_eq!(part_at(width, 10.0, true, false), Part::Title);
-        assert_eq!(part_at(width, width - SIDE as f64 - 1.0, true, false), Part::Close);
+        assert_eq!(
+            part_at(width, width - SIDE as f64 - 1.0, true, false),
+            Part::Close
+        );
         let maximize = width - SIDE as f64 - 2.0 * BUTTON as f64 - BUTTON_GAP as f64 + 1.0;
         assert_eq!(part_at(width, maximize, true, false), Part::Maximize);
         let minimize = maximize - (BUTTON + BUTTON_GAP) as f64;
@@ -975,11 +993,28 @@ mod tests {
             height: 60,
             scale: 1.0f64.to_bits(),
             radius: 12,
+            strength: 100,
         };
         let (width, _, pixels) = shadow_pixels(key, 1.0).unwrap();
         let alpha = |x: u32, y: u32| pixels[((y * width + x) * 4 + 3) as usize];
         assert_eq!(alpha(0, 0), 0);
         assert!(alpha(width / 2, 4) > 0);
+    }
+
+    #[test]
+    fn shadow_strength_scales_opacity() {
+        let key = |strength| ShadowKey {
+            width: 80,
+            height: 60,
+            scale: 1.0f64.to_bits(),
+            radius: 12,
+            strength,
+        };
+        let peak = |strength| {
+            let (_, _, pixels) = shadow_pixels(key(strength), 1.0).unwrap();
+            pixels.chunks(4).map(|p| p[3]).max().unwrap()
+        };
+        assert!(peak(25) < peak(50) && peak(50) < peak(100));
     }
 
     #[test]
@@ -989,6 +1024,7 @@ mod tests {
             height: MAX_WIDTH,
             scale: 2.0f64.to_bits(),
             radius: 24,
+            strength: 100,
         };
         let (width, height, pixels) = shadow_pixels(key, 2.0).unwrap();
         assert_eq!(pixels.len(), shadow_buffer_bytes(width, height).unwrap());

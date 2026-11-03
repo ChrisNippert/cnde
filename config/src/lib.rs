@@ -1093,6 +1093,8 @@ pub struct Windows {
     pub focus_follows_mouse: FocusFollowsMouse,
     /// Draw a soft shadow around the focused floating window.
     pub focused_shadow: bool,
+    /// Shadow opacity, 0 to 100 percent of the full-strength look.
+    pub shadow_strength: u32,
 }
 
 impl Default for Windows {
@@ -1100,6 +1102,7 @@ impl Default for Windows {
         Self {
             focus_follows_mouse: FocusFollowsMouse::Off,
             focused_shadow: true,
+            shadow_strength: 50,
         }
     }
 }
@@ -1388,6 +1391,12 @@ impl Config {
                 self.launcher.icon_size
             )));
         }
+        if self.windows.shadow_strength > 100 {
+            return Err(Error::Invalid(format!(
+                "windows.shadow_strength must be 0 to 100, got {}",
+                self.windows.shadow_strength
+            )));
+        }
         for output in &self.outputs {
             if let Some(scale) = output.scale {
                 in_range(
@@ -1536,12 +1545,15 @@ mod tests {
         let config = Config::parse(
             "[dock]\ncorner_radius = 12.5\n\
              [launcher]\nicon_size = 80\n\
-             [windows]\nfocused_shadow = false\n",
+             [windows]\nfocused_shadow = false\nshadow_strength = 30\n",
         )
         .unwrap();
         assert_eq!(config.dock.corner_radius, Some(12.5));
         assert_eq!(config.launcher.icon_size, 80);
         assert!(!config.windows.focused_shadow);
+        assert_eq!(config.windows.shadow_strength, 30);
+        assert_eq!(Config::default().windows.shadow_strength, 50);
+        assert!(Config::parse("[windows]\nshadow_strength = 101\n").is_err());
         assert_eq!(Config::default().dock.corner_radius, None);
         assert_eq!(Config::default().launcher.icon_size, 64);
         assert!(Config::default().windows.focused_shadow);

@@ -134,6 +134,7 @@
 [windows]
 # focus_follows_mouse = "off"  # "off": click to focus; "tiling": hovering a tiled window focuses it; "always": hovering any window focuses it
 # focused_shadow = true       # draw a soft drop shadow around the focused floating window
+# shadow_strength = 50       # shadow opacity, 0 to 100
 
 [workspaces]
 # mode = "continuous"      # "continuous": one strip, monitors show consecutive workspaces and switch together; "individual": every monitor has its own workspaces and switching moves only the monitor you used last; "joined": all monitors are one workspace, each shows the same number with its own windows on it, and switching moves them all

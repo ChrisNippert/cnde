@@ -2609,6 +2609,20 @@ fn windows(c: &Config, d: &Config) -> Vec<Group> {
                     Value::Bool(d.windows.focused_shadow),
                 )
                 .sub("A soft drop shadow around the focused floating window"),
+                Row::new(
+                    "windows.shadow_strength",
+                    "Shadow strength",
+                    Control::Slider {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 5.0,
+                        int: true,
+                        format: |v| format!("{v:.0}%"),
+                    },
+                    Value::Int(c.windows.shadow_strength as i64),
+                    Value::Int(d.windows.shadow_strength as i64),
+                )
+                .sub("How dark the focused window's shadow is"),
             ],
         ),
         group(
