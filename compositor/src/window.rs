@@ -404,6 +404,9 @@ impl State {
     pub fn unmap_window(&mut self, window: &Window) {
         self.space.unmap_elem(window);
         self.capture.window_unmapped(window);
+        if self.hovered.as_ref() == Some(window) {
+            self.hovered = None;
+        }
         self.overview_before_relayout();
         self.remove_window_from_workspaces(window);
         // The remaining tiles close the gap.
