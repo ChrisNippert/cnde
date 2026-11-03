@@ -949,6 +949,7 @@ impl State {
             // and nothing redraws to add it.
             let wallpaper = self.wallpapers.element(&mut gpu.renderer, &output);
             let wallpaper = wallpaper.map(render::OutputElement::Wallpaper);
+            self.live_blur.set_frost(self.config.appearance.frost);
             let live = self.config.live_blur();
             let start = crate::perf::now();
             let backdrop = match self.space.output_geometry(&output) {

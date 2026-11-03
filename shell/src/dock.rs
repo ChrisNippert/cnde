@@ -29,7 +29,7 @@ use crate::{App, apps::App as AppEntry, badges::Badge};
 /// Padding inside the dock's background, around the icons' cells.
 const INNER_PAD: f32 = 6.0;
 /// Gap between the dock and the screen edge.
-const EDGE_MARGIN: i32 = 8;
+const EDGE_MARGIN: i32 = cnde_ipc::dock::EDGE_MARGIN;
 /// In the overview it sits a little higher.
 const OVERVIEW_MARGIN: i32 = 20;
 /// Separator between favorites and other running apps.

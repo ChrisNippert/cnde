@@ -1216,6 +1216,23 @@ impl State {
         ))
     }
 
+    /// The area on `slot` that tiles are laid out in: `slot_areas`' area
+    /// with a floating bar's and dock's padding given back.
+    pub(crate) fn slot_tile_area(
+        &self,
+        outputs: &[Output],
+        slot: isize,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let (_, area) = self.slot_areas(outputs, slot)?;
+        let last = outputs.len() as isize - 1;
+        let output = outputs.get(slot.clamp(0, last.max(0)) as usize)?;
+        let plain = self.usable_area(output)?;
+        let tiling = self.tiling_area(output)?;
+        // The same shift `slot_areas` applied, applied to the grown area.
+        let shift = area.loc - plain.loc;
+        Some(Rectangle::new(tiling.loc + shift, tiling.size))
+    }
+
     /// Where `window` would rest if its workspace were shown on `slot`:
     /// floating windows where their workspace's layout puts them (floating:
     /// their local position, kept reachable on a smaller monitor; tiling:
@@ -1227,9 +1244,10 @@ impl State {
         slot: isize,
     ) -> Option<Rectangle<i32, Logical>> {
         let (geo, area) = self.slot_areas(outputs, slot)?;
+        let tile_area = self.slot_tile_area(outputs, slot).unwrap_or(area);
         Some(match Self::placement_of(window) {
             Placement::Floating => self
-                .layout_rest(window, geo, area)
+                .layout_rest(window, geo, area, tile_area)
                 .unwrap_or_else(|| floating_rest(window, geo, area)),
             Placement::Fullscreen => geo,
             placement => crate::decorations::content_rect(
