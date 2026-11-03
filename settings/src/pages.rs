@@ -2297,13 +2297,17 @@ fn panel_look(c: &Config, d: &Config) -> Vec<Row> {
     let px = |v: f64| format!("{v:.0} px");
     vec![
         Row::new(
-            "panel.clear",
-            "Top bar clear while floating",
-            Control::switch(),
-            Value::Bool(p.clear),
-            Value::Bool(dp.clear),
+            "panel.style",
+            "Style",
+            Control::Segmented(choices(&[
+                ("Full bar", s("full")),
+                ("Islands", s("islands")),
+                ("No background", s("clear")),
+            ])),
+            s(p.style().as_str()),
+            s(dp.style().as_str()),
         )
-        .sub("No background until a window touches it, just text and icons"),
+        .sub("Islands and no background become a full bar while a window touches it"),
         Row::new(
             "panel.rounded",
             "Top bar rounded corners",
@@ -3374,7 +3378,7 @@ mod tests {
             .collect();
         assert!(
             keys.iter()
-                .all(|r| r.title != "Top bar clear while floating" && r.title != "Dock colour")
+                .all(|r| r.title != "Top bar edge line" && r.title != "Dock colour")
         );
         let titles = |c: &Config| -> Vec<String> {
             appearance(c, &d)
@@ -3384,7 +3388,7 @@ mod tests {
                 .collect()
         };
         let on = titles(&Config::default());
-        assert!(on.iter().any(|t| t == "Top bar clear while floating"));
+        assert!(on.iter().any(|t| t == "Top bar edge line"));
         // The dock's adaptive colour shows only with that palette.
         assert!(!on.iter().any(|t| t == "Dock colour"));
         let mut adaptive = Config::default();

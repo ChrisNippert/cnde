@@ -573,8 +573,11 @@ pub struct Panel {
     /// Attached to the top edge, floating clear of it, or floating until
     /// a window touches it.
     pub mode: BarMode,
-    /// While floating with nothing touching it: no background at all,
-    /// just the text and icons over the wallpaper.
+    /// How the bar looks: a full-width strip, separate islands, or no
+    /// background at all. Unset follows the old `clear` switch.
+    pub style: Option<PanelStyle>,
+    /// The old switch for `style = "clear"`; still read when `style` is
+    /// unset.
     pub clear: bool,
     /// "#rrggbb" or "#rrggbbaa"; empty follows the light/dark style.
     pub background: String,
@@ -610,6 +613,7 @@ impl Default for Panel {
             rounded: false,
             frosted: None,
             mode: BarMode::Auto,
+            style: None,
             clear: false,
             background: String::new(),
             foreground: String::new(),
@@ -621,6 +625,40 @@ impl Default for Panel {
             padding: 12.0,
             button_padding: 10.0,
             edge_line: 2,
+        }
+    }
+}
+
+impl Panel {
+    /// The bar's style, reading the old `clear` switch when unset.
+    pub fn style(&self) -> PanelStyle {
+        self.style.unwrap_or(if self.clear {
+            PanelStyle::Clear
+        } else {
+            PanelStyle::Full
+        })
+    }
+}
+
+/// What the top bar's background is while it floats free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PanelStyle {
+    /// One full-width bar.
+    #[default]
+    Full,
+    /// Separate rounded pills for the workspaces, clock and status.
+    Islands,
+    /// No background: text and icons over the wallpaper.
+    Clear,
+}
+
+impl PanelStyle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Islands => "islands",
+            Self::Clear => "clear",
         }
     }
 }

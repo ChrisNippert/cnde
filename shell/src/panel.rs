@@ -3,7 +3,7 @@
 //! the centre, and the status icons on the right open quick settings.
 
 use chrono::Local;
-use cnde_config::{BarMode, ClockPosition, TrayMode};
+use cnde_config::{BarMode, ClockPosition, PanelStyle, TrayMode};
 use cnde_ipc::panel::GAP as FLOAT_GAP;
 use cnde_ui::{
     Animator, Canvas, Color, Fonts, Icons, Theme, Weight,
@@ -60,8 +60,8 @@ pub struct Draw<'a> {
     /// A window is against the bar: no see-through, whatever the style.
     pub solid: bool,
     pub mode: BarMode,
-    /// No background while floating free.
-    pub clear: bool,
+    /// What the bar looks like while it floats free.
+    pub style: PanelStyle,
     /// The wallpaper behind the bar is light: a clear bar's text goes dark.
     pub backdrop_light: bool,
     /// The colour for the bar to take (a window's, else the wallpaper's).
@@ -417,7 +417,7 @@ impl Panel {
             battery_low,
             solid,
             mode,
-            clear,
+            style,
             backdrop_light,
             tint,
             edge_line,
@@ -433,6 +433,13 @@ impl Panel {
         self.anim.begin();
         self.solid_fade.begin();
         self.float.begin();
+        // Islands only make sense off the edge.
+        let mode = match (style, mode) {
+            (PanelStyle::Islands, BarMode::Attached) => BarMode::Auto,
+            _ => mode,
+        };
+        let clear = style == PanelStyle::Clear;
+        let islands = style == PanelStyle::Islands;
         let floats = match mode {
             BarMode::Attached => false,
             BarMode::Floating => true,
@@ -502,8 +509,9 @@ impl Panel {
         };
         let background = {
             let a = theme.panel_background.a;
-            // Clear: fades out as it floats off, back in when touched.
-            let a = if clear { a * (1.0 - float) } else { a };
+            // Clear and islands: fades out as it floats off, back in when
+            // touched.
+            let a = if clear || islands { a * (1.0 - float) } else { a };
             theme.panel_background.with_alpha(a + (1.0 - a) * solid)
         };
         // A soft shadow: rounded rects each a little taller and fainter.
@@ -727,11 +735,8 @@ impl Panel {
         // Clock: centred, or beside the dots or the status icons.
         let text = format_clock(clock_format);
         let mut clock = fonts.layout(&text, theme.font_size, Weight::Bold, scale as f32);
-        const GAP: f32 = 16.0;
-        let slot_x = |position: ClockPosition| match position {
-            ClockPosition::Left => activities.1 + GAP,
-            ClockPosition::Center => (width - clock.width) / 2.0,
-            ClockPosition::Right => right_limit - GAP - clock.width,
+        let slot_x = |position: ClockPosition| {
+            clock_x_at(position, width, clock.width, activities.1, right_limit)
         };
         let dragged = match self.edit.as_ref().and_then(|e| e.drag) {
             Some(PanelDrag::Clock { x }) => Some(x),
@@ -778,6 +783,30 @@ impl Panel {
             );
         }
         self.clock_region = Some(clock_region);
+
+        // Islands: a pill behind each group, under the hover pills drawn
+        // above. The regions (and so hit-testing) are the same as the bar's.
+        let amount = if islands && self.edit.is_none() {
+            float * (1.0 - solid)
+        } else {
+            0.0
+        };
+        if amount > 0.0 {
+            let bg = theme.panel_background;
+            let color = bg.with_alpha(bg.a.max(0.8) * amount);
+            let spans = island_spans(
+                &[
+                    activities,
+                    clock_region,
+                    (tray_start, self.status_region.map_or(tray_start, |r| r.1)),
+                ],
+                ISLAND_PAD,
+                ISLAND_MERGE,
+            );
+            for (a, b) in spans {
+                canvas.rounded_rect_behind(a, 0.0, b - a, height, height / 2.0, color);
+            }
+        }
 
         if self.edit.is_some() {
             // The bar outlined, the clock marked movable, a grip to resize.
@@ -846,6 +875,45 @@ impl Panel {
     }
 }
 
+/// How far an island reaches past the buttons it holds.
+const ISLAND_PAD: f32 = 4.0;
+/// Islands closer than this (after padding) are one.
+const ISLAND_MERGE: f32 = 12.0;
+/// Between the clock and the dots or status icons beside it.
+const CLOCK_GAP: f32 = 16.0;
+
+/// Where the clock's text starts for a slot: `act_end` is the right end of
+/// the Activities button, `right_limit` the left end of what's on the right.
+fn clock_x_at(
+    position: ClockPosition,
+    width: f32,
+    clock_width: f32,
+    act_end: f32,
+    right_limit: f32,
+) -> f32 {
+    match position {
+        ClockPosition::Left => act_end + CLOCK_GAP,
+        ClockPosition::Center => (width - clock_width) / 2.0,
+        ClockPosition::Right => right_limit - CLOCK_GAP - clock_width,
+    }
+}
+
+/// The islands for groups of buttons (x ranges): each grown by `pad`, and
+/// ones within `merge` of each other joined, so a clock beside the dots
+/// shares their pill.
+fn island_spans(groups: &[(f32, f32)], pad: f32, merge: f32) -> Vec<(f32, f32)> {
+    let mut sorted: Vec<(f32, f32)> = groups.iter().map(|&(a, b)| (a - pad, b + pad)).collect();
+    sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    for span in sorted {
+        match out.last_mut() {
+            Some(last) if span.0 - last.1 <= merge => last.1 = last.1.max(span.1),
+            _ => out.push(span),
+        }
+    }
+    out
+}
+
 /// Which slot a clock dropped at `x` goes to: the bar's thirds.
 pub fn clock_slot(x: f32, width: f32) -> ClockPosition {
     if x < width / 3.0 {
@@ -910,6 +978,36 @@ fn format_clock(format: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn centre_clock_gets_its_own_island() {
+        let width = 1000.0;
+        let clock = 100.0;
+        let x = clock_x_at(ClockPosition::Center, width, clock, 60.0, 900.0);
+        let spans = island_spans(
+            &[(7.0, 60.0), (x - 10.0, x + clock + 10.0), (900.0, 995.0)],
+            ISLAND_PAD,
+            ISLAND_MERGE,
+        );
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0], (3.0, 64.0));
+        assert_eq!(spans[2], (896.0, 999.0));
+    }
+
+    #[test]
+    fn side_clock_joins_its_neighbour() {
+        let x = clock_x_at(ClockPosition::Left, 1000.0, 100.0, 60.0, 900.0);
+        assert_eq!(x, 76.0);
+        let spans = island_spans(
+            &[(7.0, 60.0), (x - 10.0, x + 110.0), (900.0, 995.0)],
+            ISLAND_PAD,
+            ISLAND_MERGE,
+        );
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0], (3.0, 190.0));
+        let x = clock_x_at(ClockPosition::Right, 1000.0, 100.0, 60.0, 900.0);
+        assert_eq!(x, 784.0);
+    }
 
     #[test]
     fn battery_icons_exist_in_adwaita_naming() {

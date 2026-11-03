@@ -126,7 +126,8 @@
 # rounded = false          # rounded bottom corners and a soft shadow
 # frosted = true           # just the bar, overriding appearance.material
 # mode = "auto"            # "attached" (flush with the top edge), "floating" (clear of the edges), "auto" (floats until a window touches it)
-# clear = false            # floating with nothing touching it: no background, just text and icons
+# style = "full"           # "full" (one bar), "islands" (separate pills) or "clear" (no background, just text and icons); islands and clear become the full bar while a window touches it
+# clear = false            # the old form of style = "clear"
 # background = ""          # "#rrggbb" or "#rrggbbaa" (translucent); empty follows the style
 # foreground = ""
 # font_size = 14
