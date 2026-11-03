@@ -242,6 +242,9 @@ pub struct Appearance {
     /// blurred wallpaper, or solid. Snapped or maximized windows are
     /// always solid.
     pub material: Material,
+    /// How blurred the frost is, in percent (25-200): 100 is the usual
+    /// look, more blurs it further.
+    pub frost: u8,
     /// The old switch for `palette = "adaptive"`; true means the same.
     #[serde(alias = "match_windows")]
     pub adaptive_color: bool,
@@ -289,6 +292,7 @@ impl Default for Appearance {
             accent_color: "#f4a7c6".into(),
             corner_radius: Self::CORNER_RADIUS,
             material: Material::Frosted,
+            frost: 100,
             adaptive_color: false,
         }
     }
@@ -1178,6 +1182,12 @@ impl Config {
             0.0,
             48.0,
         )?;
+        in_range(
+            "appearance.frost",
+            self.appearance.frost as f64,
+            25.0,
+            200.0,
+        )?;
         in_range("tiling.master_ratio", self.tiling.master_ratio, 0.1, 0.9)?;
         in_range(
             "files.grid_icon_size",
@@ -1370,6 +1380,14 @@ mod tests {
     #[test]
     fn out_of_range_is_an_error() {
         assert!(Config::parse("[input.mouse]\nspeed = 3.0\n").is_err());
+    }
+
+    #[test]
+    fn frost_defaults_to_100_and_parses() {
+        assert_eq!(Config::default().appearance.frost, 100);
+        let c = Config::parse("[appearance]\nfrost = 150\n").unwrap();
+        assert_eq!(c.appearance.frost, 150);
+        assert!(Config::parse("[appearance]\nfrost = 300\n").is_err());
     }
 
     #[test]
