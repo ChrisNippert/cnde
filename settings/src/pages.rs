@@ -3660,6 +3660,35 @@ fn accessibility(c: &Config, d: &Config) -> Vec<Group> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn dock_page_keeps_existing_sizes_with_new_controls() {
+        let config = Config::default();
+        let dock = build(
+            Page::Dock,
+            &config,
+            &[],
+            WifiView::default(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let keys: Vec<_> = dock
+            .iter()
+            .flat_map(|group| &group.rows)
+            .map(|row| row.key.clone())
+            .collect();
+        for expected in [
+            Key::Path("dock.icon_size"),
+            Key::Path("dock.padding"),
+            Key::Path("dock.corner_radius"),
+            Key::Path("launcher.icon_size"),
+        ] {
+            assert!(keys.contains(&expected), "missing {expected:?}");
+        }
+    }
+
     /// Writing every row's default back must leave a valid config: catches
     /// a row pointing at a misspelled key or writing the wrong type.
     #[test]
