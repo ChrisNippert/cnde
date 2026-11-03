@@ -1418,7 +1418,7 @@ impl App {
                 power_icon: self.config.panel.power_icon,
                 mic_indicator: self.config.panel.mic_indicator,
                 keyboard_button: self.config.panel.keyboard_button,
-                keyboard_open: self.osk.is_some(),
+                keyboard_open: self.osk.as_ref().is_some_and(osk::Osk::open),
                 overview_open: self.overview_open,
                 quick_settings_open: self.quick_settings.is_some(),
                 calendar_open: self.calendar.is_some(),
