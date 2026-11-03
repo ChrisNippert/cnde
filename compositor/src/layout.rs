@@ -576,6 +576,18 @@ impl<W: PartialEq + Clone> Workspace<W> {
         self.tiles = order;
         self.splits.swap(a, b);
     }
+
+    /// Put `new` in the tiling order right after `after`, or at the end when
+    /// `after` isn't tiled. It joins `windows` later, at that place.
+    pub fn insert_tile_after(&mut self, new: W, after: Option<&W>) {
+        let mut order = self.tile_order();
+        order.retain(|w| *w != new);
+        let at = after
+            .and_then(|a| order.iter().position(|w| w == a))
+            .map_or(order.len(), |i| i + 1);
+        order.insert(at, new);
+        self.tiles = order;
+    }
 }
 
 /// The layout a workspace uses: with `toggle = "all"` the config's, for
@@ -1362,6 +1374,17 @@ impl State {
         self.relayout_visible(true);
     }
 
+    /// Where a new tiled `window` goes with `[tiling] open_at_pointer`: the
+    /// tile under the pointer. `None` when the option is off or nothing tiled
+    /// is there.
+    fn pointer_tile_for(&self, window: &Window) -> Option<Window> {
+        if !self.config.tiling.open_at_pointer {
+            return None;
+        }
+        let pointer = self.seat.get_pointer()?.current_location();
+        self.tile_under(pointer, window)
+    }
+
     /// The tiled window drawn at `pointer`, other than `except`; `None` if
     /// a floating window is on top there.
     fn tile_under(&self, pointer: Point<f64, Logical>, except: &Window) -> Option<Window> {
@@ -1474,24 +1497,33 @@ impl State {
             return;
         };
         let rect = match self.config.tiling.style {
-            // It splits the focused window's space.
+            // It splits the focused window's space, or the tile under the
+            // pointer with open_at_pointer.
             TilingStyle::Dwindle => {
                 self.sync_splits(index);
-                let focused = self.focused_window();
+                let target = self.pointer_tile_for(&window).or_else(|| self.focused_window());
                 let (ratio, gap, outer_gap) = self.tile_params(index);
                 let splits = &mut self.workspaces.list[index].splits;
-                splits.insert(window.clone(), focused.as_ref());
+                splits.insert(window.clone(), target.as_ref());
                 splits
                     .arrange(area, ratio, gap, outer_gap)
                     .into_iter()
                     .find(|(w, _)| *w == window)
                     .map(|(_, rect)| rect)
             }
-            // It joins at the end of the stack.
+            // It joins at the end of the stack, or after the tile under the
+            // pointer with open_at_pointer.
             TilingStyle::Master => {
-                let count = self.tiled_windows(index).len() + 1;
-                let own = vec![Rectangle::default(); count];
-                layout.arrange(area, &own).last().copied()
+                let mut order = self.tiled_windows(index);
+                let target = self.pointer_tile_for(&window);
+                let at = target
+                    .as_ref()
+                    .and_then(|t| order.iter().position(|w| w == t))
+                    .map_or(order.len(), |i| i + 1);
+                self.workspaces.list[index].insert_tile_after(window.clone(), target.as_ref());
+                order.insert(at, window.clone());
+                let own = vec![Rectangle::default(); order.len()];
+                layout.arrange(area, &own).get(at).copied()
             }
         };
         let Some(rect) = rect else {
@@ -1732,6 +1764,21 @@ mod tests {
         // New windows join at the end; gone ones drop out.
         ws.windows = vec![3, 1, 4];
         assert_eq!(ws.tile_order(), vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn new_tiles_can_open_after_a_given_one() {
+        let mut ws = workspace(&[1, 2, 3]);
+        ws.sync_tiles();
+        ws.insert_tile_after(4, Some(&1));
+        ws.windows.push(4);
+        assert_eq!(ws.tile_order(), vec![1, 4, 2, 3]);
+        // No target, or one that isn't tiled: at the end.
+        ws.insert_tile_after(5, None);
+        ws.windows.push(5);
+        ws.insert_tile_after(6, Some(&99));
+        ws.windows.push(6);
+        assert_eq!(ws.tile_order(), vec![1, 4, 2, 3, 5, 6]);
     }
 
     #[test]

@@ -110,9 +110,13 @@
 # master_ratio = 0.5       # share of the width the first window takes (0.1-0.9)
 # gap = 8                  # px between tiled windows (0-64)
 # outer_gap = 8            # px between tiled windows and the screen's edges (0-128)
+# open_at_pointer = false  # true: a new tiled window splits the tile under the pointer instead of the focused one (dwindle), or goes after it (main + stack)
 
 [snap]
 # edge = 10                # px from a monitor's side or top where a dragged window snaps (2-96)
+
+[windows]
+# focus_follows_mouse = "off"  # "off": click to focus; "tiling": hovering a tiled window focuses it; "always": hovering any window focuses it
 
 [workspaces]
 # mode = "continuous"      # "continuous": one strip, monitors show consecutive workspaces and switch together; "individual": every monitor has its own workspaces and switching moves only the monitor you used last

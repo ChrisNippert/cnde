@@ -44,6 +44,8 @@ pub struct Config {
     pub workspaces: Workspaces,
     /// Snapping windows dragged to a monitor's edges.
     pub snap: Snap,
+    /// Which windows get focus when the pointer moves over them.
+    pub windows: Windows,
     /// Switching to the dark style and back by the time of day.
     pub dark_mode: DarkMode,
     /// A warm colour filter, on a schedule.
@@ -1034,6 +1036,27 @@ impl Default for Snap {
     }
 }
 
+/// `[windows]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Windows {
+    /// Hovering a window focuses it: "off", "tiling" (only tiled windows)
+    /// or "always".
+    pub focus_follows_mouse: FocusFollowsMouse,
+}
+
+/// Which windows the pointer focuses when it moves over them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FocusFollowsMouse {
+    #[default]
+    Off,
+    /// Only windows on a tiling workspace.
+    Tiling,
+    /// Any window, floating or tiled.
+    Always,
+}
+
 /// Hyprland-style master-stack tiling (ARCHITECTURE.md §4.4). Each
 /// workspace can be switched with Super+T; until then it uses `layout`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1051,6 +1074,9 @@ pub struct Tiling {
     pub gap: u32,
     /// Logical pixels between tiled windows and the screen's edges.
     pub outer_gap: u32,
+    /// New tiled windows open next to the tile under the pointer instead of
+    /// the focused one.
+    pub open_at_pointer: bool,
 }
 
 impl Default for Tiling {
@@ -1062,6 +1088,7 @@ impl Default for Tiling {
             master_ratio: 0.5,
             gap: 8,
             outer_gap: 8,
+            open_at_pointer: false,
         }
     }
 }

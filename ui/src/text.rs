@@ -126,3 +126,82 @@ impl TextLayout {
         self.scale
     }
 }
+
+/// Ctrl+Backspace in a text field: deletes the word before `cursor` (a char
+/// index) along with the spaces between it and the cursor. Returns the new
+/// cursor, which is where the deleted text started.
+pub fn delete_word_back(text: &mut String, cursor: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let mut start = cursor;
+    while start > 0 && chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+    while start > 0 && !chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+    *text = chars[..start].iter().chain(&chars[cursor..]).collect();
+    start
+}
+
+/// Ctrl+Delete: deletes from `cursor` (a char index) through the spaces and
+/// the word after it.
+pub fn delete_word_forward(text: &mut String, cursor: usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let mut end = cursor;
+    while end < chars.len() && chars[end].is_whitespace() {
+        end += 1;
+    }
+    while end < chars.len() && !chars[end].is_whitespace() {
+        end += 1;
+    }
+    *text = chars[..cursor].iter().chain(&chars[end..]).collect();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_backspace_takes_the_word_and_its_spaces() {
+        let mut text = String::from("hello big world");
+        assert_eq!(delete_word_back(&mut text, 15), 10);
+        assert_eq!(text, "hello big ");
+        assert_eq!(delete_word_back(&mut text, 10), 6);
+        assert_eq!(text, "hello ");
+        // Trailing spaces go first, then the word before them.
+        let mut text = String::from("a bc   ");
+        assert_eq!(delete_word_back(&mut text, 7), 2);
+        assert_eq!(text, "a ");
+        // Mid-text: only what's before the cursor goes.
+        let mut text = String::from("one two");
+        assert_eq!(delete_word_back(&mut text, 5), 4);
+        assert_eq!(text, "one wo");
+        // Nothing before the cursor, and a cursor past the end.
+        let mut text = String::from("abc");
+        assert_eq!(delete_word_back(&mut text, 0), 0);
+        assert_eq!(text, "abc");
+        assert_eq!(delete_word_back(&mut text, 99), 0);
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn ctrl_backspace_counts_chars_not_bytes() {
+        let mut text = String::from("héllo wörld");
+        assert_eq!(delete_word_back(&mut text, 11), 6);
+        assert_eq!(text, "héllo ");
+    }
+
+    #[test]
+    fn ctrl_delete_takes_the_spaces_and_the_word_after() {
+        let mut text = String::from("hello big world");
+        delete_word_forward(&mut text, 5);
+        assert_eq!(text, "hello world");
+        delete_word_forward(&mut text, 6);
+        assert_eq!(text, "hello ");
+        let mut text = String::from("abc");
+        delete_word_forward(&mut text, 3);
+        assert_eq!(text, "abc");
+    }
+}

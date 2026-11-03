@@ -1752,6 +1752,12 @@ impl App {
                 self.redraw();
                 return;
             }
+            Keysym::BackSpace if ctrl && edit.cursor > 0 => {
+                edit.cursor = cnde_ui::text::delete_word_back(&mut edit.text, edit.cursor);
+            }
+            Keysym::Delete if ctrl => {
+                cnde_ui::text::delete_word_forward(&mut edit.text, edit.cursor);
+            }
             Keysym::BackSpace if edit.cursor > 0 => {
                 let at = byte(&edit.text, edit.cursor - 1);
                 edit.text.remove(at);

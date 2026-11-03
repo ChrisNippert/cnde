@@ -443,19 +443,28 @@ impl State {
 
     /// Raise and focus `window`, or clear focus with `None`.
     pub fn focus_window(&mut self, window: Option<&Window>) {
+        self.focus(window, true);
+    }
+
+    /// Focus `window` without raising it: the pointer moved onto it.
+    pub fn focus_hovered(&mut self, window: &Window) {
+        self.focus(Some(window), false);
+    }
+
+    fn focus(&mut self, window: Option<&Window>, raise: bool) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
         // Locked: the keyboard stays with the locker.
         if self.lock.is_locked() {
-            if let Some(window) = window {
+            if let Some(window) = window.filter(|_| raise) {
                 self.raise_window(window);
             }
             return;
         }
         // The window asked for, or the modal dialog that is holding it up.
         let target = window.map(|w| self.modal_focus_target(w));
-        if let Some(window) = window {
+        if let Some(window) = window.filter(|_| raise) {
             self.raise_window(window);
         }
         let window = target.as_ref();
