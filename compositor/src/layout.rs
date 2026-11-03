@@ -941,92 +941,133 @@ impl State {
         self.layout_switched(index, was);
     }
 
-    /// Workspace `index` was using `was` and may now use another layout:
-    /// remember where windows floated before they tile, and put them back
-    /// there when tiling stops.
+    /// Workspace `index` was using `was` and may now use another layout.
+    /// Starting to tile, each window takes the tile nearest where it
+    /// floats; stopping, each floats where its tile was, grown over the
+    /// gaps.
     fn layout_switched(&mut self, index: usize, was: WindowLayout) {
         let now = self.layout_mode(index);
-        if now == was {
-            self.relayout_workspace(index, true);
-            return;
+        if now != was {
+            let (outputs, _) = self.strip_outputs();
+            let slot = self.slot_of(index);
+            let origin = slot
+                .and_then(|slot| outputs.get(slot))
+                .and_then(|o| self.space.output_geometry(o))
+                .map(|g| g.loc);
+            // Its monitor, or the main one while it isn't shown.
+            if let Some((geo, area)) = self.slot_areas(&outputs, slot.unwrap_or(0) as isize) {
+                match now {
+                    WindowLayout::Tiling => self.tile_nearest(index, geo, area, origin),
+                    WindowLayout::Floating => self.untile_in_place(index, geo, area, origin),
+                }
+            }
         }
-        let windows = self.workspaces.list[index].windows.clone();
-        let (outputs, _) = self.strip_outputs();
-        let output = self.slot_of(index).and_then(|slot| outputs.get(slot));
-        let origin = output
-            .and_then(|o| self.space.output_geometry(o))
-            .map(|g| g.loc);
-        // Where windows that opened as tiles float: off screen, the size
-        // the main monitor would give them.
-        let usable = output.or(outputs.first()).and_then(|o| {
-            let geo = self.space.output_geometry(o)?;
-            let usable = self.usable_area(o)?;
-            Some(Rectangle::new(usable.loc - geo.loc, usable.size))
-        });
-        let mut cascade = 0;
-        for window in windows {
-            // Maximized or snapped, it joins the tiles too, and floats where
-            // it did before that when tiling stops.
-            let restored = match now {
-                WindowLayout::Tiling => self.unplace_to_tile(&window),
-                WindowLayout::Floating => None,
-            };
+        self.relayout_workspace(index, true);
+    }
+
+    /// Order workspace `index`'s tiles so each window gets the one nearest
+    /// where it floats now (`origin`: its monitor's, if it's shown).
+    fn tile_nearest(
+        &mut self,
+        index: usize,
+        geo: Rectangle<i32, Logical>,
+        area: Rectangle<i32, Logical>,
+        origin: Option<Point<i32, Logical>>,
+    ) {
+        let mut windows = Vec::new();
+        let mut rects = Vec::new();
+        for window in self.workspaces.list[index].windows.clone() {
+            // Maximized or snapped, it joins the tiles too, from where it
+            // floated before that.
+            let restored = self.unplace_to_tile(&window);
             if !Self::tileable(&window) {
                 continue;
             }
-            let rect = restored
+            let local = restored
                 .or_else(|| self.space.element_geometry(&window))
                 .zip(origin)
-                .map(|(geo, origin)| Rectangle::new(geo.loc - origin, geo.size));
-            match now {
-                WindowLayout::Tiling => {
-                    let rect = rect.unwrap_or_else(|| {
-                        with_state(&window, |s| Rectangle::new(s.local, window.geometry().size))
-                    });
-                    with_state(&window, |s| s.untiled = Some(rect));
-                }
-                WindowLayout::Floating => {
-                    let (untiled, kept) =
-                        with_state(&window, |s| (s.untiled.take(), s.keep_floating));
-                    // Opened as a tile, it never floated: rather than float
-                    // in its tile (and look like nothing happened), it gets a
-                    // fresh spot, centred and cascading like new windows.
-                    let back = match untiled {
-                        Some(back) => Some(back),
-                        None if kept => rect,
-                        None => usable.map(|area| {
-                            cascade += 1;
-                            floating_spot(area, cascade - 1)
-                        }),
-                    };
-                    let Some(back) = back else {
-                        continue;
-                    };
-                    with_state(&window, |s| s.local = back.loc);
-                    match origin {
-                        Some(origin) => self.glide_to(
-                            &window,
-                            Rectangle::new(origin + back.loc, back.size),
-                            false,
-                            true,
-                        ),
-                        // Not on screen: just the size; it's placed when shown.
-                        None => {
-                            if let Some(toplevel) = window.toplevel() {
-                                toplevel.with_pending_state(|s| {
-                                    set_tiled(&mut s.states, false);
-                                    s.size = Some(back.size);
-                                });
-                                if toplevel.is_initial_configure_sent() {
-                                    toplevel.send_pending_configure();
-                                }
-                            }
+                .map(|(rect, origin)| Rectangle::new(rect.loc - origin, rect.size))
+                .unwrap_or_else(|| {
+                    with_state(&window, |s| Rectangle::new(s.local, window.geometry().size))
+                });
+            // For a window floated off the tiles later (see `untiled`).
+            with_state(&window, |s| s.untiled = Some(local));
+            rects.push(Rectangle::new(geo.loc + local.loc, local.size));
+            windows.push(window);
+        }
+        let (ratio, gap, outer_gap) = self.tile_params(index);
+        let tiles = match self.config.tiling.style {
+            TilingStyle::Dwindle => dwindle(area, windows.len(), ratio, gap, outer_gap),
+            TilingStyle::Master => master_stack(area, windows.len(), ratio, gap, outer_gap),
+        };
+        let order: Vec<Window> = nearest_tiles(&rects, &tiles)
+            .into_iter()
+            .map(|i| windows[i].clone())
+            .collect();
+        let workspace = &mut self.workspaces.list[index];
+        // The dwindle tiles above are each a split of the one before.
+        workspace.splits = SplitTree::default();
+        for (i, window) in order.iter().enumerate() {
+            let before = i.checked_sub(1).map(|i| &order[i]);
+            workspace.splits.insert(window.clone(), before);
+        }
+        workspace.tiles = order;
+    }
+
+    /// Float workspace `index`'s tiled windows where their tiles are, as if
+    /// there were no gaps.
+    fn untile_in_place(
+        &mut self,
+        index: usize,
+        geo: Rectangle<i32, Logical>,
+        area: Rectangle<i32, Logical>,
+        origin: Option<Point<i32, Logical>>,
+    ) {
+        let windows: Vec<Window> = self.workspaces.list[index]
+            .tile_order()
+            .into_iter()
+            .filter(Self::tileable)
+            .collect();
+        let (ratio, _, _) = self.tile_params(index);
+        let slots: Vec<(Window, Rectangle<i32, Logical>)> = match self.config.tiling.style {
+            TilingStyle::Dwindle => {
+                let mut splits = self.workspaces.list[index].splits.clone();
+                splits.sync(&windows, None);
+                splits.arrange(area, ratio, 0, 0)
+            }
+            TilingStyle::Master => {
+                let rects = master_stack(area, windows.len(), ratio, 0, 0);
+                windows.into_iter().zip(rects).collect()
+            }
+        };
+        for (window, slot) in slots {
+            let rect = content_rect(slot, titlebar_height(&window));
+            let back = Rectangle::new(rect.loc - geo.loc, rect.size);
+            with_state(&window, |s| {
+                s.untiled = None;
+                s.local = back.loc;
+            });
+            match origin {
+                Some(origin) => self.glide_to(
+                    &window,
+                    Rectangle::new(origin + back.loc, back.size),
+                    false,
+                    true,
+                ),
+                // Not on screen: just the size; it's placed when shown.
+                None => {
+                    if let Some(toplevel) = window.toplevel() {
+                        toplevel.with_pending_state(|s| {
+                            set_tiled(&mut s.states, false);
+                            s.size = Some(back.size);
+                        });
+                        if toplevel.is_initial_configure_sent() {
+                            toplevel.send_pending_configure();
                         }
                     }
                 }
             }
         }
-        self.relayout_workspace(index, true);
     }
 
     /// Take a maximized or snapped `window` (that could tile) back to
@@ -1480,19 +1521,51 @@ fn with_bar(rect: Rectangle<i32, Logical>, window: &Window) -> Rectangle<i32, Lo
     )
 }
 
-/// A floating spot in `area` for the `n`th window that never floated: two
-/// thirds of the area, centred, each one stepped down and right of the last.
-fn floating_spot(area: Rectangle<i32, Logical>, n: i32) -> Rectangle<i32, Logical> {
-    let size = Size::from((area.size.w * 2 / 3, area.size.h * 2 / 3));
-    let step = 32 * (n % 6);
-    let x = area.loc.x + (area.size.w - size.w) / 2 - 80 + step;
-    let y = area.loc.y + (area.size.h - size.h) / 2 - 80 + step;
-    Rectangle::new((x.max(area.loc.x), y.max(area.loc.y)).into(), size)
+/// Which window takes each of `tiles`, as indices into `windows`: the
+/// closest window and tile (by their centres) pair up first, then the
+/// closest of the rest, so each window moves as little as it can.
+fn nearest_tiles(
+    windows: &[Rectangle<i32, Logical>],
+    tiles: &[Rectangle<i32, Logical>],
+) -> Vec<usize> {
+    let centre = |r: &Rectangle<i32, Logical>| {
+        (
+            r.loc.x as i64 * 2 + r.size.w as i64,
+            r.loc.y as i64 * 2 + r.size.h as i64,
+        )
+    };
+    let mut pairs: Vec<(i64, usize, usize)> = Vec::new();
+    for (w, window) in windows.iter().enumerate() {
+        for (t, tile) in tiles.iter().enumerate() {
+            let ((wx, wy), (tx, ty)) = (centre(window), centre(tile));
+            pairs.push(((wx - tx).pow(2) + (wy - ty).pow(2), w, t));
+        }
+    }
+    pairs.sort();
+    let mut taken = vec![None; tiles.len()];
+    let mut placed = vec![false; windows.len()];
+    for (_, w, t) in pairs {
+        if !placed[w] && taken[t].is_none() {
+            placed[w] = true;
+            taken[t] = Some(w);
+        }
+    }
+    taken.into_iter().flatten().collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_take_their_nearest_tiles() {
+        let tiles = master_stack(rect(0, 0, 1000, 600), 3, 0.5, 0, 0);
+        // Bottom right, left, top right: each lands where it already was.
+        let windows = [rect(700, 400, 200, 150), rect(50, 100, 300, 300), rect(600, 0, 300, 200)];
+        assert_eq!(nearest_tiles(&windows, &tiles), vec![1, 2, 0]);
+        // One window, still a tile.
+        assert_eq!(nearest_tiles(&windows[..1], &tiles[..1]), vec![0]);
+    }
 
     #[test]
     fn mode_resolution() {

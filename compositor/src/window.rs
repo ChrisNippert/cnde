@@ -76,8 +76,8 @@ pub struct WindowState {
     /// Already promoted to fullscreen for covering its monitor, so leaving
     /// fullscreen again sticks.
     pub auto_fullscreened: bool,
-    /// Local position and size before its workspace started tiling, to
-    /// return to when it stops.
+    /// Local position and size before its workspace started tiling, for
+    /// when it alone is floated off the tiles.
     pub untiled: Option<Rectangle<i32, Logical>>,
 }
 
