@@ -440,10 +440,8 @@ impl Launcher {
                 return Outcome::Redraw;
             }
             Keysym::BackSpace if modifiers.ctrl => {
-                // Delete the last word.
-                let trimmed = self.query.trim_end().len();
-                let start = self.query[..trimmed].rfind(' ').map_or(0, |i| i + 1);
-                self.query.truncate(start);
+                let end = self.query.chars().count();
+                cnde_ui::text::delete_word_back(&mut self.query, end);
             }
             Keysym::BackSpace => {
                 self.query.pop();
