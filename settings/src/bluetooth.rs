@@ -525,23 +525,48 @@ fn parse(objects: &Objects) -> State {
             })
         })
         .collect();
-    devices.sort_by(|a, b| {
-        (b.paired, b.connected)
-            .cmp(&(a.paired, a.connected))
-            .then_with(|| {
-                if a.paired {
-                    a.name.to_lowercase().cmp(&b.name.to_lowercase())
-                } else {
-                    b.rssi.cmp(&a.rssi)
-                }
-            })
-    });
+    sort(&mut devices);
     State {
         availability: Availability::Ready,
         powered: value(props, "Powered").unwrap_or(false),
         discovering: value(props, "Discovering").unwrap_or(false),
         devices,
         ..State::default()
+    }
+}
+
+/// Alphabetical by name, then address, so a list keeps its order.
+fn sort(devices: &mut [Device]) {
+    devices.sort_by_cached_key(|d| (d.name.to_lowercase(), d.address.clone()));
+}
+
+/// Whether two states list the same devices, in the same groups and order.
+pub fn same_rows(a: &State, b: &State) -> bool {
+    a.devices.len() == b.devices.len()
+        && a.devices
+            .iter()
+            .zip(&b.devices)
+            .all(|(x, y)| x.address == y.address && x.paired == y.paired)
+}
+
+/// `new`, but with the devices `shown` lists as they are: none added,
+/// removed or moved between groups. A device that's still there shows its
+/// new state. For keeping a list still under the pointer.
+pub fn hold(shown: &State, new: &State) -> State {
+    let devices = shown
+        .devices
+        .iter()
+        .map(|d| {
+            new.devices
+                .iter()
+                .find(|n| n.address == d.address && n.paired == d.paired)
+                .unwrap_or(d)
+                .clone()
+        })
+        .collect();
+    State {
+        devices,
+        ..new.clone()
     }
 }
 
@@ -823,9 +848,53 @@ mod tests {
         assert_eq!(state.availability, Availability::Ready);
         assert!(state.powered);
         let names: Vec<&str> = state.devices.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, ["Buds", "Zed Mouse", "Near Speaker", "Far Speaker"]);
+        assert_eq!(names, ["Buds", "Far Speaker", "Near Speaker", "Zed Mouse"]);
         assert_eq!(state.devices[0].battery, Some(80));
         assert_eq!(state.devices[0].kind(), "Headphones");
+    }
+
+    fn dev(name: &str, address: &str) -> Device {
+        Device {
+            address: address.into(),
+            name: name.into(),
+            icon: String::new(),
+            paired: false,
+            connected: false,
+            battery: None,
+            rssi: None,
+        }
+    }
+
+    #[test]
+    fn sorted_by_name_then_address() {
+        let mut devices = vec![
+            dev("zed", "03"),
+            dev("Beta", "02"),
+            dev("alpha", "09"),
+            dev("beta", "01"),
+        ];
+        sort(&mut devices);
+        let order: Vec<&str> = devices.iter().map(|d| d.address.as_str()).collect();
+        assert_eq!(order, ["09", "01", "02", "03"]);
+    }
+
+    #[test]
+    fn held_list_keeps_rows_but_updates_state() {
+        let shown = State {
+            devices: vec![dev("a", "01"), dev("b", "02")],
+            ..State::default()
+        };
+        let mut connected = dev("b", "02");
+        connected.connected = true;
+        let new = State {
+            devices: vec![dev("0", "09"), connected],
+            ..State::default()
+        };
+        assert!(!same_rows(&shown, &new));
+        let held = hold(&shown, &new);
+        let order: Vec<&str> = held.devices.iter().map(|d| d.address.as_str()).collect();
+        assert_eq!(order, ["01", "02"]);
+        assert!(held.devices[1].connected);
     }
 
     #[test]

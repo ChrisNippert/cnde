@@ -13,6 +13,7 @@ mod mixer;
 mod pages;
 mod power_mode;
 mod sound;
+mod state;
 mod view;
 mod wallpapers;
 mod wifi;
@@ -150,6 +151,8 @@ struct App {
     wifi: Option<std::sync::mpsc::Sender<wifi::Command>>,
     /// Commands for the Bluetooth worker, started when its page first opens.
     bluetooth: Option<std::sync::mpsc::Sender<bluetooth::Command>>,
+    /// The newest device list, held back while the pointer is over the old one.
+    bluetooth_pending: Option<bluetooth::State>,
     /// Commands for the power mode worker, started when the Power page opens.
     power_mode: Option<std::sync::mpsc::Sender<power_mode::Command>>,
     /// Where the app index built when the Default Apps page opens arrives.
@@ -335,7 +338,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             displays: Vec::new(),
             thumbs: Vec::new(),
             page,
-            advanced: HashSet::new(),
+            advanced: state::load().advanced,
             scroll: 0.0,
             hover: None,
             popover: None,
@@ -389,6 +392,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         error_timer: None,
         wifi: None,
         bluetooth: None,
+        bluetooth_pending: None,
         power_mode: None,
         default_apps: None,
         sound_tx: None,
@@ -479,7 +483,7 @@ impl App {
                 .loop_handle
                 .insert_source(rx, |event, _, app: &mut App| {
                     if let channel::Event::Msg(state) = event {
-                        app.ui.bluetooth = Some(state);
+                        app.bluetooth_update(state);
                         if app.ui.page == Page::Bluetooth {
                             app.redraw();
                         }
@@ -490,6 +494,39 @@ impl App {
             }
         }
         self.bluetooth_command(bluetooth::Command::Discover(true));
+    }
+
+    /// A new device list. While the pointer is over the list, rows aren't
+    /// added, removed or moved (they'd jump under it); that waits.
+    fn bluetooth_update(&mut self, new: bluetooth::State) {
+        match &self.ui.bluetooth {
+            Some(shown) if self.bluetooth_frozen() && !bluetooth::same_rows(shown, &new) => {
+                self.ui.bluetooth = Some(bluetooth::hold(shown, &new));
+                self.bluetooth_pending = Some(new);
+            }
+            _ => {
+                self.ui.bluetooth = Some(new);
+                self.bluetooth_pending = None;
+            }
+        }
+    }
+
+    fn bluetooth_frozen(&self) -> bool {
+        self.ui.page == Page::Bluetooth
+            && self
+                .painted
+                .device_list
+                .is_some_and(|r| r.contains(self.pointer_pos))
+    }
+
+    /// Show the list that was held back, once the pointer is off it.
+    fn bluetooth_release(&mut self, left: bool) {
+        if (left || !self.bluetooth_frozen())
+            && let Some(state) = self.bluetooth_pending.take()
+        {
+            self.ui.bluetooth = Some(state);
+            self.redraw();
+        }
     }
 
     fn bluetooth_command(&mut self, command: bluetooth::Command) {
@@ -1392,10 +1429,10 @@ impl App {
             }
             Target::AddWallpaper => self.add_wallpaper(),
             Target::Advanced => {
-                let page = self.ui.page;
-                if !self.ui.advanced.remove(&page) {
-                    self.ui.advanced.insert(page);
-                }
+                self.ui.advanced = !self.ui.advanced;
+                state::save(&state::State {
+                    advanced: self.ui.advanced,
+                });
             }
             Target::Choice(_) => {}
         }
@@ -2060,6 +2097,7 @@ impl PointerHandler for App {
                         self.arrange_drag(event.position);
                         continue;
                     }
+                    self.bluetooth_release(false);
                     let hover = self.painted.hit(event.position);
                     if hover != self.ui.hover {
                         self.ui.hover = hover;
@@ -2067,6 +2105,7 @@ impl PointerHandler for App {
                     }
                 }
                 PointerEventKind::Leave { .. } => {
+                    self.bluetooth_release(true);
                     if self.ui.hover.take().is_some() {
                         self.redraw();
                     }
