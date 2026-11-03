@@ -649,10 +649,11 @@ impl WindowFrost<'_> {
 
     /// Whether `window` gets frost: one of cnde's own, floating free
     /// (snapped, tiled, maximized or fullscreen it's solid; the app sees
-    /// the same states and paints itself to match).
-    pub fn wants(window: &smithay::desktop::Window) -> bool {
+    /// the same states and paints itself to match). Tiles are solid,
+    /// told or not (`tiled`).
+    pub fn wants(window: &smithay::desktop::Window, tiled: bool) -> bool {
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
-        if !crate::capture::title_and_app_id(window).1.starts_with("cnde-") {
+        if !crate::capture::title_and_app_id(window).1.starts_with("cnde-") || tiled {
             return false;
         }
         window.toplevel().is_some_and(|toplevel| {

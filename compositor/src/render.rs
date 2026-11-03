@@ -515,7 +515,7 @@ pub(crate) fn window_elements(
         // Last, so under it all: the blurred wallpaper its see-through
         // parts show.
         if let Some(frost) = frost
-            && crate::frost::WindowFrost::wants(win)
+            && crate::frost::WindowFrost::wants(win, state.tiled)
         {
             let key = format!("{:?}", win.toplevel().map(|t| t.wl_surface().id()));
             elements.extend(frost.elements(renderer, &key, rect, frame.alpha, under));

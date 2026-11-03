@@ -2341,6 +2341,14 @@ fn windows(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .sub("Space between tiled windows"),
                 Row::new(
+                    "tiling.rounded",
+                    "Rounded corners",
+                    Control::switch(),
+                    Value::Bool(t.rounded),
+                    Value::Bool(dt.rounded),
+                )
+                .sub("Tiled windows keep their rounded corners and shadows"),
+                Row::new(
                     "tiling.outer_gap",
                     "Screen edge gaps",
                     Control::Slider {

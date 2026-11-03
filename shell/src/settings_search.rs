@@ -99,6 +99,7 @@ pub static ENTRIES: &[Entry] = &[
     option("Key repeat", "keyboard", "Keyboard", "Repeat speed", &["repeat delay"]),
     option("Tiling", "windows", "Windows", "Tiling", &["tile", "master"]),
     option("Window gaps", "windows", "Windows", "Gaps", &["tiling gaps", "spacing"]),
+    option("Rounded corners", "windows", "Windows", "Rounded corners", &["tiled", "shadows", "tiles"]),
     option("Snap zones", "windows", "Windows", "Snap zone", &["edge", "half"]),
     option("Title bar buttons", "windows", "Windows", "Title bar buttons", &["minimize", "maximize", "close"]),
     option("Workspaces", "windows", "Windows", "Workspaces", &["virtual desktops", "monitors"]),

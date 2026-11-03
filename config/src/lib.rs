@@ -1046,6 +1046,9 @@ pub struct Tiling {
     pub gap: u32,
     /// Logical pixels between tiled windows and the screen's edges.
     pub outer_gap: u32,
+    /// Tiled windows keep their rounded corners and shadows: they aren't
+    /// told they're tiled, so their own title bars stay rounded too.
+    pub rounded: bool,
 }
 
 impl Default for Tiling {
@@ -1057,6 +1060,7 @@ impl Default for Tiling {
             master_ratio: 0.5,
             gap: 8,
             outer_gap: 8,
+            rounded: false,
         }
     }
 }
@@ -1387,6 +1391,8 @@ mod tests {
         assert_eq!(config.tiling.layout, WindowLayout::Tiling);
         assert_eq!(config.tiling.master_ratio, 0.6);
         assert_eq!(config.tiling.gap, 0);
+        assert!(!Config::default().tiling.rounded);
+        assert!(Config::parse("[tiling]\nrounded = true\n").unwrap().tiling.rounded);
         assert!(Config::parse("[tiling]\nmaster_ratio = 0.95\n").is_err());
         assert_eq!(config.tiling.style, TilingStyle::Dwindle);
         let master = Config::parse("[tiling]\nstyle = \"master\"\n").unwrap();
