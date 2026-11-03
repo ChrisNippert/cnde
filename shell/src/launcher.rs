@@ -27,6 +27,7 @@ use tracing::warn;
 use crate::{
     App,
     apps::{self, App as AppEntry},
+    settings_search,
 };
 
 /// How long the app grid takes to fade in.
@@ -390,10 +391,13 @@ impl Launcher {
     /// Re-run the search, e.g. after the app list was reloaded.
     pub fn refresh(&mut self, apps: &[AppEntry], counts: &apps::LaunchCounts, theme: &Theme) {
         let previous = self.results.get(self.selected).cloned();
-        self.results = apps::search(apps, &self.query, &counts.counts, theme.search_max_results)
-            .into_iter()
-            .map(|a| a.id.clone())
-            .collect();
+        self.results = apps::search_ids(
+            apps,
+            &self.query,
+            &counts.counts,
+            theme.search_max_results,
+            apps::settings_installed(),
+        );
         // Keep the same app selected if it's still there.
         self.selected = previous
             .and_then(|id| self.results.iter().position(|r| *r == id))
@@ -627,10 +631,15 @@ impl Launcher {
                 return;
             }
         };
-        let results: Vec<&AppEntry> = self
+        let results: Vec<ResultRow> = self
             .results
             .iter()
-            .filter_map(|id| apps.iter().find(|a| &a.id == id))
+            .filter_map(|id| {
+                if let Some(app) = apps.iter().find(|a| &a.id == id) {
+                    return Some(ResultRow::app(app));
+                }
+                settings_search::by_id(id).map(ResultRow::settings)
+            })
             .collect();
         {
             let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) else {
@@ -712,9 +721,34 @@ impl Launcher {
     }
 }
 
+/// A line in the results card: an app, or a Settings page or option.
+struct ResultRow<'a> {
+    name: &'a str,
+    description: std::borrow::Cow<'a, str>,
+    icon: &'a str,
+}
+
+impl<'a> ResultRow<'a> {
+    fn app(app: &'a AppEntry) -> Self {
+        Self {
+            name: &app.name,
+            description: (&app.description[..]).into(),
+            icon: &app.icon,
+        }
+    }
+
+    fn settings(entry: &'static settings_search::Entry) -> Self {
+        Self {
+            name: entry.title,
+            description: entry.subtitle().into(),
+            icon: settings_search::ICON,
+        }
+    }
+}
+
 struct PaintState<'a> {
     query: &'a str,
-    results: &'a [&'a AppEntry],
+    results: &'a [ResultRow<'a>],
     selected: usize,
     /// All apps, for the grid.
     apps: &'a [AppEntry],
@@ -797,10 +831,10 @@ fn paint(
         let size = theme.search_icon_size;
         let icon_x = row.x + 12.0;
         let icon_y = row.y + (row.h - size) / 2.0;
-        app_icon(canvas, icons, theme, &app.icon, icon_x, icon_y, size);
+        app_icon(canvas, icons, theme, app.icon, icon_x, icon_y, size);
         let x = icon_x + size + 14.0;
         let max = row.x + row.w - x - 12.0;
-        let mut name = fit(fonts, &app.name, 15.0, Weight::Bold, scale, max);
+        let mut name = fit(fonts, app.name, 15.0, Weight::Bold, scale, max);
         if app.description.is_empty() {
             let y = row.y + (row.h - name.height) / 2.0;
             canvas.text(fonts, &mut name, x, y, fg);
@@ -1227,7 +1261,8 @@ mod tests {
             std::env::var("CNDE_SEARCH_QUERY").unwrap_or_else(|_| "fi".into())
         };
         let counts = std::collections::HashMap::new();
-        let results = apps::search(&all, &query, &counts, theme.search_max_results);
+        let found = apps::search(&all, &query, &counts, theme.search_max_results);
+        let results: Vec<ResultRow> = found.iter().map(|a| ResultRow::app(a)).collect();
         let mut fonts = Fonts::new(theme.font_families);
         let mut icons = Icons::new();
         let mode = if grid { Mode::Grid } else { Mode::Search };
