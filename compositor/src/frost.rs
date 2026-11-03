@@ -799,9 +799,11 @@ impl WindowFrost<'_> {
     /// (snapped, tiled, maximized or fullscreen it's solid; the app sees
     /// the same states and paints itself to match). Tiles are solid,
     /// told or not (`tiled`).
-    pub fn wants(window: &smithay::desktop::Window, tiled: bool) -> bool {
+    pub fn wants(window: &smithay::desktop::Window) -> bool {
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
-        if !crate::capture::title_and_app_id(window).1.starts_with("cnde-") || tiled {
+        // The states it was sent say how it paints: a tile with
+        // `[tiling] rounded` isn't told it's tiled, and stays see-through.
+        if !crate::capture::title_and_app_id(window).1.starts_with("cnde-") {
             return false;
         }
         window.toplevel().is_some_and(|toplevel| {

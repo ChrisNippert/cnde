@@ -294,10 +294,7 @@ pub fn output_elements(
             .map(|below| &below.window);
         // What a live-blurred window's frost sees: everything below it.
         let below: Vec<&OutputElement> = if window_frost.as_ref().is_some_and(|f| f.live.is_some())
-            && crate::frost::WindowFrost::wants(
-                &placed.window,
-                with_state(&placed.window, |s| s.tiled),
-            )
+            && crate::frost::WindowFrost::wants(&placed.window)
         {
             layers
                 .iter()
@@ -545,7 +542,7 @@ pub(crate) fn window_elements(
         // Last, so under it all: the blurred wallpaper its see-through
         // parts show.
         if let Some(frost) = frost
-            && crate::frost::WindowFrost::wants(win, state.tiled)
+            && crate::frost::WindowFrost::wants(win)
         {
             let key = format!("{:?}", win.toplevel().map(|t| t.wl_surface().id()));
             elements.extend(frost.elements(renderer, &key, rect, frame.alpha, under, below));
