@@ -81,6 +81,9 @@ pub struct Polkit {
     tx: Option<Sender<Event>>,
 }
 
+/// The dialog's layer namespace.
+const NAMESPACE: &str = "cnde-polkit";
+
 pub struct Dialog {
     pub layer: LayerSurface,
     request: Request,
@@ -91,6 +94,8 @@ pub struct Dialog {
     checking: bool,
     height: f32,
     scale: i32,
+    /// Its output's name, for the frost behind it.
+    output: Option<String>,
     configured: bool,
     cancel: Rect,
     ok: Rect,
@@ -432,7 +437,7 @@ impl App {
             &self.qh,
             surface,
             Layer::Overlay,
-            Some("cnde-polkit"),
+            Some(NAMESPACE),
             Some(&output),
         );
         layer.set_anchor(Anchor::empty());
@@ -441,6 +446,7 @@ impl App {
         layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         layer.wl_surface().set_buffer_scale(scale);
         layer.commit();
+        let output_name = self.outputs.info(&output).and_then(|i| i.name);
         self.polkit.dialog = Some(Dialog {
             layer,
             request,
@@ -450,6 +456,7 @@ impl App {
             checking: false,
             height: height.ceil(),
             scale,
+            output: output_name,
             configured: false,
             cancel: Rect::new(0.0, 0.0, 0.0, 0.0),
             ok: Rect::new(0.0, 0.0, 0.0, 0.0),
@@ -461,6 +468,13 @@ impl App {
     fn polkit_close(&mut self, authenticated: bool) {
         if let Some(dialog) = self.polkit.dialog.take() {
             let _ = dialog.request.reply.try_send(authenticated);
+            if let Some(output) = dialog.output {
+                self.ipc.send(&cnde_ipc::Request::NotificationFrost {
+                    output,
+                    cards: Vec::new(),
+                    layer: NAMESPACE.to_string(),
+                });
+            }
             let mut password = dialog.password.into_bytes();
             password.fill(0);
         }
@@ -479,6 +493,19 @@ impl App {
             && dialog.owns(surface)
         {
             dialog.configured = true;
+            // Frosted behind, like the notification cards (the whole
+            // surface is the one rounded panel).
+            if let Some(output) = dialog.output.clone() {
+                self.ipc.send(&cnde_ipc::Request::NotificationFrost {
+                    output,
+                    cards: vec![cnde_ipc::CardFrost {
+                        rect: [0.0, 0.0, WIDTH as f64, dialog.height as f64],
+                        alpha: 1.0,
+                        radius: None,
+                    }],
+                    layer: NAMESPACE.to_string(),
+                });
+            }
             self.draw_polkit();
         }
     }
