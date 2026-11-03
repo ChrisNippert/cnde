@@ -1057,12 +1057,14 @@ impl State {
                 // left one (the overview moves windows between workspaces).
                 let tiled = self.is_tiled(&window);
                 let resize = (placement != Placement::Floating || tiled) && old_size != rest.size;
+                let send_tiled = self.tile_states(tiled);
                 let Some(toplevel) = window.toplevel() else {
                     continue;
                 };
                 toplevel.with_pending_state(|s| {
                     if placement == Placement::Floating {
-                        crate::layout::set_tiled(&mut s.states, tiled);
+                        with_state(&window, |state| state.tiled = tiled);
+                        crate::layout::set_tiled(&mut s.states, send_tiled);
                     }
                     if resize {
                         s.size = Some(rest.size);

@@ -217,8 +217,7 @@ impl Decorations {
             appearance: self.appearance.clone(),
             rounded: state.placement == Placement::Floating,
             maximized: state.placement == Placement::Maximized,
-            tiled: state.placement == Placement::Floating
-                && current.states.contains(XdgState::TiledLeft),
+            tiled: state.placement == Placement::Floating && state.tiled,
             all_buttons: self.all_buttons,
         };
         if state.titlebar.as_ref().is_none_or(|t| t.key != key) {

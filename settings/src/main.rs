@@ -1872,30 +1872,38 @@ impl App {
     }
 
     /// The combo the compositor caught: write it as the action's first, or
-    /// say why not. Escape cancels; Backspace turns the action off.
+    /// say why not. Escape cancels; Backspace turns a built-in off, and
+    /// removes a custom shortcut.
     fn shortcut_captured(&mut self, combo: &str) {
         let Some(key) = self.ui.capturing.clone() else {
             return;
         };
         self.stop_capture();
-        let Key::Shortcut(name) = key else {
-            return;
+        let shortcuts = &self.ui.config.shortcuts;
+        let current = match key {
+            Key::Shortcut(name) => shortcuts.bindings.get(name).cloned().unwrap_or_default(),
+            Key::CustomShortcut(index) => shortcuts
+                .custom
+                .get(index)
+                .map_or_else(Vec::new, |c| c.keys.clone()),
+            _ => return,
         };
-        let current = self
-            .ui
-            .config
-            .shortcuts
-            .bindings
-            .get(name)
-            .cloned()
-            .unwrap_or_default();
+        // What else uses a combo: another action, or another custom one.
+        let used_by = |combo: &str| match key {
+            Key::Shortcut(name) => shortcuts::conflict(shortcuts, name, combo),
+            Key::CustomShortcut(index) => shortcuts::custom_conflict(shortcuts, index, combo),
+            _ => None,
+        };
         let keys = match combo {
             "Escape" => return,
+            "BackSpace" if matches!(key, Key::CustomShortcut(_)) => {
+                self.write(&[(key, Value::Unset)]);
+                return;
+            }
             "BackSpace" => Vec::new(),
             combo => {
                 let note = shortcuts::refuse(combo).map(str::to_string).or_else(|| {
-                    shortcuts::conflict(&self.ui.config.shortcuts, name, combo)
-                        .map(|other| format!("{combo} is already used by \"{other}\""))
+                    used_by(combo).map(|other| format!("{combo} is already used by \"{other}\""))
                 });
                 if let Some(note) = note {
                     self.ui.shortcut_note = Some((key, note));

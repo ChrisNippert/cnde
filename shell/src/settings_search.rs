@@ -102,6 +102,7 @@ pub static ENTRIES: &[Entry] = &[
     option("Tiling", "windows", "Windows", "Tiling", &["tile", "master"]),
     option("Window gaps", "windows", "Windows", "Gaps", &["tiling gaps", "spacing"]),
     option("New windows open at the pointer", "windows", "Windows", "New windows open at the pointer", &["tiling", "split", "where new windows open"]),
+    option("Rounded corners", "windows", "Windows", "Rounded corners", &["tiled", "shadows", "tiles"]),
     option("Snap zones", "windows", "Windows", "Snap zone", &["edge", "half"]),
     option("Focus follows mouse", "windows", "Windows", "Focus follows mouse", &["hover", "focus on hover", "sloppy focus"]),
     option("Title bar buttons", "windows", "Windows", "Title bar buttons", &["minimize", "maximize", "close"]),

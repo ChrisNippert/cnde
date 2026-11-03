@@ -1082,6 +1082,9 @@ pub struct Tiling {
     /// New tiled windows open next to the tile under the pointer instead of
     /// the focused one.
     pub open_at_pointer: bool,
+    /// Tiled windows keep their rounded corners and shadows: they aren't
+    /// told they're tiled, so their own title bars stay rounded too.
+    pub rounded: bool,
 }
 
 impl Default for Tiling {
@@ -1094,6 +1097,7 @@ impl Default for Tiling {
             gap: 8,
             outer_gap: 8,
             open_at_pointer: false,
+            rounded: false,
         }
     }
 }
@@ -1453,6 +1457,8 @@ mod tests {
         assert_eq!(config.tiling.layout, WindowLayout::Tiling);
         assert_eq!(config.tiling.master_ratio, 0.6);
         assert_eq!(config.tiling.gap, 0);
+        assert!(!Config::default().tiling.rounded);
+        assert!(Config::parse("[tiling]\nrounded = true\n").unwrap().tiling.rounded);
         assert!(Config::parse("[tiling]\nmaster_ratio = 0.95\n").is_err());
         assert_eq!(config.tiling.style, TilingStyle::Dwindle);
         let master = Config::parse("[tiling]\nstyle = \"master\"\n").unwrap();

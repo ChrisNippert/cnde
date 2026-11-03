@@ -705,6 +705,12 @@ impl State {
             && Self::tileable(window)
     }
 
+    /// Whether a tile (`tiled`) is told it's tiled. With `[tiling] rounded`
+    /// it isn't, so it keeps its own rounded corners and shadows.
+    pub fn tile_states(&self, tiled: bool) -> bool {
+        tiled && !self.config.tiling.rounded
+    }
+
     /// Where `window`'s layout rests it on a monitor at `geo` with `area`
     /// free of panels; `None` if it isn't part of its workspace's layout.
     /// Its geometry, without the title bar cnde draws.
@@ -821,6 +827,7 @@ impl State {
             }
             if !(tiles && Self::tileable(&window)) {
                 // Floated, or the workspace stopped tiling.
+                with_state(&window, |s| s.tiled = false);
                 if let Some(toplevel) = window.toplevel() {
                     toplevel.with_pending_state(|s| set_tiled(&mut s.states, false));
                     if toplevel.is_initial_configure_sent() {
@@ -870,6 +877,8 @@ impl State {
         let Some(toplevel) = window.toplevel().cloned() else {
             return;
         };
+        with_state(window, |s| s.tiled = tiled);
+        let send_tiled = self.tile_states(tiled);
         let old_size = window.geometry().size;
         let mapped = self.space.element_location(window);
         let resizing = rect.size != old_size;
@@ -887,7 +896,7 @@ impl State {
             None
         };
         toplevel.with_pending_state(|s| {
-            set_tiled(&mut s.states, tiled);
+            set_tiled(&mut s.states, send_tiled);
             s.size = Some(rect.size);
         });
         let serial = if toplevel.is_initial_configure_sent() {
@@ -1068,6 +1077,7 @@ impl State {
                 ),
                 // Not on screen: just the size; it's placed when shown.
                 None => {
+                    with_state(&window, |s| s.tiled = false);
                     if let Some(toplevel) = window.toplevel() {
                         toplevel.with_pending_state(|s| {
                             set_tiled(&mut s.states, false);
@@ -1530,9 +1540,11 @@ impl State {
             return;
         };
         let rect = content_rect(rect, titlebar_height(&window));
+        with_state(&window, |s| s.tiled = true);
+        let send_tiled = self.tile_states(true);
         if let Some(toplevel) = window.toplevel() {
             toplevel.with_pending_state(|s| {
-                set_tiled(&mut s.states, true);
+                set_tiled(&mut s.states, send_tiled);
                 s.size = Some(rect.size);
             });
         }

@@ -112,6 +112,7 @@
 # gap = 8                  # px between tiled windows (0-64)
 # outer_gap = 8            # px between tiled windows and the screen's edges (0-128)
 # open_at_pointer = false  # true: a new tiled window splits the tile under the pointer instead of the focused one (dwindle), or goes after it (main + stack)
+# rounded = false          # true: tiled windows keep their rounded corners and shadows (they aren't told they're tiled)
 
 [snap]
 # edge = 10                # px from a monitor's side or top where a dragged window snaps (2-96)

@@ -73,6 +73,10 @@ pub struct WindowState {
     /// (Super+Shift+T, dropped off the tiles, resized), or lifted while
     /// being dragged.
     pub keep_floating: bool,
+    /// Laid out as a tile. Its tiled states are sent only without
+    /// `[tiling] rounded` (see layout.rs `tile_states`); frost and the
+    /// title bar read this instead.
+    pub tiled: bool,
     /// Already promoted to fullscreen for covering its monitor, so leaving
     /// fullscreen again sticks.
     pub auto_fullscreened: bool,
@@ -640,6 +644,8 @@ impl State {
 
         // On a tiling workspace, back to its tile rather than where it floated.
         let tiled = target == Placement::Floating && self.is_tiled(window);
+        with_state(window, |s| s.tiled = tiled);
+        let send_tiled = self.tile_states(tiled);
         let rect = match target {
             Placement::Floating if tiled => self.tile_rect_now(window).or(restore),
             Placement::Floating => restore,
@@ -661,7 +667,7 @@ impl State {
                 s.states.unset(state);
             }
             match target {
-                Placement::Floating => crate::layout::set_tiled(&mut s.states, tiled),
+                Placement::Floating => crate::layout::set_tiled(&mut s.states, send_tiled),
                 Placement::Maximized => {
                     s.states.set(XdgState::Maximized);
                 }
