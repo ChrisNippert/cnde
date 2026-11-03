@@ -983,14 +983,17 @@ impl State {
             return;
         };
         let (dx, dy) = (pos.x - corner.x, pos.y - corner.y);
-        if dx < HOT_CORNER && dy < HOT_CORNER {
+        // On the main monitor only: above or left of its corner is another
+        // monitor (one sitting higher, or to the left).
+        let off = dx < 0.0 || dy < 0.0;
+        if !off && dx < HOT_CORNER && dy < HOT_CORNER {
             let dragging = self.seat.get_pointer().is_some_and(|p| p.is_grabbed());
             if self.overview.hot_corner_armed && !dragging {
                 self.overview.hot_corner_armed = false;
                 self.overview.hot_corner_at = Some(Instant::now());
                 self.toggle_overview();
             }
-        } else if dx > HOT_CORNER_REARM || dy > HOT_CORNER_REARM {
+        } else if off || dx > HOT_CORNER_REARM || dy > HOT_CORNER_REARM {
             self.overview.hot_corner_armed = true;
         }
     }
