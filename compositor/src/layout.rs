@@ -719,6 +719,7 @@ impl State {
         window: &Window,
         geo: Rectangle<i32, Logical>,
         area: Rectangle<i32, Logical>,
+        tile_area: Rectangle<i32, Logical>,
     ) -> Option<Rectangle<i32, Logical>> {
         let index = self.workspaces.index_of(window)?;
         let layout = self.layout_of(index);
@@ -729,7 +730,7 @@ impl State {
             return Some(content_rect(rect, titlebar_height(window)));
         }
         let rect = self
-            .tile_rects(index, area)
+            .tile_rects(index, tile_area)
             .into_iter()
             .find(|(w, _)| w == window)?
             .1;
@@ -783,7 +784,8 @@ impl State {
         let output = self.output_for(window)?;
         let slot = outputs.iter().position(|o| *o == output)?;
         let (geo, area) = self.slot_areas(&outputs, slot as isize)?;
-        self.layout_rest(window, geo, area)
+        let tile_area = self.slot_tile_area(&outputs, slot as isize).unwrap_or(area);
+        self.layout_rest(window, geo, area, tile_area)
     }
 
     /// Workspace `index` is now visible at `slot` (an index into the
@@ -978,7 +980,12 @@ impl State {
             // Its monitor, or the main one while it isn't shown.
             if let Some((geo, area)) = self.slot_areas(&outputs, slot.unwrap_or(0) as isize) {
                 match now {
-                    WindowLayout::Tiling => self.tile_nearest(index, geo, area, origin),
+                    WindowLayout::Tiling => {
+                        let tile_area = self
+                            .slot_tile_area(&outputs, slot.unwrap_or(0) as isize)
+                            .unwrap_or(area);
+                        self.tile_nearest(index, geo, tile_area, origin)
+                    }
                     WindowLayout::Floating => self.untile_in_place(index, geo, area, origin),
                 }
             }
@@ -1416,7 +1423,7 @@ impl State {
         let (outputs, _) = self.strip_outputs();
         let output = self.output_for(window)?;
         let slot = outputs.iter().position(|o| *o == output)?;
-        self.slot_areas(&outputs, slot as isize).map(|(_, area)| area)
+        self.slot_tile_area(&outputs, slot as isize)
     }
 
     /// The tile `window` rests in, whole (title bar included), where the
@@ -1503,7 +1510,7 @@ impl State {
         let Some(slot) = outputs.iter().position(|o| *o == output) else {
             return;
         };
-        let Some((_, area)) = self.slot_areas(&outputs, slot as isize) else {
+        let Some(area) = self.slot_tile_area(&outputs, slot as isize) else {
             return;
         };
         let rect = match self.config.tiling.style {

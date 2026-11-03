@@ -237,6 +237,31 @@ impl State {
         Some(zone)
     }
 
+    /// `usable_area` for tiling: a bar or dock that floats for good keeps
+    /// a gap of its own free beyond itself, but tiles are spaced by the
+    /// tiling gap alone, so that padding is given back.
+    pub fn tiling_area(&self, output: &Output) -> Option<Rectangle<i32, Logical>> {
+        let area = self.usable_area(output)?;
+        let reserving = |namespace: &str| {
+            layer_map_for_output(output).layers().any(|layer| {
+                layer.namespace() == namespace
+                    && matches!(
+                        layer.cached_state().exclusive_zone,
+                        smithay::wayland::shell::wlr_layer::ExclusiveZone::Exclusive(_)
+                    )
+            })
+        };
+        let floating = cnde_config::BarMode::Floating;
+        let top = if self.config.panel.mode == floating && reserving("cnde-panel") {
+            cnde_ipc::panel::GAP
+        } else {
+            0
+        };
+        let dock = (self.config.dock.mode == floating && reserving(cnde_ipc::dock::NAMESPACE))
+            .then_some(self.config.dock.position);
+        Some(give_back_padding(area, top, dock))
+    }
+
     pub fn send_layer_frame_callbacks(&self, output: &Output, elapsed: std::time::Duration) {
         for layer in layer_map_for_output(output).layers() {
             layer.send_frame(output, elapsed, Some(std::time::Duration::ZERO), |_, _| {
@@ -250,4 +275,65 @@ fn wants_exclusive_keyboard(layer: &LayerSurface) -> bool {
     let state = layer.cached_state();
     state.keyboard_interactivity == KeyboardInteractivity::Exclusive
         && matches!(state.layer, Layer::Top | Layer::Overlay)
+}
+
+/// `area` grown by the padding a permanently floating bar (`top`) and dock
+/// (on its edge) reserve beyond themselves, so tiles end where the bar and
+/// dock do.
+fn give_back_padding(
+    area: Rectangle<i32, Logical>,
+    top: i32,
+    dock: Option<cnde_config::DockPosition>,
+) -> Rectangle<i32, Logical> {
+    use cnde_config::DockPosition;
+    let pad = cnde_ipc::dock::EDGE_MARGIN;
+    let (left, right, bottom) = match dock {
+        Some(DockPosition::Left) => (pad, 0, 0),
+        Some(DockPosition::Right) => (0, pad, 0),
+        Some(DockPosition::Bottom) => (0, 0, pad),
+        _ => (0, 0, 0),
+    };
+    Rectangle::new(
+        (area.loc.x - left, area.loc.y - top).into(),
+        (area.size.w + left + right, area.size.h + top + bottom).into(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cnde_config::DockPosition;
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn floating_bar_gives_back_its_padding_above_the_tiles() {
+        // A 40px bar floated GAP off the top, GAP of padding below it.
+        let g = cnde_ipc::panel::GAP;
+        let area = rect(0, 40 + 2 * g, 1000, 800 - 40 - 2 * g);
+        let back = give_back_padding(area, g, None);
+        assert_eq!(back, rect(0, 40 + g, 1000, 800 - 40 - g));
+    }
+
+    #[test]
+    fn dock_padding_is_given_back_on_its_own_edge_only() {
+        let pad = cnde_ipc::dock::EDGE_MARGIN;
+        let area = rect(0, 30, 1000, 700);
+        assert_eq!(
+            give_back_padding(area, 0, Some(DockPosition::Bottom)),
+            rect(0, 30, 1000, 700 + pad)
+        );
+        assert_eq!(
+            give_back_padding(area, 0, Some(DockPosition::Left)),
+            rect(-pad, 30, 1000 + pad, 700)
+        );
+        assert_eq!(
+            give_back_padding(area, 0, Some(DockPosition::Right)),
+            rect(0, 30, 1000 + pad, 700)
+        );
+        assert_eq!(give_back_padding(area, 0, Some(DockPosition::Overview)), area);
+        assert_eq!(give_back_padding(area, 0, None), area);
+    }
 }

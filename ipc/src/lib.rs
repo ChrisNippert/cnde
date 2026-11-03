@@ -355,6 +355,9 @@ pub mod panel {
 pub mod dock {
     /// The dock's layer-shell namespace.
     pub const NAMESPACE: &str = "cnde-dock";
+    /// How far a dock sits from the screen edge it's on, logical px. A
+    /// permanently floating dock reserves this much more beyond itself.
+    pub const EDGE_MARGIN: i32 = 8;
     /// Corner radius of a dock that doesn't stretch across its edge.
     pub const RADIUS: f64 = 24.0;
     /// An edge dock's corners square off as its side margins close below
