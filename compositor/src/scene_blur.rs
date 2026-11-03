@@ -12,6 +12,7 @@ use smithay::{
             damage::OutputDamageTracker,
             element::{
                 Kind, RenderElement,
+                utils::RescaleRenderElement,
                 texture::{TextureBuffer, TextureRenderElement},
             },
             gles::{
@@ -230,7 +231,13 @@ impl SceneBlur {
         let scale = output.current_scale().fractional_scale();
         let full = output.current_transform().transform_size(mode.size);
         let mut size = shrink(full, 2);
-        let Some(mut texture) = draw(renderer, scene, size, Scale::from(scale / 2.0)) else {
+        // Halved about the corner: a lower render scale alone would shrink
+        // each window but leave it where it was (their places are physical).
+        let halved: Vec<_> = scene
+            .iter()
+            .map(|e| RescaleRenderElement::from_element(e, Point::default(), 0.5))
+            .collect();
+        let Some(mut texture) = draw(renderer, &halved, size, Scale::from(scale)) else {
             warn!("can't draw the scene for the switcher's blur");
             return;
         };
