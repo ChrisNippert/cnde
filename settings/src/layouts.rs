@@ -3,6 +3,12 @@
 //! read and rewritten one at a time. Each is named by an id, "us" or
 //! "us(dvorak)".
 
+use std::{
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    path::Path,
+};
+
 /// The layouts offered by name: xkb layout, variant, name.
 pub const COMMON: &[(&str, &str, &str)] = &[
     ("us", "", "English (US)"),
@@ -64,6 +70,58 @@ pub fn configured(layout: &str, variant: &str) -> Vec<String> {
         .collect()
 }
 
+/// fcitx5's profile for the layouts (ids like "us(dvorak)"), with Mozc as
+/// the input method after them.
+pub fn fcitx_profile(ids: &[String]) -> String {
+    let mut layouts: Vec<String> = ids
+        .iter()
+        .filter(|id| !id.is_empty())
+        .map(|id| match id.split_once('(') {
+            Some((layout, variant)) => format!("{layout}-{}", variant.trim_end_matches(')')),
+            None => id.clone(),
+        })
+        .collect();
+    if layouts.is_empty() {
+        layouts.push("us".into());
+    }
+    let mut text = format!(
+        "[Groups/0]\nName=Default\nDefault Layout={}\nDefaultIM=mozc\n\n",
+        layouts[0]
+    );
+    for (i, layout) in layouts.iter().enumerate() {
+        text += &format!("[Groups/0/Items/{i}]\nName=keyboard-{layout}\nLayout=\n\n");
+    }
+    text += &format!(
+        "[Groups/0/Items/{}]\nName=mozc\nLayout=\n\n[GroupOrder]\n0=Default\n",
+        layouts.len()
+    );
+    text
+}
+
+/// fcitx5's main config: Super+Space switches input methods.
+pub fn fcitx_config() -> &'static str {
+    "[Hotkey/TriggerKeys]\n0=Super+space\n"
+}
+
+/// Write fcitx5's profile and config under `config_home` for the layouts,
+/// each only if its file doesn't exist yet, so the user's settings stay.
+pub fn write_fcitx_setup(config_home: &Path, layout: &str, variant: &str) -> io::Result<()> {
+    let dir = config_home.join("fcitx5");
+    fs::create_dir_all(&dir)?;
+    let ids = configured(layout, variant);
+    write_if_missing(&dir.join("profile"), &fcitx_profile(&ids))?;
+    write_if_missing(&dir.join("config"), fcitx_config())
+}
+
+/// Create `path` with `text`, unless it already exists.
+fn write_if_missing(path: &Path, text: &str) -> io::Result<()> {
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(mut file) => file.write_all(text.as_bytes()),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
 /// A layout's name ("us(dvorak)" is "English (Dvorak)"), or its id.
 pub fn name(id_: &str) -> String {
     COMMON
@@ -104,6 +162,42 @@ pub fn edited(layout: &str, variant: &str, slot: usize, to: &str) -> (String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fcitx_profile_lists_layouts_then_mozc() {
+        assert_eq!(
+            fcitx_profile(&["us".into()]),
+            "[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=mozc\n\n\
+             [Groups/0/Items/0]\nName=keyboard-us\nLayout=\n\n\
+             [Groups/0/Items/1]\nName=mozc\nLayout=\n\n\
+             [GroupOrder]\n0=Default\n"
+        );
+        let ids = ["us".into(), "us(dvorak)".into(), "de".into()];
+        let text = fcitx_profile(&ids);
+        assert!(text.contains("Default Layout=us\n"));
+        assert!(text.contains("[Groups/0/Items/1]\nName=keyboard-us-dvorak\n"));
+        assert!(text.contains("[Groups/0/Items/2]\nName=keyboard-de\n"));
+        assert!(text.contains("[Groups/0/Items/3]\nName=mozc\n"));
+        assert_eq!(fcitx_config(), "[Hotkey/TriggerKeys]\n0=Super+space\n");
+    }
+
+    #[test]
+    fn fcitx_setup_is_written_once_and_keeps_the_users_files() {
+        let root = std::env::temp_dir().join(format!("cnde-fcitx-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_fcitx_setup(&root, "us,de", ",").unwrap();
+        let dir = root.join("fcitx5");
+        let profile = fs::read_to_string(dir.join("profile")).unwrap();
+        assert!(profile.contains("Name=keyboard-us\n"));
+        assert!(profile.contains("Name=keyboard-de\n"));
+        assert_eq!(fs::read_to_string(dir.join("config")).unwrap(), fcitx_config());
+
+        // The user's own profile is left alone.
+        fs::write(dir.join("profile"), "mine").unwrap();
+        write_fcitx_setup(&root, "gb", "").unwrap();
+        assert_eq!(fs::read_to_string(dir.join("profile")).unwrap(), "mine");
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn layouts_are_added_changed_and_removed_in_step_with_variants() {

@@ -24,7 +24,7 @@ mod wifi;
 use std::{
     collections::HashSet,
     os::fd::OwnedFd,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -1175,8 +1175,12 @@ impl App {
         });
         match result {
             Ok(config) => {
+                let fcitx_error = fcitx_setup_error(&path, changes, &config);
                 self.set_config(config);
                 self.clear_error();
+                if let Some(message) = fcitx_error {
+                    self.show_error(message);
+                }
             }
             Err(err) => self.show_error(format!("Not saved: {err}")),
         }
@@ -2007,6 +2011,24 @@ fn tilde(path: &std::path::Path) -> String {
         return format!("~/{}", rest.display());
     }
     path.display().to_string()
+}
+
+/// Set up fcitx5 when it's picked as the input method (its missing files
+/// only). The error text if that fails.
+fn fcitx_setup_error(path: &Path, changes: &[(Key, Value)], config: &Config) -> Option<String> {
+    let picked = changes.iter().any(|(key, value)| {
+        *key == Key::Path("input.input_method") && matches!(value, Value::Str(s) if s == "fcitx5")
+    });
+    if !picked {
+        return None;
+    }
+    let Some(home) = path.parent().and_then(Path::parent) else {
+        return Some("Can't set up fcitx5: no config folder".into());
+    };
+    let keyboard = &config.input.keyboard;
+    layouts::write_fcitx_setup(home, &keyboard.layout, &keyboard.variant)
+        .err()
+        .map(|err| format!("Can't set up fcitx5: {err}"))
 }
 
 /// Reload when config.toml changes (by hand, or another settings window).

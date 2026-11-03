@@ -2288,7 +2288,9 @@ fn language(c: &Config, d: &Config) -> Vec<Group> {
                     s(&c.input.input_method),
                     s(&d.input.input_method),
                 )
-                .sub("For Japanese, Chinese, Korean: install fcitx5 and fcitx5-mozc (Japanese)"),
+                .sub(
+                    "Fcitx5 is set up with Mozc (Japanese) and Super+Space. Install fcitx5 and fcitx5-mozc first.",
+                ),
             ],
         ),
     ]
