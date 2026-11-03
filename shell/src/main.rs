@@ -1435,7 +1435,12 @@ impl App {
                 backdrop_light,
                 tint,
                 edge_line: self.config.panel.edge_line,
-                layout: self.layouts.0.get(self.layouts.1).map(String::as_str),
+                // An input method's own tray icon already shows the layout.
+                layout: if self.config.input.input_method.is_empty() {
+                    self.layouts.0.get(self.layouts.1).map(String::as_str)
+                } else {
+                    None
+                },
                 frosted: self.config.panel_frosted(),
             },
         );
