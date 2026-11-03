@@ -1400,6 +1400,20 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .sub("Windows; the dock, top bar and menus round in step"),
                 Row::new(
+                    "appearance.frost",
+                    "Frost",
+                    Control::Slider {
+                        min: 25.0,
+                        max: 200.0,
+                        step: 5.0,
+                        int: true,
+                        format: |v| format!("{v:.0}%"),
+                    },
+                    Value::Int(c.appearance.frost as i64),
+                    Value::Int(d.appearance.frost as i64),
+                )
+                .sub("How blurred the glass behind the bar, dock and popups is"),
+                Row::new(
                     "appearance.material",
                     "Material",
                     Control::Segmented(choices(&[

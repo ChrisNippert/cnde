@@ -48,6 +48,7 @@
 # titlebars = "cnde"       # "cnde" draws title bars for apps that allow it; "app" leaves them to the app
 # material = "frosted"     # "frosted" or "solid": the top bar, dock, the shell's popups and cnde's own windows (solid when snapped, maximized or a window touches them)
 # corner_radius = 10       # window corners in px (0-48); the dock, bar and menus scale with it
+# frost = 100              # how blurred the frost behind the bar, dock and popups is, in percent (25-200); 100 is the usual look
 
 [dark_mode]
 # Switch appearance.color_scheme by the time of day. Switching by hand

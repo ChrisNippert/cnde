@@ -127,9 +127,7 @@ impl DockFrost {
         } else {
             Vec::new()
         };
-        if config.appearance.material == cnde_config::Material::Frosted {
-            elements.extend(self.card_elements(renderer, wallpapers, output, config, behind, now));
-        }
+        elements.extend(self.card_elements(renderer, wallpapers, output, config, behind, now));
         let dock = &config.dock;
         // As the dock draws itself (the palette sets the shape).
         let dock_radius_full = cnde_ui::Theme::for_appearance(&config.appearance).dock_radius as f64;
@@ -314,7 +312,8 @@ impl DockFrost {
         elements
     }
 
-    /// Frost under the shell's notification cards, wherever they are now.
+    /// Frost under the shell's notification cards, and the bar's islands,
+    /// wherever they are now.
     #[allow(clippy::too_many_arguments)]
     fn card_elements(
         &mut self,
@@ -334,7 +333,13 @@ impl DockFrost {
             .filter(|((o, _), _)| *o == output.name())
             .map(|((_, layer), cards)| (layer.clone(), cards.clone()))
             .collect();
+        let frosted = config.appearance.material == cnde_config::Material::Frosted;
         for (layer, cards) in layers {
+            // The bar's islands are frosted whatever the material, when the
+            // bar is; the notification cards only when it's frosted.
+            if !frosted && layer != "cnde-panel" {
+                continue;
+            }
             let origin = {
                 let map = layer_map_for_output(output);
                 map.layers()

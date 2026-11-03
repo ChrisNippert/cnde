@@ -74,6 +74,8 @@ struct Job {
     output: String,
     size: Size<i32, Physical>,
     source: Source,
+    /// `appearance.frost`: the blur's strength, in percent.
+    frost: u8,
     generation: u64,
 }
 
@@ -164,6 +166,8 @@ struct Entry {
 
 pub struct Wallpapers {
     source: Source,
+    /// `appearance.frost` as the blurred copies were asked for.
+    frost: u8,
     /// Bumped whenever `source` changes; textures from older ones are stale.
     generation: u64,
     entries: HashMap<String, Entry>,
@@ -190,6 +194,7 @@ impl Wallpapers {
         }
         Self {
             source: Source::from_config(config),
+            frost: config.appearance.frost,
             generation: 0,
             entries: HashMap::new(),
             requested: HashMap::new(),
@@ -210,11 +215,14 @@ impl Wallpapers {
         self.requested.clear();
     }
 
-    /// The config changed; reload if it affects the wallpaper.
+    /// The config changed; reload if it affects the wallpaper. A new frost
+    /// strength only reblurs: the picture itself is kept.
     pub fn update_config(&mut self, config: &Config) {
         let source = Source::from_config(config);
-        if source != self.source {
+        let frost = config.appearance.frost;
+        if source != self.source || frost != self.frost {
             self.source = source;
+            self.frost = frost;
             self.generation += 1;
         }
     }
@@ -275,6 +283,7 @@ impl Wallpapers {
                 output: name.clone(),
                 size,
                 source: self.source.clone(),
+                frost: self.frost,
                 generation: self.generation,
             });
         }
@@ -439,13 +448,14 @@ fn worker(jobs: mpsc::Receiver<Job>, done: channel::Sender<Done>) {
                             .and_then(|(_, image)| image.as_ref())
                     });
                     let done = done.clone();
+                    let frost_percent = job.frost;
                     scope.spawn(move || {
                         let (w, h) = (job.size.w.max(1) as u32, job.size.h.max(1) as u32);
                         let pixels = match image {
                             Some(image) => scale_to(image, w, h, job.source.fit),
                             None => gradient(w, h, &job.source),
                         };
-                        let blurred = frost(&pixels);
+                        let blurred = frost(&pixels, frost_percent);
                         let blurred_size =
                             Size::from((blurred.width() as i32, blurred.height() as i32));
                         done.send(Done {
@@ -468,8 +478,10 @@ fn worker(jobs: mpsc::Receiver<Job>, done: channel::Sender<Done>) {
     }
 }
 
-/// The frosted-glass copy: shrunk, then blurred hard.
-fn frost(image: &RgbaImage) -> RgbaImage {
+/// The frosted-glass copy: shrunk, then blurred hard. `percent` scales the
+/// blur (100 is `BLUR_SIGMA`).
+fn frost(image: &RgbaImage, percent: u8) -> RgbaImage {
+    let sigma = BLUR_SIGMA * percent as f32 / 100.0;
     let (w, h) = image.dimensions();
     let small = image::imageops::resize(
         image,
@@ -479,8 +491,8 @@ fn frost(image: &RgbaImage) -> RgbaImage {
     );
     // fast_blur is a stack of box blurs; a second, gentler pass removes the
     // faint blockiness one pass leaves.
-    let once = image::imageops::fast_blur(&small, BLUR_SIGMA);
-    image::imageops::fast_blur(&once, BLUR_SIGMA / 2.0)
+    let once = image::imageops::fast_blur(&small, sigma);
+    image::imageops::fast_blur(&once, sigma / 2.0)
 }
 
 fn load(path: &PathBuf) -> Option<RgbaImage> {
@@ -716,6 +728,6 @@ fn wallpaper_preview() {
         let filled = scale_to(&image, 2560, 1440, WallpaperFit::Fill);
         eprintln!("scaled in {:?}", started.elapsed());
         filled.save(dir.join("image.png")).unwrap();
-        frost(&filled).save(dir.join("frosted.png")).unwrap();
+        frost(&filled, 100).save(dir.join("frosted.png")).unwrap();
     }
 }
