@@ -1,0 +1,192 @@
+# Maintainer: Chris Nippert <33527729+ChrisNippert@users.noreply.github.com>
+#
+# cnde built from source at a tagged release: the stable channel that you
+# compile yourself. The other two:
+#
+#   cnde-git  builds the newest commit on main (rolling)
+#   cnde-bin  installs the prebuilt release (no compiling)
+#
+# Split package: install only the parts you want.
+#
+#   cnde-compositor  the session itself (required by the rest)
+#   cnde-shell       top bar, dock, overview search, quick settings
+#   cnde-settings    the Settings app
+#   cnde-lock        the lock screen
+#   cnde-files       the file manager and file picker
+#   cnde-icons       cnde's symbolic icons (else Adwaita's are used)
+#   cnde             all of the above
+#
+# New release: set _tag and pkgver, then run updpkgsums.
+
+# One source tree, one build, several packages. pkgbase names the group.
+pkgbase=cnde
+pkgname=(
+    cnde-compositor
+    cnde-shell
+    cnde-settings
+    cnde-lock
+    cnde-files
+    cnde-icons
+    cnde
+)
+# The git tag. pkgver can't hold a "-" (pacman uses it to split the release
+# number), so v0.1.0-beta1 is 0.1.0beta1 here; pacman sorts that before 0.1.0.
+_tag=v0.1.0-beta1
+pkgver=0.1.0beta1
+pkgrel=1
+pkgdesc="A light Wayland desktop with an adaptive, smooth design"
+arch=(x86_64 aarch64)
+url="https://github.com/ChrisNippert/cnde"
+license=(GPL-3.0-or-later)
+# Needed only to build. Runtime dependencies are per package, below.
+makedepends=(
+    cargo
+    libdrm
+    libinput
+    libxkbcommon
+    mesa
+    pam
+    seatd
+    systemd-libs
+)
+# GitHub's tarball of the tag; it unpacks into cnde-<tag without the v>.
+source=("$pkgbase-$_tag.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
+# A tarball of a tag doesn't change, so it gets a real checksum (updpkgsums).
+sha256sums=('UPDATE_WITH_UPDPKGSUMS')
+
+# Where the tarball unpacked to, relative to $srcdir.
+_src="cnde-${_tag#v}"
+
+prepare() {
+    cd "$_src"
+    export RUSTUP_TOOLCHAIN=stable
+    # Download the crates now: build() and check() run offline (--frozen).
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$_src"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release --workspace
+}
+
+check() {
+    cd "$_src"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo test --frozen --release --workspace
+}
+
+# Each package_*() copies its files into $pkgdir as they should land on the
+# system; pacman archives that. "install -Dm755 file -t dir" creates dir if
+# needed and sets the mode (755: runs, 644: data).
+#
+# conflicts: the same files come from the -git and -bin packages, so they
+# can't be installed together.
+
+package_cnde-compositor() {
+    pkgdesc="cnde's compositor: the session itself"
+    depends=(gcc-libs glibc libdrm libinput libxkbcommon mesa seatd systemd-libs)
+    optdepends=(
+        'xwayland-satellite: X11 apps and most games'
+        'xorg-xwayland: X11 apps and most games (with xwayland-satellite)'
+        'xdg-desktop-portal-wlr: screen sharing'
+        'xdg-desktop-portal-gtk: settings for apps, and file pickers without cnde-files'
+        'pipewire: sound and screen sharing'
+        'wireplumber: sound and screen sharing'
+        'sound-theme-freedesktop: event sounds'
+        'cnde-shell: the top bar and dock'
+        'cnde-lock: the lock screen'
+        'cnde-icons: cnde-style icons on title bars'
+    )
+    conflicts=(cnde-compositor-git cnde-compositor-bin)
+
+    cd "$_src"
+    install -Dm755 target/release/cnde-compositor -t "$pkgdir/usr/bin"
+    install -Dm755 target/release/cnde-share-picker -t "$pkgdir/usr/bin"
+    install -Dm644 data/cnde.desktop -t "$pkgdir/usr/share/wayland-sessions"
+}
+
+package_cnde-shell() {
+    pkgdesc="cnde's shell: top bar, dock, overview search, quick settings"
+    depends=(cnde-compositor gcc-libs glibc libxkbcommon)
+    optdepends=(
+        'cnde-settings: the Settings app'
+        'cnde-icons: cnde-style icons'
+        'libpulse: volume and output devices (pactl)'
+        'polkit: password prompts'
+        'upower: battery'
+        'power-profiles-daemon: power modes'
+        'networkmanager: Wi-Fi (or iwd)'
+        'bluez: Bluetooth'
+    )
+    conflicts=(cnde-shell-git cnde-shell-bin)
+
+    cd "$_src"
+    install -Dm755 target/release/cnde-shell -t "$pkgdir/usr/bin"
+}
+
+package_cnde-settings() {
+    pkgdesc="cnde's Settings app"
+    depends=(cnde-compositor gcc-libs glibc libxkbcommon)
+    conflicts=(cnde-settings-git cnde-settings-bin)
+
+    cd "$_src"
+    install -Dm755 target/release/cnde-settings -t "$pkgdir/usr/bin"
+    install -Dm644 data/cnde-settings.desktop -t "$pkgdir/usr/share/applications"
+}
+
+package_cnde-lock() {
+    pkgdesc="cnde's lock screen"
+    depends=(cnde-compositor gcc-libs glibc libxkbcommon pam)
+    # pacman keeps your edits to this file when the package updates.
+    backup=(etc/pam.d/cnde-lock)
+    conflicts=(cnde-lock-git cnde-lock-bin)
+
+    cd "$_src"
+    install -Dm755 target/release/cnde-lock -t "$pkgdir/usr/bin"
+    install -Dm644 data/pam.d/cnde-lock -t "$pkgdir/etc/pam.d"
+}
+
+package_cnde-files() {
+    pkgdesc="cnde's file manager and file picker"
+    depends=(gcc-libs glibc libxkbcommon)
+    optdepends=(
+        'xdg-desktop-portal: be the file picker apps open'
+        'udisks2: mount and eject drives'
+        'ffmpegthumbnailer: video thumbnails'
+        'libarchive: compress and extract archives'
+        'cnde-icons: cnde-style icons'
+    )
+    conflicts=(cnde-files-git cnde-files-bin)
+
+    cd "$_src"
+    install -Dm755 target/release/cnde-files -t "$pkgdir/usr/bin"
+    install -Dm644 files/cnde-files.desktop -t "$pkgdir/usr/share/applications"
+    # The file picker apps get (xdg-desktop-portal's FileChooser backend).
+    install -Dm755 target/release/cnde-files-portal -t "$pkgdir/usr/bin"
+    install -Dm644 data/cnde.portal -t "$pkgdir/usr/share/xdg-desktop-portal/portals"
+    install -Dm644 data/org.freedesktop.impl.portal.desktop.cnde.service \
+        -t "$pkgdir/usr/share/dbus-1/services"
+}
+
+package_cnde-icons() {
+    pkgdesc="cnde's symbolic icons"
+    # No compiled code, so it installs on any architecture.
+    arch=(any)
+    conflicts=(cnde-icons-git cnde-icons-bin)
+
+    cd "$_src"
+    install -dm755 "$pkgdir/usr/share/icons"
+    cp -r --no-preserve=ownership icons/cnde "$pkgdir/usr/share/icons/cnde"
+}
+
+# A metapackage: no files, only dependencies, so `pacman -S cnde` pulls in
+# everything.
+package_cnde() {
+    pkgdesc="cnde desktop: compositor, shell, settings, lock screen, files and icons"
+    arch=(any)
+    depends=(cnde-compositor cnde-shell cnde-settings cnde-lock cnde-files cnde-icons)
+    conflicts=(cnde-git cnde-bin)
+}
