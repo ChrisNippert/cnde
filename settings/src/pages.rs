@@ -13,7 +13,9 @@ pub enum Page {
     Sound,
     Mouse,
     Keyboard,
+    Language,
     Windows,
+    Tiling,
     Panel,
     Dock,
     Power,
@@ -23,17 +25,19 @@ pub enum Page {
 
 impl Page {
     /// In sidebar order: each section's pages run together.
-    pub const ALL: [Page; 13] = [
+    pub const ALL: [Page; 15] = [
         Page::Appearance,
         Page::Panel,
         Page::Dock,
         Page::Windows,
+        Page::Tiling,
         Page::Wifi,
         Page::Bluetooth,
         Page::Displays,
         Page::Sound,
         Page::Mouse,
         Page::Keyboard,
+        Page::Language,
         Page::Power,
         Page::DefaultApps,
         Page::Accessibility,
@@ -42,9 +46,11 @@ impl Page {
     /// The sidebar section this page sits under.
     pub fn section(self) -> &'static str {
         match self {
-            Page::Appearance | Page::Panel | Page::Dock | Page::Windows => "Personalize",
+            Page::Appearance | Page::Panel | Page::Dock | Page::Windows | Page::Tiling => "Personalize",
             Page::Wifi | Page::Bluetooth => "Connections",
-            Page::Displays | Page::Sound | Page::Mouse | Page::Keyboard | Page::Power => "Devices",
+            Page::Displays | Page::Sound | Page::Mouse | Page::Keyboard | Page::Language | Page::Power => {
+                "Devices"
+            },
             Page::DefaultApps | Page::Accessibility => "System",
         }
     }
@@ -69,6 +75,8 @@ impl Page {
             Page::Mouse => "Mouse",
             Page::Keyboard => "Keyboard",
             Page::Windows => "Windows",
+            Page::Tiling => "Tiling",
+            Page::Language => "Language & Input",
             Page::Panel => "Top Bar",
             Page::Dock => "Dock",
             Page::Power => "Power",
@@ -87,6 +95,8 @@ impl Page {
             Page::Mouse => "input-mouse-symbolic",
             Page::Keyboard => "input-keyboard-symbolic",
             Page::Windows => "window-restore-symbolic",
+            Page::Tiling => "view-grid-symbolic",
+            Page::Language => "preferences-desktop-locale-symbolic",
             Page::Panel => "focus-top-bar-symbolic",
             Page::Dock => "view-app-grid-symbolic",
             Page::Power => "battery-symbolic",
@@ -112,16 +122,6 @@ impl Page {
 /// dock aren't cnde's.
 pub fn other_shell(c: &Config) -> bool {
     c.autostart.shell != "cnde-shell"
-}
-
-/// Whether the top bar settings apply: the bar is on and cnde's shell runs it.
-fn bar_shown(c: &Config) -> bool {
-    c.panel.enabled && !other_shell(c)
-}
-
-/// Whether the dock settings apply.
-fn dock_shown(c: &Config) -> bool {
-    c.dock.position != cnde_config::DockPosition::Off && !other_shell(c)
 }
 
 /// A value as written to the file. `Unset` removes the key, so the default
@@ -732,6 +732,8 @@ pub fn build(
         Page::Mouse => mouse(c, &d),
         Page::Keyboard => keyboard(c, &d),
         Page::Windows => windows(c, &d),
+        Page::Tiling => tiling(c, &d),
+        Page::Language => language(c, &d),
         Page::Panel => panel(c, &d),
         Page::Dock => dock(c, &d),
         Page::Power => power(c, &d, power_mode),
@@ -1555,14 +1557,6 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
         ),
     ];
     groups.insert(1, dark_schedule(c, d));
-    if let Some(look) = groups.iter_mut().find(|g| g.title == "Colour & material") {
-        if bar_shown(c) {
-            look.rows.extend(panel_look(c, d));
-        }
-        if dock_shown(c) {
-            look.rows.extend(dock_look(c, d));
-        }
-    }
     if other_shell(c) {
         groups.insert(
             0,
@@ -2246,7 +2240,8 @@ fn layout_rows(k: &cnde_config::Keyboard) -> Vec<Row> {
     rows
 }
 
-fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
+/// Keyboard layouts and the input method.
+fn language(c: &Config, d: &Config) -> Vec<Group> {
     let (k, dk) = (&c.input.keyboard, &d.input.keyboard);
     let mut layout_group = layout_rows(k);
     layout_group.extend([
@@ -2281,6 +2276,28 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
     vec![
         group("Layouts", layout_group),
         group(
+            "Input method",
+            vec![
+                Row::new(
+                    "input.input_method",
+                    "Input method",
+                    Control::Dropdown(choices(&[
+                        ("None", s("")),
+                        ("Fcitx5", s("fcitx5")),
+                    ])),
+                    s(&c.input.input_method),
+                    s(&d.input.input_method),
+                )
+                .sub("For Japanese, Chinese, Korean: install fcitx5 and fcitx5-mozc (Japanese)"),
+            ],
+        ),
+    ]
+}
+
+fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
+    let (k, dk) = (&c.input.keyboard, &d.input.keyboard);
+    vec![
+        group(
             "Typing",
             vec![
                 Row::new(
@@ -2310,22 +2327,6 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
                     Value::Int(k.repeat_rate as i64),
                     Value::Int(dk.repeat_rate as i64),
                 ),
-            ],
-        ),
-        group(
-            "Input method",
-            vec![
-                Row::new(
-                    "input.input_method",
-                    "Input method",
-                    Control::Dropdown(choices(&[
-                        ("None", s("")),
-                        ("Fcitx5", s("fcitx5")),
-                    ])),
-                    s(&c.input.input_method),
-                    s(&d.input.input_method),
-                )
-                .sub("For Japanese, Chinese, Korean: install fcitx5 and fcitx5-mozc (Japanese)"),
             ],
         ),
         group(
@@ -2475,44 +2476,11 @@ fn tiling_style(v: cnde_config::TilingStyle) -> Value {
     })
 }
 
-fn windows(c: &Config, d: &Config) -> Vec<Group> {
+/// Tiled windows' layout, gaps and corners.
+fn tiling(c: &Config, d: &Config) -> Vec<Group> {
     let (t, dt) = (&c.tiling, &d.tiling);
     let px = |v: f64| format!("{v:.0} px");
     vec![
-        group(
-            "Focus",
-            vec![
-                Row::new(
-                    "windows.focus_follows_mouse",
-                    "Focus follows mouse",
-                    Control::Dropdown(choices(&[
-                        ("Off", s("off")),
-                        ("When tiling", s("tiling")),
-                        ("Always", s("always")),
-                    ])),
-                    focus_follows_mouse(c.windows.focus_follows_mouse),
-                    focus_follows_mouse(d.windows.focus_follows_mouse),
-                )
-                .sub("Hovering a window focuses it. Off: click to focus. Focus doesn't move while you drag, or while a menu or the overview is open"),
-            ],
-        ),
-        group(
-            "Snapping",
-            vec![Row::new(
-                "snap.edge",
-                "Snap zone",
-                Control::Slider {
-                    min: 2.0,
-                    max: 96.0,
-                    step: 1.0,
-                    int: true,
-                    format: px,
-                },
-                Value::Int(c.snap.edge as i64),
-                Value::Int(d.snap.edge as i64),
-            )
-            .sub("How near a monitor's side or top a dragged window snaps. Shown on every monitor as you change it")],
-        ),
         group(
             "Tiling",
             vec![
@@ -2609,6 +2577,46 @@ fn windows(c: &Config, d: &Config) -> Vec<Group> {
                 .sub("Space between tiled windows and the edges of the screen")
                 .advanced(),
             ],
+        ),
+    ]
+}
+
+fn windows(c: &Config, d: &Config) -> Vec<Group> {
+    let px = |v: f64| format!("{v:.0} px");
+    vec![
+        group(
+            "Focus",
+            vec![
+                Row::new(
+                    "windows.focus_follows_mouse",
+                    "Focus follows mouse",
+                    Control::Dropdown(choices(&[
+                        ("Off", s("off")),
+                        ("When tiling", s("tiling")),
+                        ("Always", s("always")),
+                    ])),
+                    focus_follows_mouse(c.windows.focus_follows_mouse),
+                    focus_follows_mouse(d.windows.focus_follows_mouse),
+                )
+                .sub("Hovering a window focuses it. Off: click to focus. Focus doesn't move while you drag, or while a menu or the overview is open"),
+            ],
+        ),
+        group(
+            "Snapping",
+            vec![Row::new(
+                "snap.edge",
+                "Snap zone",
+                Control::Slider {
+                    min: 2.0,
+                    max: 96.0,
+                    step: 1.0,
+                    int: true,
+                    format: px,
+                },
+                Value::Int(c.snap.edge as i64),
+                Value::Int(d.snap.edge as i64),
+            )
+            .sub("How near a monitor's side or top a dragged window snaps. Shown on every monitor as you change it")],
         ),
         group(
             "Workspaces",
@@ -2740,7 +2748,7 @@ fn panel_look(c: &Config, d: &Config) -> Vec<Row> {
     ]
 }
 
-/// The dock's colour and material rows, shown on Appearance.
+/// The dock's colour rows, shown on the Dock page.
 fn dock_look(c: &Config, d: &Config) -> Vec<Row> {
     let mut rows = Vec::new();
     let adaptive = |v: cnde_config::DockAdaptive| {
@@ -2823,14 +2831,6 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                     Value::Bool(dp.power_icon),
                 )
                 .sub("A power icon on the status button; power options are in quick settings"),
-                Row::new(
-                    "panel.keyboard_button",
-                    "On-screen keyboard button",
-                    Control::switch(),
-                    Value::Bool(p.keyboard_button),
-                    Value::Bool(dp.keyboard_button),
-                )
-                .sub("A keyboard icon left of the tray that shows a touch keyboard"),
                 Row::new(
                     "panel.media_controls",
                     "Media controls",
@@ -2975,6 +2975,7 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
             ],
         ),
     ];
+    groups.insert(1, group("Look", panel_look(c, d)));
     // Off, the switch is all there is.
     if !p.enabled {
         groups.truncate(1);
@@ -3219,7 +3220,12 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
             .advanced(),
         );
     }
-    vec![group("Dock", rows)]
+    let mut groups = vec![group("Dock", rows)];
+    let look = dock_look(c, d);
+    if !look.is_empty() {
+        groups.push(group("Colour", look));
+    }
+    groups
 }
 
 /// Idle timeouts offered, in seconds (0 is "Never").
@@ -3516,7 +3522,22 @@ fn power(c: &Config, d: &Config, power_mode: Option<&crate::power_mode::State>) 
 }
 
 fn accessibility(c: &Config, d: &Config) -> Vec<Group> {
+    let p = &c.panel;
+    let dp = &d.panel;
     vec![
+        group(
+            "On-screen keyboard",
+            vec![
+                Row::new(
+                    "panel.keyboard_button",
+                    "On-screen keyboard",
+                    Control::switch(),
+                    Value::Bool(p.keyboard_button),
+                    Value::Bool(dp.keyboard_button),
+                )
+                .sub("A keyboard button in the top bar"),
+            ],
+        ),
         group(
         "Motion",
         vec![
@@ -3803,7 +3824,6 @@ mod tests {
         config.autostart.shell = "waybar".into();
         let pages = Page::visible(&config);
         assert!(!pages.contains(&Page::Panel) && !pages.contains(&Page::Dock));
-        assert!(!bar_shown(&config) && !dock_shown(&config));
         config.autostart.shell = String::new();
         assert!(!Page::visible(&config).contains(&Page::Dock));
     }
@@ -3818,28 +3838,17 @@ mod tests {
         assert_eq!(bar.len(), 1);
         assert_eq!(bar[0].rows.len(), 1);
         assert_eq!(dock(&config, &d)[0].rows.len(), 1);
-        let keys: Vec<_> = appearance(&config, &d)
-            .into_iter()
-            .flat_map(|g| g.rows)
-            .collect();
-        assert!(
-            keys.iter()
-                .all(|r| r.title != "Top bar edge line" && r.title != "Dock colour")
-        );
-        let titles = |c: &Config| -> Vec<String> {
-            appearance(c, &d)
-                .into_iter()
-                .flat_map(|g| g.rows)
-                .map(|r| r.title)
-                .collect()
+        let titles = |groups: Vec<Group>| -> Vec<String> {
+            groups.into_iter().flat_map(|g| g.rows).map(|r| r.title).collect()
         };
-        let on = titles(&Config::default());
-        assert!(on.iter().any(|t| t == "Top bar edge line"));
+        let on = Config::default();
+        assert!(titles(panel(&on, &d)).iter().any(|t| t == "Top bar edge line"));
+        assert!(!titles(appearance(&on, &d)).iter().any(|t| t == "Top bar edge line"));
         // The dock's adaptive colour shows only with that palette.
-        assert!(!on.iter().any(|t| t == "Dock colour"));
+        assert!(!titles(dock(&on, &d)).iter().any(|t| t == "Dock colour"));
         let mut adaptive = Config::default();
         adaptive.appearance.palette = cnde_config::Palette::Adaptive;
-        assert!(titles(&adaptive).iter().any(|t| t == "Dock colour"));
+        assert!(titles(dock(&adaptive, &d)).iter().any(|t| t == "Dock colour"));
     }
 
     #[test]
@@ -3889,5 +3898,58 @@ mod tests {
         assert_eq!(Page::from_name("mouse"), Some(Page::Mouse));
         assert_eq!(Page::from_name("bluetooth"), Some(Page::Bluetooth));
         assert_eq!(Page::from_name("nope"), None);
+        assert_eq!(Page::from_name("tiling"), Some(Page::Tiling));
+        assert_eq!(Page::from_name("language"), Some(Page::Language));
+    }
+
+    /// Rows moved between pages show up on their new page and nowhere else.
+    #[test]
+    fn moved_rows_live_on_one_page() {
+        let mut config = Config::default();
+        config.appearance.palette = cnde_config::Palette::Adaptive;
+        let keys = |page: Page| -> Vec<&'static str> {
+            build(
+                page,
+                &config,
+                &[],
+                WifiView::default(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .into_iter()
+            .flat_map(|g| g.rows)
+            .filter_map(|r| match r.key {
+                Key::Path(p) => Some(p),
+                _ => None,
+            })
+            .collect()
+        };
+        let moved: [(&str, Page); 17] = [
+            ("panel.style", Page::Panel),
+            ("panel.rounded", Page::Panel),
+            ("panel.edge_line", Page::Panel),
+            ("panel.background", Page::Panel),
+            ("panel.foreground", Page::Panel),
+            ("dock.adaptive_color", Page::Dock),
+            ("panel.keyboard_button", Page::Accessibility),
+            ("tiling.layout", Page::Tiling),
+            ("tiling.toggle", Page::Tiling),
+            ("tiling.style", Page::Tiling),
+            ("tiling.open_at_pointer", Page::Tiling),
+            ("tiling.master_ratio", Page::Tiling),
+            ("tiling.gap", Page::Tiling),
+            ("tiling.rounded", Page::Tiling),
+            ("input.keyboard.layout", Page::Language),
+            ("input.keyboard.options", Page::Language),
+            ("input.input_method", Page::Language),
+        ];
+        for (key, home) in moved {
+            for page in Page::ALL {
+                assert_eq!(keys(page).contains(&key), page == home, "{key} on {page:?}");
+            }
+        }
     }
 }
