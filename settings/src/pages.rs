@@ -2145,25 +2145,6 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
                     Value::Bool(dk.natural_workspace_keys),
                 )
                 .sub("Super+Alt+Left shows the next workspace, as the content moves left"),
-                Row::new(
-                    "workspaces.mode",
-                    "Workspaces",
-                    Control::Dropdown(choices(&[
-                        ("Span all monitors", s("continuous")),
-                        ("Separate per monitor", s("individual")),
-                    ])),
-                    workspace_mode(c.workspaces.mode),
-                    workspace_mode(d.workspaces.mode),
-                )
-                .sub("Span: monitors show neighbouring workspaces and switch together. Separate: each monitor has its own, and switching moves the one you used last"),
-                Row::new(
-                    "workspaces.hot_corner",
-                    "Hot corner",
-                    Control::switch(),
-                    Value::Bool(c.workspaces.hot_corner),
-                    Value::Bool(d.workspaces.hot_corner),
-                )
-                .sub("Pushing the pointer into the top-left corner opens the overview"),
             ],
         ),
         group(
@@ -2355,6 +2336,30 @@ fn windows(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .sub("Space between tiled windows and the edges of the screen")
                 .advanced(),
+            ],
+        ),
+        group(
+            "Workspaces",
+            vec![
+                Row::new(
+                    "workspaces.mode",
+                    "Workspaces",
+                    Control::Dropdown(choices(&[
+                        ("Span all monitors", s("continuous")),
+                        ("Separate per monitor", s("individual")),
+                    ])),
+                    workspace_mode(c.workspaces.mode),
+                    workspace_mode(d.workspaces.mode),
+                )
+                .sub("Span: monitors show neighbouring workspaces and switch together. Separate: each monitor has its own, and switching moves the one you used last"),
+                Row::new(
+                    "workspaces.hot_corner",
+                    "Hot corner",
+                    Control::switch(),
+                    Value::Bool(c.workspaces.hot_corner),
+                    Value::Bool(d.workspaces.hot_corner),
+                )
+                .sub("Pushing the pointer into the top-left corner opens the overview"),
             ],
         ),
     ]
