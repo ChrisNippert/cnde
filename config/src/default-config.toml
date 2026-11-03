@@ -4,6 +4,20 @@
 #
 # Everything is commented out: these are the defaults. Uncomment to change.
 
+[input]
+# An input method, for typing Japanese, Chinese or Korean. "fcitx5" starts
+# `fcitx5 -d --replace` at login (needs fcitx5 and an engine such as
+# fcitx5-mozc) and sets XMODIFIERS for X11 apps; Wayland apps talk to it
+# through the text-input protocol, so GTK_IM_MODULE/QT_IM_MODULE stay unset.
+# Any other value is run as the command. Empty: none.
+#
+# Super+Space switches the keyboard layouts above. With fcitx5, let it own
+# switching instead: keep one layout here, and in fcitx5-configtool put the
+# layouts and Mozc in one group and set the "Trigger Input Method" key to
+# Super+Space (cnde's own Super+Space then stops being used for layouts if
+# you rebind it under [shortcuts]).
+# input_method = ""        # or "fcitx5"
+
 [input.keyboard]
 # layout = "us"            # e.g. "us,de"; empty uses XKB_DEFAULT_LAYOUT
 # variant = ""

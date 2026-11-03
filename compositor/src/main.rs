@@ -193,6 +193,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for command in &state.config.autostart.commands {
         spawn::spawn_command_line(command, &state.client_env());
     }
+    // The input method (fcitx5), after XWayland so it sees DISPLAY too.
+    if let Some(command) = state.config.input.input_method_command() {
+        spawn::spawn_command_line(&command, &state.client_env());
+    }
 
     info!(
         socket = ?state.socket_name,

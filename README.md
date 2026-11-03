@@ -170,6 +170,18 @@ file without disturbing your comments. The defaults, with an explanation of
 every option, are in
 [config/src/default-config.toml](config/src/default-config.toml).
 
+### Japanese and other input methods
+
+Install `fcitx5`, `fcitx5-mozc` (Japanese) and `fcitx5-configtool`, then pick
+**Fcitx5** under Settings, Keyboard, Input method (or set
+`input.input_method = "fcitx5"`) and log in again. Add Mozc to your input
+methods in `fcitx5-configtool`. Wayland apps use the text-input protocol, so
+there is no `GTK_IM_MODULE` or `QT_IM_MODULE` to set; X11 apps get
+`XMODIFIERS=@im=fcitx` automatically. Let fcitx5 switch layouts too: keep one
+layout in cnde, put your layouts and Mozc in one fcitx5 group, and set its
+trigger key to Super+Space. While fcitx5 is running, cnde leaves Super+Space
+to it.
+
 ## How this was built
 
 cnde's code was written by Claude 5.5 Opus and Sonnet (Anthropic's AI models) through Claude

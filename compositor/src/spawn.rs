@@ -30,6 +30,19 @@ pub struct ClientEnv {
     pub wayland_display: OsString,
     /// `:N` once XWayland is set up; X11 apps start it on first connect.
     pub x11_display: Option<String>,
+    /// `XMODIFIERS` for X11 apps, so they find fcitx5. Wayland apps use
+    /// the text-input protocol and need nothing.
+    pub xmodifiers: Option<&'static str>,
+}
+
+/// `@im=fcitx` when fcitx5 is the configured input method and installed.
+pub fn xmodifiers_for(input: &cnde_config::Input) -> Option<&'static str> {
+    (input.input_method_is_fcitx() && on_path("fcitx5")).then_some("@im=fcitx")
+}
+
+fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
 /// `terminal` is `apps.terminal` (a desktop file ID, or "") and goes first.
@@ -167,6 +180,9 @@ fn run_first_available(candidates: Vec<Vec<String>>, env: &ClientEnv) {
             Some(display) => command.env("DISPLAY", display),
             None => command.env_remove("DISPLAY"),
         };
+        if let Some(modifiers) = env.xmodifiers {
+            command.env("XMODIFIERS", modifiers);
+        }
         match command.spawn() {
             Ok(mut child) => {
                 info!(%program, "launched");

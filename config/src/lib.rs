@@ -70,6 +70,27 @@ pub struct Input {
     pub keyboard: Keyboard,
     pub mouse: Pointer,
     pub touchpad: Touchpad,
+    /// An input method for Japanese, Chinese or Korean: "fcitx5", or any
+    /// command that runs one. Started at login. Empty: none.
+    pub input_method: String,
+}
+
+impl Input {
+    /// The command that starts the input method, if one is set. "fcitx5"
+    /// becomes `fcitx5 -d --replace` (a daemon taking over from any other).
+    pub fn input_method_command(&self) -> Option<String> {
+        match self.input_method.trim() {
+            "" => None,
+            "fcitx5" => Some("fcitx5 -d --replace".into()),
+            other => Some(other.into()),
+        }
+    }
+
+    /// Whether the input method is fcitx5, which X11 apps find through
+    /// `XMODIFIERS=@im=fcitx`.
+    pub fn input_method_is_fcitx(&self) -> bool {
+        self.input_method.trim().starts_with("fcitx5")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1360,6 +1381,24 @@ mod tests {
     fn default_file_parses_to_defaults() {
         let parsed = Config::parse(DEFAULT_CONFIG).expect("default config must parse");
         assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn input_method_commands() {
+        let none = Config::default();
+        assert_eq!(none.input.input_method_command(), None);
+        let fcitx = Config::parse("[input]\ninput_method = \"fcitx5\"\n").unwrap();
+        assert_eq!(
+            fcitx.input.input_method_command().as_deref(),
+            Some("fcitx5 -d --replace")
+        );
+        assert!(fcitx.input.input_method_is_fcitx());
+        let other = Config::parse("[input]\ninput_method = \"ibus-daemon -drx\"\n").unwrap();
+        assert_eq!(
+            other.input.input_method_command().as_deref(),
+            Some("ibus-daemon -drx")
+        );
+        assert!(!other.input.input_method_is_fcitx());
     }
 
     #[test]
