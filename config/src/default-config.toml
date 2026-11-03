@@ -47,6 +47,7 @@
 # window_buttons = "all"   # "all" (minimize, maximize, close) or "close"
 # titlebars = "cnde"       # "cnde" draws title bars for apps that allow it; "app" leaves them to the app
 # material = "frosted"     # "frosted" or "solid": the top bar, dock, the shell's popups and cnde's own windows (solid when snapped, maximized or a window touches them)
+# live_blur = false        # blur what's really behind the bar, dock, popups and notifications, windows too, not just the wallpaper; costs some GPU while they're showing (frosted material only)
 # corner_radius = 10       # window corners in px (0-48); the dock, bar and menus scale with it
 
 [dark_mode]

@@ -211,17 +211,8 @@ impl State {
             // First: it uploads a freshly loaded wallpaper, which the frost
             // is cut from (see udev.rs).
             let wallpaper = self.wallpapers.element(renderer, &backend.output);
-            let frost =
-                self.dock_frost
-                    .elements(
-                renderer,
-                &self.wallpapers,
-                &backend.output,
-                &self.config,
-                &self.popup_anims,
-                &crate::frost::Behind::new(&self.space, &backend.output, bar_tint),
-                now,
-            );
+            let wallpaper = wallpaper.map(render::OutputElement::Wallpaper);
+            let live = self.config.live_blur();
             let backdrop = match output_geo {
                 Some(geo) => crate::overview::backdrop(
                     &mut self.overview,
@@ -265,14 +256,14 @@ impl State {
                 elements.push(render::OutputElement::Wallpaper(frozen));
                 elements
             } else {
-                render::output_elements(
+                let mut frost_at = None;
+                let mut elements = render::output_elements(
                     renderer,
                     &self.space,
                     &self.closing,
                     self.snap_preview.as_mut(),
                     scene.map(|s| s.windows),
                     backdrop,
-                    frost,
                     over_windows,
                     &mut self.decorations,
                     &mut self.popup_anims,
@@ -282,17 +273,49 @@ impl State {
                         &backend.output,
                         &self.config,
                         now,
+                        live.then_some(&mut self.live_blur),
                     ),
+                    wallpaper.as_ref(),
                     &backend.output,
                     now,
                     &mut panels,
-                )
+                    &mut frost_at,
+                );
+                // The frost goes in once what's below it is known (live
+                // blur blurs that, not the wallpaper).
+                if let Some(at) = frost_at {
+                    let frost = {
+                        let below: Vec<&render::OutputElement> =
+                            elements[at..].iter().chain(&wallpaper).collect();
+                        self.dock_frost.elements(
+                            renderer,
+                            &self.wallpapers,
+                            &backend.output,
+                            &self.config,
+                            &self.popup_anims,
+                            &crate::frost::Behind::new(&self.space, &backend.output, bar_tint),
+                            now,
+                            live.then(|| crate::frost::LiveSource {
+                                blur: &mut self.live_blur,
+                                below: &below,
+                            }),
+                        )
+                    };
+                    panels += frost.len();
+                    elements.splice(at..at, frost);
+                }
+                if live {
+                    self.live_blur.finish(&backend.output);
+                } else {
+                    self.live_blur.release();
+                }
+                elements
             };
             if self.screenshot.frozen_element(&backend.output).is_none()
                 && !locked
                 && let Some(wallpaper) = wallpaper
             {
-                elements.push(render::OutputElement::Wallpaper(wallpaper));
+                elements.push(wallpaper);
             }
             if !locked {
                 // After the wallpaper: the switcher blurs the scene below it.
@@ -308,6 +331,7 @@ impl State {
                         &backend.output,
                         &self.config,
                         now,
+                        None,
                     ),
                     now,
                 );

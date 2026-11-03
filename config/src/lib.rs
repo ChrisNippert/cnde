@@ -242,6 +242,10 @@ pub struct Appearance {
     /// blurred wallpaper, or solid. Snapped or maximized windows are
     /// always solid.
     pub material: Material,
+    /// With a frosted material: blur what's really behind the bar, dock,
+    /// popups and cards (windows too), not just the wallpaper. Costs some
+    /// GPU while they show.
+    pub live_blur: bool,
     /// The old switch for `palette = "adaptive"`; true means the same.
     #[serde(alias = "match_windows")]
     pub adaptive_color: bool,
@@ -289,6 +293,7 @@ impl Default for Appearance {
             accent_color: "#f4a7c6".into(),
             corner_radius: Self::CORNER_RADIUS,
             material: Material::Frosted,
+            live_blur: false,
             adaptive_color: false,
         }
     }
@@ -1138,6 +1143,12 @@ impl Config {
         }
     }
 
+    /// Whether frost blurs the live scene behind it: a frosted material
+    /// and the switch on.
+    pub fn live_blur(&self) -> bool {
+        self.appearance.live_blur && self.appearance.material == Material::Frosted
+    }
+
     pub fn parse(text: &str) -> Result<Self, Error> {
         let config: Config =
             toml::from_str(text).map_err(|err| Error::Parse(PathBuf::from("config"), err))?;
@@ -1300,6 +1311,15 @@ mod tests {
     fn default_file_parses_to_defaults() {
         let parsed = Config::parse(DEFAULT_CONFIG).expect("default config must parse");
         assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn live_blur_is_off_unless_asked_for() {
+        assert!(!Config::default().live_blur());
+        let on = Config::parse("[appearance]\nlive_blur = true\n").unwrap();
+        assert!(on.appearance.live_blur && on.live_blur());
+        let solid = Config::parse("[appearance]\nlive_blur = true\nmaterial = \"solid\"\n").unwrap();
+        assert!(!solid.live_blur());
     }
 
     #[test]

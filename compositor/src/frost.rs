@@ -33,6 +33,9 @@ use tracing::warn;
 
 use crate::{render::OutputElement, wallpaper::Wallpapers};
 
+/// A blurred texture and where a frost's area sits in it (x0, y0, x1, y1).
+type Cut = (TextureRenderElement<GlesTexture>, [f32; 4]);
+
 /// How long a frost takes to turn solid, or back.
 const FADE: Duration = Duration::from_millis(150);
 
@@ -97,6 +100,30 @@ impl Behind {
 pub struct Frost {
     inner: TextureShaderElement,
     id: Id,
+    /// For frost cut from a live blur: which copy of it (0: the wallpaper).
+    /// A new copy under the same id is new content to the damage tracker.
+    generation: usize,
+}
+
+/// What a live blur needs to make the frost on one output: the blur, and
+/// everything below where the frost goes, top first.
+pub struct LiveSource<'a> {
+    pub blur: &'a mut crate::scene_blur::LiveBlur,
+    pub below: &'a [&'a OutputElement],
+}
+
+impl LiveSource<'_> {
+    /// The shell's frost shares one copy of the scene.
+    fn shell(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        area: Rectangle<i32, Logical>,
+        alpha: f32,
+    ) -> Option<(TextureRenderElement<GlesTexture>, [f32; 4], usize)> {
+        self.blur
+            .source(renderer, output, "shell", self.below, area, alpha)
+    }
 }
 
 impl DockFrost {
@@ -121,14 +148,34 @@ impl DockFrost {
         popups: &crate::popup_anim::PopupAnims,
         behind: &Behind,
         now: Instant,
+        // With live blur, what's below the frost to blur instead of the
+        // wallpaper.
+        mut live: Option<LiveSource<'_>>,
     ) -> Vec<OutputElement> {
         let mut elements = if config.appearance.material == cnde_config::Material::Frosted {
-            self.popup_elements(renderer, wallpapers, output, config, popups, behind, now)
+            self.popup_elements(
+                renderer,
+                wallpapers,
+                output,
+                config,
+                popups,
+                behind,
+                now,
+                live.as_mut(),
+            )
         } else {
             Vec::new()
         };
         if config.appearance.material == cnde_config::Material::Frosted {
-            elements.extend(self.card_elements(renderer, wallpapers, output, config, behind, now));
+            elements.extend(self.card_elements(
+                renderer,
+                wallpapers,
+                output,
+                config,
+                behind,
+                now,
+                live.as_mut(),
+            ));
         }
         let dock = &config.dock;
         // As the dock draws itself (the palette sets the shape).
@@ -200,9 +247,16 @@ impl DockFrost {
                     }
                 }
             }
-            if let Some(frost) =
-                self.frost(renderer, wallpapers, output, namespace, area, radius, 1.0)
-            {
+            if let Some(frost) = self.frost(
+                renderer,
+                wallpapers,
+                output,
+                namespace,
+                area,
+                radius,
+                1.0,
+                live.as_mut(),
+            ) {
                 elements.push(OutputElement::Frost(frost));
             }
         }
@@ -222,6 +276,7 @@ impl DockFrost {
         popups: &crate::popup_anim::PopupAnims,
         behind: &Behind,
         now: Instant,
+        mut live: Option<&mut LiveSource<'_>>,
     ) -> Vec<OutputElement> {
         use crate::popup_anim::{open_progress, scale_at};
         // Never larger than any popup's own corners, so no frost shows
@@ -258,8 +313,9 @@ impl DockFrost {
                 ((rect.loc.x as f64 + rect.size.w as f64 / 2.0) * scale).round() as i32,
                 (rect.loc.y as f64 * scale).round() as i32,
             ));
-            // Over a window: solid, in the bar's colour if it has one.
-            let target = behind.under(rect).map(|_| {
+            // Over a window: solid, in the bar's colour if it has one (not
+            // with live blur: it shows what's really there).
+            let target = behind.under(rect).filter(|_| live.is_none()).map(|_| {
                 let colour = match behind.bar {
                     Some(bar) => bar.map(|c| c as f32 / 255.0),
                     None => [popup.r, popup.g, popup.b],
@@ -294,6 +350,7 @@ impl DockFrost {
                 rect,
                 radius,
                 progress as f32,
+                live.as_deref_mut(),
             ) else {
                 continue;
             };
@@ -324,6 +381,7 @@ impl DockFrost {
         config: &cnde_config::Config,
         behind: &Behind,
         now: Instant,
+        mut live: Option<&mut LiveSource<'_>>,
     ) -> Vec<OutputElement> {
         let prefix = format!("{}/note/", output.name());
         let mut elements = Vec::new();
@@ -369,7 +427,7 @@ impl DockFrost {
                     (rect.loc.y as f64 * scale).round() as i32,
                 ));
                 // Over a window: solid, as the popups are.
-                let target = behind.under(rect).map(|_| {
+                let target = behind.under(rect).filter(|_| live.is_none()).map(|_| {
                     let colour = match behind.bar {
                         Some(bar) => bar.map(|c| c as f32 / 255.0),
                         None => [card_colour.r, card_colour.g, card_colour.b],
@@ -389,9 +447,16 @@ impl DockFrost {
                 if solidity >= 1.0 {
                     continue;
                 }
-                if let Some(frost) =
-                    self.frost(renderer, wallpapers, output, &namespace, rect, radius, card.alpha)
-                {
+                if let Some(frost) = self.frost(
+                    renderer,
+                    wallpapers,
+                    output,
+                    &namespace,
+                    rect,
+                    radius,
+                    card.alpha,
+                    live.as_deref_mut(),
+                ) {
                     elements.push(OutputElement::PopupFrost(RescaleRenderElement::from_element(
                         frost,
                         at,
@@ -515,13 +580,29 @@ impl DockFrost {
         area: Rectangle<i32, smithay::utils::Logical>,
         radius: f64,
         alpha: f32,
+        live: Option<&mut LiveSource<'_>>,
     ) -> Option<Frost> {
+        if let Some((texture, crop, generation)) =
+            live.and_then(|live| live.shell(renderer, output, area, alpha))
+        {
+            return self.frost_from(
+                renderer,
+                output,
+                namespace,
+                area,
+                radius,
+                (texture, crop),
+                generation,
+            );
+        }
         let source = wallpapers.blurred_crop(output, area, alpha)?;
-        self.frost_from(renderer, output, namespace, area, radius, source)
+        self.frost_from(renderer, output, namespace, area, radius, source, 0)
     }
 
     /// Frost shaped from `source`, a blurred texture and where `area` sits
-    /// in it (see `Wallpapers::blurred_crop`).
+    /// in it (see `Wallpapers::blurred_crop`); `generation` is the live
+    /// blur's, 0 for the wallpaper.
+    #[allow(clippy::too_many_arguments)]
     fn frost_from(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -530,6 +611,7 @@ impl DockFrost {
         area: Rectangle<i32, smithay::utils::Logical>,
         radius: f64,
         source: (TextureRenderElement<GlesTexture>, [f32; 4]),
+        generation: usize,
     ) -> Option<Frost> {
         if self.shader.is_none() && !self.broken {
             match renderer.compile_custom_texture_shader(
@@ -563,7 +645,11 @@ impl DockFrost {
         );
         let key = format!("{}/{namespace}", output.name());
         let id = self.ids.entry(key).or_insert_with(Id::new).clone();
-        Some(Frost { inner, id })
+        Some(Frost {
+            inner,
+            id,
+            generation,
+        })
     }
 }
 
@@ -580,11 +666,16 @@ pub struct WindowFrost<'a> {
     pub panel: cnde_ui::Color,
     pub panel_radius: f64,
     pub now: Instant,
+    /// With live blur: the blur, to cut the frost from what's really below.
+    pub live: Option<&'a mut crate::scene_blur::LiveBlur>,
 }
 
 impl WindowFrost<'_> {
     /// The blurred wallpaper under `rect` (output-local), faded to
-    /// `alpha`; over `under`, a solid backing instead. Top first.
+    /// `alpha`; over `under`, a solid backing instead. With live blur, the
+    /// blurred scene `below` the window (top first) instead, and no backing.
+    /// Top first.
+    #[allow(clippy::too_many_arguments)]
     pub fn elements(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -592,8 +683,30 @@ impl WindowFrost<'_> {
         rect: Rectangle<f64, Logical>,
         alpha: f32,
         under: Option<&Window>,
+        below: &[&OutputElement],
     ) -> Vec<OutputElement> {
-        self.elements_from(renderer, key, rect, self.radius, alpha, under, None)
+        let live = self.live.as_deref_mut().and_then(|live| {
+            live.source(
+                renderer,
+                self.output,
+                &format!("window/{key}"),
+                below,
+                rect.to_i32_round(),
+                alpha,
+            )
+        });
+        match live {
+            Some((texture, crop, generation)) => self.build(
+                renderer,
+                key,
+                rect,
+                self.radius,
+                alpha,
+                None,
+                Some(((texture, crop), generation)),
+            ),
+            None => self.build(renderer, key, rect, self.radius, alpha, under, None),
+        }
     }
 
     /// The same, with its corners at `radius`, and the frost cut from
@@ -609,6 +722,28 @@ impl WindowFrost<'_> {
         alpha: f32,
         under: Option<&Window>,
         source: Option<(TextureRenderElement<GlesTexture>, [f32; 4])>,
+    ) -> Vec<OutputElement> {
+        self.build(
+            renderer,
+            key,
+            rect,
+            radius,
+            alpha,
+            under,
+            source.map(|source| (source, 0)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        key: &str,
+        rect: Rectangle<f64, Logical>,
+        radius: f64,
+        alpha: f32,
+        under: Option<&Window>,
+        source: Option<(Cut, usize)>,
     ) -> Vec<OutputElement> {
         let namespace = format!("window/{key}");
         let rect = rect.to_i32_round();
@@ -627,9 +762,16 @@ impl WindowFrost<'_> {
             solid.map(OutputElement::Shader).into_iter().collect();
         let frost = if solidity >= 1.0 {
             None
-        } else if let Some(source) = source {
-            self.frost
-                .frost_from(renderer, self.output, &namespace, rect, radius, source)
+        } else if let Some((source, generation)) = source {
+            self.frost.frost_from(
+                renderer,
+                self.output,
+                &namespace,
+                rect,
+                radius,
+                source,
+                generation,
+            )
         } else {
             self.frost.frost(
                 renderer,
@@ -639,6 +781,7 @@ impl WindowFrost<'_> {
                 rect,
                 radius,
                 alpha,
+                None,
             )
         };
         if let Some(frost) = frost {
@@ -678,6 +821,7 @@ pub fn window_frost<'a>(
     output: &'a Output,
     config: &cnde_config::Config,
     now: Instant,
+    live: Option<&'a mut crate::scene_blur::LiveBlur>,
 ) -> Option<WindowFrost<'a>> {
     let theme = cnde_ui::Theme::for_screen(
         &config.appearance,
@@ -692,6 +836,7 @@ pub fn window_frost<'a>(
         panel: theme.qs_background.with_alpha(0.74),
         panel_radius: theme.qs_radius.max(theme.menu_radius) as f64,
         now,
+        live: live.filter(|_| config.live_blur()),
     })
 }
 
@@ -759,7 +904,10 @@ impl Element for Frost {
         &self.id
     }
     fn current_commit(&self) -> CommitCounter {
-        self.inner.current_commit()
+        match self.generation {
+            0 => self.inner.current_commit(),
+            generation => CommitCounter::from(generation),
+        }
     }
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
         self.inner.geometry(scale)
@@ -775,7 +923,15 @@ impl Element for Frost {
         scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
-        self.inner.damage_since(scale, commit)
+        if self.generation == 0 {
+            return self.inner.damage_since(scale, commit);
+        }
+        // A live copy is new content wholesale.
+        if commit == Some(self.current_commit()) {
+            DamageSet::default()
+        } else {
+            self.inner.damage_since(scale, None)
+        }
     }
     /// Never opaque: the rounded corners let the wallpaper through.
     fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {

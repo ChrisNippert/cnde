@@ -207,23 +207,26 @@ pub fn output_elements(
     // Drawn below the windows (the overview's workspace cards and dimming);
     // replaces the bottom and background layers when not empty.
     backdrop: Vec<OutputElement>,
-    // Frosted glass under the dock (see `frost`): just below the layers
-    // above the windows.
-    frost: Vec<OutputElement>,
     // Just above the windows (the overview's close button).
     over_windows: Vec<OutputElement>,
     decorations: &mut crate::decorations::Decorations,
     popups: &mut PopupAnims,
     // Frost under cnde's own floating windows; None for solid.
     mut window_frost: Option<crate::frost::WindowFrost<'_>>,
+    // The wallpaper the caller adds under it all, for live blur to see.
+    wallpaper: Option<&OutputElement>,
     output: &Output,
     now: Instant,
     // Set to how many of the elements, from the top, are the panels (the
     // overlay and top layers: the bar, the dock), so a dock preview's peek
-    // can go just under them.
+    // can go just under them. Not counting the frosted glass under the dock
+    // (see `frost`), which the caller adds at `frost_at`: just below the
+    // layers above the windows (None: a fullscreen window covers it).
     panels: &mut usize,
+    frost_at: &mut Option<usize>,
 ) -> Vec<OutputElement> {
     *panels = 0;
+    *frost_at = None;
     let Some(output_geo) = space.output_geometry(output) else {
         return Vec::new();
     };
@@ -246,6 +249,28 @@ pub fn output_elements(
             })
             .collect(),
     };
+    // Layer-shell stacking (see layers.rs); a fullscreen window covers the panel.
+    let overview = !backdrop.is_empty();
+    // Judged by the windows that sit on this monitor: one that merely reaches
+    // over from the next monitor must not un-fullscreen it.
+    let fullscreen = !overview
+        && windows
+            .iter()
+            .rev()
+            .find(|p| output_geo.to_f64().contains(p.rect.loc + p.rect.size.downscale(2.0).to_point()))
+            .is_some_and(|p| with_state(&p.window, |s| s.placement == Placement::Fullscreen));
+    let mut layer = |renderer: &mut GlesRenderer, which| {
+        layer_elements(renderer, popups, output, output_loc, which, scale, now)
+    };
+    // Under the windows: the overview's backdrop, or the bottom and
+    // background layers.
+    let lower = if overview {
+        backdrop
+    } else {
+        let mut lower = layer(renderer, Layer::Bottom);
+        lower.extend(layer(renderer, Layer::Background));
+        lower
+    };
     let mut layers: Vec<Vec<OutputElement>> = Vec::with_capacity(windows.len() + closing.len());
     let mut top_window_layer = None;
     for (index, placed) in windows.iter().enumerate() {
@@ -267,11 +292,26 @@ pub fn output_elements(
                 !with_state(&below.window, |s| s.minimized) && rect.overlaps(placed.rect)
             })
             .map(|below| &below.window);
-        layers.push(window_elements(
+        // What a live-blurred window's frost sees: everything below it.
+        let below: Vec<&OutputElement> = if window_frost.as_ref().is_some_and(|f| f.live.is_some())
+            && crate::frost::WindowFrost::wants(&placed.window)
+        {
+            layers
+                .iter()
+                .rev()
+                .flatten()
+                .chain(&lower)
+                .chain(wallpaper)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let elements = window_elements(
             renderer,
             decorations,
             window_frost.as_mut(),
             under,
+            &below,
             &placed.window,
             placed.rect,
             placed.zoom,
@@ -279,7 +319,8 @@ pub fn output_elements(
             scale,
             now,
             1.0,
-        ));
+        );
+        layers.push(elements);
     }
     for closed in closing.iter().filter(|c| c.below >= windows.len()) {
         layers.push(closing_elements(closed, output_loc, scale, now));
@@ -296,23 +337,10 @@ pub fn output_elements(
     }
     let window_elements = layers.into_iter().rev().flatten();
 
-    // Layer-shell stacking (see layers.rs); a fullscreen window covers the panel.
-    let overview = !backdrop.is_empty();
-    // Judged by the windows that sit on this monitor: one that merely reaches
-    // over from the next monitor must not un-fullscreen it.
-    let fullscreen = !overview
-        && windows
-            .iter()
-            .rev()
-            .find(|p| output_geo.to_f64().contains(p.rect.loc + p.rect.size.downscale(2.0).to_point()))
-            .is_some_and(|p| with_state(&p.window, |s| s.placement == Placement::Fullscreen));
-    let mut layer = |renderer: &mut GlesRenderer, which| {
-        layer_elements(renderer, popups, output, output_loc, which, scale, now)
-    };
     let mut elements = layer(renderer, Layer::Overlay);
     if !fullscreen {
         elements.extend(layer(renderer, Layer::Top));
-        elements.extend(frost);
+        *frost_at = Some(elements.len());
     }
     *panels = elements.len();
     elements.extend(over_windows);
@@ -320,12 +348,7 @@ pub fn output_elements(
     if fullscreen {
         elements.extend(layer(renderer, Layer::Top));
     }
-    if overview {
-        elements.extend(backdrop);
-    } else {
-        elements.extend(layer(renderer, Layer::Bottom));
-        elements.extend(layer(renderer, Layer::Background));
-    }
+    elements.extend(lower);
     // Popups that just closed, fading out on top of everything.
     let output_geo = Rectangle::new(
         output_loc,
@@ -335,6 +358,8 @@ pub fn output_elements(
         }),
     );
     let mut closing = popups.closing_elements(output_geo, scale, now);
+    // The frost goes in below them too.
+    *frost_at = frost_at.map(|at| at + closing.len());
     closing.extend(elements);
     closing
 }
@@ -407,6 +432,8 @@ pub(crate) fn window_elements(
     decorations: &mut crate::decorations::Decorations,
     frost: Option<&mut crate::frost::WindowFrost<'_>>,
     under: Option<&Window>,
+    // Everything below the window, top first, for live blur under it.
+    below: &[&OutputElement],
     win: &Window,
     // Where the window geometry is laid out (space coordinates).
     live: Rectangle<f64, Logical>,
@@ -518,7 +545,7 @@ pub(crate) fn window_elements(
             && crate::frost::WindowFrost::wants(win)
         {
             let key = format!("{:?}", win.toplevel().map(|t| t.wl_surface().id()));
-            elements.extend(frost.elements(renderer, &key, rect, frame.alpha, under));
+            elements.extend(frost.elements(renderer, &key, rect, frame.alpha, under, below));
         }
         elements
     })

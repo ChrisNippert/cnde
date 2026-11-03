@@ -948,17 +948,8 @@ impl State {
             // is cut from. Otherwise the frame it arrives in has no frost,
             // and nothing redraws to add it.
             let wallpaper = self.wallpapers.element(&mut gpu.renderer, &output);
-            let start = crate::perf::now();
-            let frost = self.dock_frost.elements(
-                &mut gpu.renderer,
-                &self.wallpapers,
-                &output,
-                &self.config,
-                &self.popup_anims,
-                &crate::frost::Behind::new(&self.space, &output, bar_tint),
-                now,
-            );
-            crate::perf::since("frame.dock_frost", start);
+            let wallpaper = wallpaper.map(render::OutputElement::Wallpaper);
+            let live = self.config.live_blur();
             let start = crate::perf::now();
             let backdrop = match self.space.output_geometry(&output) {
                 Some(geo) => crate::overview::backdrop(
@@ -992,6 +983,8 @@ impl State {
             over_windows.extend(edge_hint);
             let start = crate::perf::now();
             let mut panels = 0;
+            let mut frost_at = None;
+            let base = elements.len();
             elements.extend(render::output_elements(
                 &mut gpu.renderer,
                 &self.space,
@@ -999,7 +992,6 @@ impl State {
                 self.snap_preview.as_mut(),
                 scene.map(|s| s.windows),
                 backdrop,
-                frost,
                 over_windows,
                 &mut self.decorations,
                 &mut self.popup_anims,
@@ -1009,14 +1001,48 @@ impl State {
                     &output,
                     &self.config,
                     now,
+                    live.then_some(&mut self.live_blur),
                 ),
+                wallpaper.as_ref(),
                 &output,
                 now,
                 &mut panels,
+                &mut frost_at,
             ));
             crate::perf::since("frame.windows", start);
+            // The frost goes in once what's below it is known (live blur
+            // blurs that, not the wallpaper).
+            if let Some(at) = frost_at {
+                let start = crate::perf::now();
+                let at = base + at;
+                let frost = {
+                    let below: Vec<&render::OutputElement> =
+                        elements[at..].iter().chain(&wallpaper).collect();
+                    self.dock_frost.elements(
+                        &mut gpu.renderer,
+                        &self.wallpapers,
+                        &output,
+                        &self.config,
+                        &self.popup_anims,
+                        &crate::frost::Behind::new(&self.space, &output, bar_tint),
+                        now,
+                        live.then(|| crate::frost::LiveSource {
+                            blur: &mut self.live_blur,
+                            below: &below,
+                        }),
+                    )
+                };
+                panels += frost.len();
+                elements.splice(at..at, frost);
+                crate::perf::since("frame.dock_frost", start);
+            }
+            if live {
+                self.live_blur.finish(&output);
+            } else {
+                self.live_blur.release();
+            }
             if let Some(wallpaper) = wallpaper {
-                elements.push(render::OutputElement::Wallpaper(wallpaper));
+                elements.push(wallpaper);
             }
             // The window switcher goes over everything, under the pointer.
             let start = crate::perf::now();
@@ -1032,6 +1058,7 @@ impl State {
                     &output,
                     &self.config,
                     now,
+                    None,
                 ),
                 now,
             );
