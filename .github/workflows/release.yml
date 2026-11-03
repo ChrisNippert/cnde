@@ -34,7 +34,7 @@ jobs:
       - name: Install build dependencies
         run: >
           pacman -Syu --noconfirm --needed
-          git rust github-cli libdrm libinput libxkbcommon mesa pam seatd systemd-libs
+          git rust github-cli ttf-dejavu libdrm libinput libxkbcommon mesa pam seatd systemd-libs
 
       - uses: actions/checkout@v4
         with:
