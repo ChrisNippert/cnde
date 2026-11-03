@@ -26,6 +26,8 @@ pub enum Event {
     OverviewClosed,
     /// Super+A: show the app grid (or hide it, if it's showing).
     ToggleAppGrid,
+    /// Show or hide the on-screen keyboard (the `osk` shortcut).
+    ToggleOsk,
     /// Every open window, sent whenever the list, a title or the focus
     /// changes (and right after connecting).
     Windows {
@@ -319,6 +321,13 @@ pub enum Request {
     /// Testing aid, debug builds only: as if this key were pressed.
     FakeMediaKey {
         key: MediaKey,
+    },
+    /// The on-screen keyboard pressed or released a key: `keycode` is the
+    /// evdev code (KEY_A is 30). Handled as a real key is, so bindings,
+    /// layouts and modifiers all apply.
+    OskKey {
+        keycode: u32,
+        pressed: bool,
     },
     /// Debug builds only: run the key binding for keysym `sym` with the
     /// mod key (and Shift, Alt) held, as if pressed.

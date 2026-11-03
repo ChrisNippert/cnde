@@ -143,11 +143,31 @@ impl State {
     }
 
     fn on_keyboard<I: InputBackend>(&mut self, event: I::KeyboardKeyEvent) {
+        self.key_input(event.key_code(), event.state(), event.time_msec());
+    }
+
+    /// The on-screen keyboard (IPC `OskKey`): press or release the key
+    /// with this evdev code, the same as a real one.
+    pub fn osk_key(&mut self, evdev: u32, pressed: bool) {
+        let state = if pressed {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
+        let time = self.start_time.elapsed().as_millis() as u32;
+        self.key_input((evdev + 8).into(), state, time);
+    }
+
+    /// A key press or release, from a keyboard or the on-screen one.
+    fn key_input(
+        &mut self,
+        keycode: smithay::input::keyboard::Keycode,
+        key_state: KeyState,
+        time: u32,
+    ) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
-        let keycode = event.key_code();
-        let key_state = event.state();
         let mod_key = self.mod_key;
 
         let action = keyboard.input::<Option<Action>, _>(
@@ -155,7 +175,7 @@ impl State {
             keycode,
             key_state,
             SERIAL_COUNTER.next_serial(),
-            event.time_msec(),
+            time,
             |state, mods, handle| {
                 let is_mod = keybinds::is_mod_key(mod_key, handle.modified_sym());
                 if key_state == KeyState::Released && is_mod && state.mod_tap_armed {
@@ -417,6 +437,7 @@ impl State {
                 }
             }
             Action::ShowDesktop => self.toggle_show_desktop(),
+            Action::ToggleOsk => self.ipc.broadcast(&cnde_ipc::Event::ToggleOsk),
             Action::CloseWindow => self.close_focused(),
             // On a tiling workspace the arrows move focus between tiles.
             Action::Maximize if self.tiling_here() => self.focus_direction(Direction::Up),

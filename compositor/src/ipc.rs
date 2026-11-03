@@ -182,6 +182,7 @@ impl State {
                 Request::FakePointer { .. }
                     | Request::FakeMediaKey { .. }
                     | Request::FakeKey { .. }
+                    | Request::OskKey { .. }
             )
         {
             return;
@@ -277,6 +278,7 @@ impl State {
                 self.fake_key(sym, shift, alt)
             }
             Request::FakeKey { .. } => {}
+            Request::OskKey { keycode, pressed } => self.osk_key(keycode, pressed),
             Request::CancelScreenshot => {
                 if self.screenshot.active {
                     self.cancel_screenshot();

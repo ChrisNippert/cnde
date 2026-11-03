@@ -20,6 +20,7 @@ mod media;
 mod menu;
 mod notifications;
 mod osd;
+mod osk;
 mod panel;
 mod polkit;
 mod quick_settings;
@@ -260,6 +261,7 @@ pub struct App {
     launches: apps::LaunchCounts,
     /// The volume or brightness level, shown after its key.
     osd: Option<osd::Osd>,
+    osk: Option<osk::Osk>,
     /// The polkit agent's password dialog.
     polkit: polkit::Polkit,
     notifications: notifications::Notifications,
@@ -407,6 +409,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         apps_tx,
         launches: apps::LaunchCounts::load(),
         osd: None,
+        osk: None,
         polkit: polkit::Polkit::default(),
         notifications: notifications::Notifications::default(),
         history: history::History::default(),
@@ -580,6 +583,7 @@ impl App {
                 ));
             }
             cnde_ipc::Event::MediaKey { key } => self.media_key(key),
+            cnde_ipc::Event::ToggleOsk => self.toggle_osk(),
             cnde_ipc::Event::ToggleAppGrid => {
                 if let Some(launcher) = &mut self.launcher {
                     launcher.toggle_grid(&self.theme, self.apps.len());
@@ -1413,6 +1417,8 @@ impl App {
                 tray_popover_open: self.tray_popover.is_some(),
                 power_icon: self.config.panel.power_icon,
                 mic_indicator: self.config.panel.mic_indicator,
+                keyboard_button: self.config.panel.keyboard_button,
+                keyboard_open: self.osk.is_some(),
                 overview_open: self.overview_open,
                 quick_settings_open: self.quick_settings.is_some(),
                 calendar_open: self.calendar.is_some(),
@@ -1554,6 +1560,7 @@ impl CompositorHandler for App {
         }
         self.notifications_frame(surface);
         self.osd_frame(surface);
+        self.osk_frame(surface);
         if let Some(popover) = &mut self.tray_popover
             && popover.popup.wl_surface() == surface
             && popover.frame_done()
@@ -1633,6 +1640,10 @@ impl LayerShellHandler for App {
         if self.osd.as_ref().is_some_and(|o| &o.layer == layer) {
             self.drop_osd();
         }
+        if self.osk.as_ref().is_some_and(|o| &o.layer == layer) {
+            self.drop_osk();
+            self.redraw_panels();
+        }
         self.polkit_closed(layer.wl_surface());
         self.notifications_closed(layer.wl_surface());
         if self
@@ -1669,6 +1680,9 @@ impl LayerShellHandler for App {
         self.notifications_configured(layer.wl_surface());
         if self.osd.as_ref().is_some_and(|o| &o.layer == layer) {
             self.osd_configured();
+        }
+        if self.osk.as_ref().is_some_and(|o| &o.layer == layer) {
+            self.osk_configured();
         }
         if self
             .dock_preview
@@ -1945,6 +1959,26 @@ impl PointerHandler for App {
                 self.dock_click(i, click);
                 continue;
             }
+            if self
+                .osk
+                .as_ref()
+                .is_some_and(|o| o.layer.wl_surface() == &event.surface)
+            {
+                match event.kind {
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        self.osk_motion(Some(event.position))
+                    }
+                    PointerEventKind::Leave { .. } => self.osk_motion(None),
+                    PointerEventKind::Press {
+                        button: BTN_LEFT, ..
+                    } => self.osk_press(event.position),
+                    PointerEventKind::Release {
+                        button: BTN_LEFT, ..
+                    } => self.osk_release(),
+                    _ => {}
+                }
+                continue;
+            }
             if let Some(launcher) = &mut self.launcher
                 && launcher.layer.wl_surface() == &event.surface
             {
@@ -2063,6 +2097,7 @@ impl PointerHandler for App {
                             });
                         }
                     }
+                    Some(Button::Keyboard) => self.toggle_osk(),
                     Some(Button::Tray(_)) | None => {}
                 },
                 _ => {}

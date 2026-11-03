@@ -461,6 +461,7 @@ pub const SHORTCUT_DEFAULTS: &[(&str, &[&str], &str)] = &[
     ("close", &["Super+C", "Alt+F4"], "Close the window"),
     ("lock", &["Super+L"], "Lock the screen"),
     ("app_grid", &["Super+A"], "Show the app grid"),
+    ("osk", &[], "Show or hide the on-screen keyboard"),
     ("show_desktop", &["Super+D"], "Show the desktop, again to bring windows back"),
     ("screenshot", &["Super+Shift+S", "Print"], "Take a screenshot"),
     ("switcher", &["Alt+Tab", "Super+Tab"], "Switch windows"),
@@ -575,6 +576,8 @@ pub struct Panel {
     pub media_controls: bool,
     /// A microphone icon in the status button while an app is recording.
     pub mic_indicator: bool,
+    /// A keyboard button in the bar that shows the on-screen keyboard.
+    pub keyboard_button: bool,
     /// Logical pixels.
     pub height: u32,
     /// Rounded bottom corners and a soft shadow; off, a flat strip.
@@ -621,6 +624,7 @@ impl Default for Panel {
             power_icon: true,
             media_controls: true,
             mic_indicator: true,
+            keyboard_button: true,
             height: 32,
             rounded: false,
             frosted: None,
