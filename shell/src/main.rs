@@ -591,6 +591,8 @@ impl App {
             }
             cnde_ipc::Event::DockPreviewHover { inside } => self.dock_preview_inside(inside),
             cnde_ipc::Event::DockPreviewGone => self.dock_preview_gone(),
+            // Sent to the Settings window alone.
+            cnde_ipc::Event::ShortcutCaptured { .. } => {}
             cnde_ipc::Event::Windows { windows } => {
                 self.windows = windows;
                 self.sync_dock();

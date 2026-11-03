@@ -21,6 +21,8 @@ pub struct IpcClients {
     windows: Option<Vec<WindowInfo>>,
     /// The edges as last sent; `None` forces a resend.
     edges: Option<Vec<OutputEdges>>,
+    /// The client waiting for a key combo (Settings' shortcut capture).
+    pub capture: Option<u64>,
 }
 
 impl IpcClients {
@@ -141,6 +143,9 @@ impl State {
                     let line: Vec<u8> = pending.drain(..=end).collect();
                     match cnde_ipc::decode::<Request>(&line[..line.len() - 1]) {
                         Some(Request::NewToken) => state.send_ipc_token(id),
+                        Some(Request::CaptureShortcut) if !state.lock.is_locked() => {
+                            state.ipc.capture = Some(id)
+                        }
                         Some(request) => state.handle_ipc_request(request),
                         None => debug!(id, "ignoring unknown IPC message"),
                     }
@@ -152,6 +157,9 @@ impl State {
                 }
                 if closed {
                     state.ipc.clients.retain(|(other, _)| *other != id);
+                    if state.ipc.capture == Some(id) {
+                        state.ipc.capture = None;
+                    }
                     return Ok(PostAction::Remove);
                 }
                 Ok(PostAction::Continue)
@@ -245,7 +253,7 @@ impl State {
                     toplevel.send_close();
                 }
             }
-            Request::NewToken => {}
+            Request::NewToken | Request::CaptureShortcut => {}
             Request::LockScreen => self.lock_screen(),
             Request::LogOut => self.loop_signal.stop(),
             Request::Perf { on } => crate::perf::set(on),
@@ -286,6 +294,19 @@ impl State {
             .as_str()
             .to_string();
         let line = cnde_ipc::encode(&Event::Token { token });
+        if let Some((_, stream)) = self.ipc.clients.iter_mut().find(|(id, _)| *id == client)
+            && stream.write_all(&line).is_err()
+        {
+            self.ipc.clients.retain(|(id, _)| *id != client);
+        }
+    }
+
+    /// Hand the combo to the client capturing one, and stop capturing.
+    pub fn send_captured_shortcut(&mut self, combo: String) {
+        let Some(client) = self.ipc.capture.take() else {
+            return;
+        };
+        let line = cnde_ipc::encode(&Event::ShortcutCaptured { combo });
         if let Some((_, stream)) = self.ipc.clients.iter_mut().find(|(id, _)| *id == client)
             && stream.write_all(&line).is_err()
         {

@@ -72,6 +72,13 @@ pub enum Event {
     /// The dock's window preview went away by itself (a thumbnail was
     /// clicked, or its windows closed).
     DockPreviewGone,
+    /// The key combo pressed while this client had a
+    /// [`Request::CaptureShortcut`] open, in the config's format ("Super+Shift+S").
+    /// Sent to that client alone; the capture is over. Plain keys come as
+    /// themselves ("Escape", "BackSpace").
+    ShortcutCaptured {
+        combo: String,
+    },
 }
 
 /// Which side of its anchor a popup opens on.
@@ -227,6 +234,10 @@ pub enum Request {
     CancelScreenshot,
     /// Open the screenshot tool, as Super+Shift+S does.
     OpenScreenshot,
+    /// Report the next key combo pressed (to this connection alone, as
+    /// [`Event::ShortcutCaptured`]) instead of acting on it. Ends with that
+    /// combo or when this connection closes.
+    CaptureShortcut,
     /// Minimize these windows (those on screen; others are left alone).
     MinimizeWindows {
         ids: Vec<u64>,

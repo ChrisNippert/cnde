@@ -46,6 +46,8 @@ pub enum Target {
     /// The accent row's "Auto" button: follow the wallpaper.
     AutoAccent(usize),
     Advanced,
+    /// The sidebar's search field.
+    Search,
     /// The header's back button, on a sub-page.
     Back,
 }
@@ -103,6 +105,12 @@ pub struct Ui {
     /// The dropdown that's open.
     pub popover: Option<Key>,
     pub edit: Option<Edit>,
+    /// What the sidebar's search is looking for; results replace the page.
+    pub search: String,
+    /// The shortcut row waiting for a key combo.
+    pub capturing: Option<Key>,
+    /// Why the last captured combo wasn't used, under its row.
+    pub shortcut_note: Option<(Key, String)>,
     /// Shown at the bottom until it times out.
     pub error: Option<String>,
     /// Square corners when maximized or tiled.
@@ -144,6 +152,11 @@ pub struct Ui {
 }
 
 impl Ui {
+    /// Whether search results are showing instead of a page.
+    pub fn searching(&self) -> bool {
+        !self.search.trim().is_empty()
+    }
+
     /// The sub-page showing, by its title: the Wi-Fi network whose details
     /// are open, while it's still connected or saved.
     pub fn sub_page(&self) -> Option<&str> {
@@ -275,7 +288,11 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
     // The page's title on the left, the window buttons on the right. A
     // sub-page's title has a back button before it.
     let mut title_x = sw + SIDE_PAD;
-    let title = ui.sub_page().unwrap_or(ui.page.title());
+    let title = if ui.searching() {
+        "Search"
+    } else {
+        ui.sub_page().unwrap_or(ui.page.title())
+    };
     if ui.sub_page().is_some() {
         let size = 28.0;
         let back = Rect::new(sw + 16.0, (hh - size) / 2.0, size, size);
@@ -438,7 +455,16 @@ fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h:
     } else {
         t.window_text
     };
-    let mut y = hh + 4.0;
+    let field = Rect::new(10.0, hh + 2.0, sw - 21.0, t.button_height);
+    match &ui.edit {
+        Some(edit) if edit.key == Key::Search => {
+            p.entry(field, &edit.text, "Search", Some(edit.cursor), false)
+        }
+        _ => p.entry(field, &ui.search, "Search", None, false),
+    }
+    out.hits.push((field, Target::Search));
+    let mut y = field.bottom() + 8.0;
+    let top = y;
     let mut section = "";
     for page in Page::visible(&ui.config) {
         if y + t.sidebar_row_height > h {
@@ -447,7 +473,7 @@ fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h:
         if page.section() != section {
             section = page.section();
             // Quiet, like a group title on a page.
-            y += if y > hh + 4.0 { 8.0 } else { 0.0 };
+            y += if y > top { 8.0 } else { 0.0 };
             p.label(section, 20.0, y + 4.0, 11.0, Weight::Bold, t.window_dim);
             y += 22.0;
         }
@@ -491,21 +517,20 @@ fn page(
     offset: f32,
 ) {
     let t = p.theme;
-    let groups = pages::build(
-        ui.page,
-        &ui.config,
-        &ui.displays,
-        pages::WifiView {
-            state: ui.wifi.as_ref(),
-            join: ui.wifi_join.as_ref(),
-            details: ui.sub_page(),
-        },
-        ui.bluetooth.as_ref(),
-        ui.brightness,
-        ui.power_mode.as_ref(),
-        ui.default_apps.as_ref(),
-        ui.sound.as_ref(),
-    );
+    let searching = ui.searching();
+    let mut groups = if searching {
+        crate::search::results(ui, &ui.search)
+    } else {
+        pages::build_for(ui, ui.page)
+    };
+    // Why a captured combo was refused, under its row.
+    if let Some((key, note)) = &ui.shortcut_note {
+        for row in groups.iter_mut().flat_map(|g| &mut g.rows) {
+            if row.key == *key {
+                row.subtitle = note.clone();
+            }
+        }
+    }
     let show_advanced = ui.advanced;
     let col_w = (area.w - 2.0 * SIDE_PAD).min(MAX_COLUMN);
     let x = area.x + (area.w - col_w) / 2.0;
@@ -666,7 +691,10 @@ fn paint_row(
     }
     let activatable = matches!(
         row.control,
-        Control::Switch { .. } | Control::Dropdown(_) | Control::Network { .. }
+        Control::Switch { .. }
+            | Control::Dropdown(_)
+            | Control::Network { .. }
+            | Control::Shortcut
     );
     let row_hover = if activatable {
         hover(a, ui, Target::Row(index))
@@ -865,6 +893,20 @@ fn paint_row(
                 Weight::Normal,
                 t.window_dim,
             );
+            right - tw
+        }
+        Control::Shortcut => {
+            let waiting = ui.capturing.as_ref() == Some(&row.key);
+            let (text, ink) = if waiting {
+                ("Press new shortcut\u{2026}", t.accent)
+            } else if row.value.as_str().is_empty() {
+                ("Off", t.window_dim)
+            } else {
+                (row.value.as_str(), t.window_dim)
+            };
+            let max = (rect.w * 0.6).max(120.0);
+            let tw = p.measure(text, t.font_size, Weight::Normal).min(max);
+            p.label_v(text, right - tw, cy, tw + 1.0, t.font_size, Weight::Normal, ink);
             right - tw
         }
         Control::Wallpapers | Control::Arrangement | Control::Mixer => unreachable!(),
@@ -1392,6 +1434,9 @@ mod tests {
             hover: None,
             popover: None,
             edit: None,
+            search: String::new(),
+            capturing: None,
+            shortcut_note: None,
             error: None,
             rounded: true,
             frosted: false,
@@ -1652,10 +1697,27 @@ mod tests {
         for page in Page::ALL {
             let mut ui = ui(page);
             let painted = render(&ui, &format!("{page:?}"));
-            assert!(painted.hit((20.0, 90.0)).is_some(), "{page:?}: sidebar");
+            assert!(painted.hit((20.0, 130.0)).is_some(), "{page:?}: sidebar");
             ui.advanced = true;
             render(&ui, &format!("{page:?}-advanced"));
         }
+    }
+
+    /// Search lists matching rows from every page, with their controls.
+    #[test]
+    fn search_lists_rows_across_pages() {
+        let mut ui = ui(Page::Appearance);
+        ui.search = "night light".into();
+        let painted = render(&ui, "search");
+        assert!(painted.rows.iter().any(|r| r.key == Key::Path("night_light.schedule")));
+        assert!(painted.rows.iter().all(|r| matches!(r.key, Key::Path(_))));
+        ui.search = "open terminal".into();
+        let painted = render(&ui, "search-shortcut");
+        assert!(painted.rows.iter().any(|r| r.key == Key::Shortcut("terminal")));
+        ui.capturing = Some(Key::Shortcut("terminal"));
+        ui.search = "zzzz".into();
+        let painted = render(&ui, "search-none");
+        assert!(painted.rows.is_empty());
     }
 
     #[test]

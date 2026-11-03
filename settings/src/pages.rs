@@ -188,6 +188,10 @@ pub enum Key {
     /// Not in the config: the default app for a category (by id), in
     /// `mimeapps.list`.
     DefaultApp(&'static str),
+    /// `shortcuts.<action>`: its combos, comma-separated in the value.
+    Shortcut(&'static str),
+    /// Not in the config: the sidebar's search field.
+    Search,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -277,6 +281,19 @@ impl Key {
                 None => file.remove_output(name, field),
             },
             Key::Arrangement => {}
+            Key::Shortcut(name) => {
+                let path = format!("shortcuts.{name}");
+                if *value == Value::Unset {
+                    file.remove(&path);
+                } else {
+                    let mut keys = cnde_config::toml_edit::Array::new();
+                    for key in value.as_str().split(", ").filter(|k| !k.is_empty()) {
+                        keys.push(key);
+                    }
+                    file.set(&path, keys);
+                }
+            }
+            Key::Search => {}
             Key::OutputMode { name, .. } => {
                 let parsed = value.as_str().split_once('x').and_then(|(w, rest)| {
                     let (h, hz) = match rest.split_once('@') {
@@ -387,6 +404,8 @@ pub enum Control {
     Color {
         placeholder: &'static str,
     },
+    /// A shortcut's combos; clicking captures a new first one.
+    Shortcut,
 }
 
 /// The colours offered under a colour row: a light, a bright and a deep
@@ -647,6 +666,25 @@ pub fn build(
         Page::DefaultApps => default_apps_page(c, &d, default_apps),
         Page::Accessibility => accessibility(c, &d),
     }
+}
+
+/// The groups of `page` as the window has them now.
+pub fn build_for(ui: &crate::view::Ui, page: Page) -> Vec<Group> {
+    build(
+        page,
+        &ui.config,
+        &ui.displays,
+        WifiView {
+            state: ui.wifi.as_ref(),
+            join: ui.wifi_join.as_ref(),
+            details: ui.sub_page(),
+        },
+        ui.bluetooth.as_ref(),
+        ui.brightness,
+        ui.power_mode.as_ref(),
+        ui.default_apps.as_ref(),
+        ui.sound.as_ref(),
+    )
 }
 
 /// A row that isn't a config key (its value is also its default, so no
@@ -2128,35 +2166,45 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
     ]
 }
 
-/// The shortcuts as set, read-only; they're edited in config.toml.
+/// The shortcuts as set. The built-in ones are edited here by clicking;
+/// custom ones (which run a command) are edited in config.toml.
 fn shortcuts_group(shortcuts: &cnde_config::Shortcuts) -> Group {
-    let info = |title: &str, keys: &[String]| {
-        let text = if keys.is_empty() {
+    let text = |keys: &[String]| {
+        if keys.is_empty() {
             "Off".to_string()
         } else {
             keys.join(", ")
-        };
-        wifi_row(
-            WifiKey::Detail(title.to_string()),
-            title,
-            Control::Info,
-            Value::Str(text),
-        )
+        }
     };
     let mut rows: Vec<Row> = cnde_config::SHORTCUT_DEFAULTS
         .iter()
-        .map(|(name, _, label)| info(label, shortcuts.bindings.get(*name).map_or(&[][..], |k| k)))
+        .map(|(name, default, label)| {
+            let keys = shortcuts.bindings.get(*name).map_or(&[][..], |k| k);
+            let default: Vec<String> = default.iter().map(|k| k.to_string()).collect();
+            // The value is the combos alone; "Off" is only how it shows.
+            Row {
+                key: Key::Shortcut(name),
+                title: label.to_string(),
+                subtitle: String::new(),
+                control: Control::Shortcut,
+                value: Value::Str(keys.join(", ")),
+                default: Value::Str(default.join(", ")),
+                advanced: false,
+                disabled: false,
+            }
+        })
         .collect();
-    rows.extend(
-        shortcuts
-            .custom
-            .iter()
-            .map(|custom| info(&custom.command, &custom.keys)),
-    );
+    rows.extend(shortcuts.custom.iter().map(|custom| {
+        wifi_row(
+            WifiKey::Detail(custom.command.clone()),
+            &custom.command,
+            Control::Info,
+            Value::Str(text(&custom.keys)),
+        )
+    }));
     Group {
         title: "Shortcuts".into(),
-        description: "Edit in config.toml, under [shortcuts]. Super is Alt when running nested."
-            .into(),
+        description: "Click one to press a new combo; Backspace turns it off. Super is Alt when running nested.".into(),
         rows,
     }
 }
