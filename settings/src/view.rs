@@ -322,15 +322,6 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         out.hits.push((back, Target::Back));
         title_x = back.right() + 8.0;
     }
-    p.label_v(
-        title,
-        title_x,
-        hh / 2.0,
-        w - title_x - 140.0,
-        t.window_title_size,
-        Weight::Bold,
-        t.window_text,
-    );
     let size = 22.0;
     let shown_buttons = match ui.config.appearance.window_buttons {
         cnde_config::WindowButtons::All => 3.0,
@@ -364,6 +355,21 @@ pub fn paint(ui: &Ui, res: &mut Res, canvas: &mut Canvas<'_>) -> Painted {
         let hit = Rect::new(toggle.x - 6.0, 0.0, toggle.w + 12.0, hh);
         out.hits.push((hit, Target::Advanced));
     }
+    // The title stops short of the Advanced toggle, when that's shown.
+    let title_w = if toggle.x > title_x + 120.0 {
+        toggle.x - 12.0 - title_x
+    } else {
+        w - title_x - 140.0
+    };
+    p.label_v(
+        title,
+        title_x,
+        hh / 2.0,
+        title_w.max(0.0),
+        t.window_title_size,
+        Weight::Bold,
+        t.window_text,
+    );
     let maximize_icon = if ui.rounded {
         "window-maximize-symbolic"
     } else {
