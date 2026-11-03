@@ -14,6 +14,11 @@
 //! (normalize, motion, swipes) is shared: a lane is normalized as a strip
 //! with one monitor, and `State::strip_view` hands drawing code either the
 //! global strip or one lane in the same shape.
+//!
+//! `workspaces.mode = "joined"` is individual mode with the lanes kept in
+//! lockstep: every lane has the same length and the same active position,
+//! so the monitors show workspace n together, each with its own windows
+//! on it. One motion moves all lanes.
 
 use std::{
     collections::HashMap,
@@ -76,6 +81,9 @@ pub struct Workspaces<W = Window> {
     pub motion: Option<StripMotion>,
     /// Individual mode (and then `lanes` has the strips, by output name).
     pub individual: bool,
+    /// Joined mode (implies `individual`): the lanes move in lockstep, and
+    /// `active` is every lane's active position.
+    pub joined: bool,
     pub lanes: HashMap<String, Lane>,
 }
 
@@ -86,6 +94,13 @@ pub struct Lane {
     pub ids: Vec<WorkspaceId>,
     /// Position in `ids` of the workspace on the monitor.
     pub active: usize,
+}
+
+impl Lane {
+    /// Active position and length.
+    fn pair(&self) -> (usize, usize) {
+        (self.active, self.ids.len())
+    }
 }
 
 /// The strip sliding between two resting positions.
@@ -124,6 +139,7 @@ impl<W: PartialEq + Clone> Workspaces<W> {
             next_id: 1,
             motion: None,
             individual: false,
+            joined: false,
             lanes: HashMap::new(),
         };
         workspaces.push_empty();
@@ -179,10 +195,184 @@ impl<W: PartialEq + Clone> Workspaces<W> {
             .map_or(self.active, |l| l.active)
     }
 
-    /// Number of workspaces in `lane` (`None`: the global strip).
+    /// Number of workspaces in `lane` (`None`: the global strip, or in
+    /// joined mode any lane, which all have the same).
     pub fn len_of(&self, lane: Option<&str>) -> usize {
-        lane.and_then(|name| self.lanes.get(name))
-            .map_or(self.list.len(), |l| l.ids.len())
+        let lane = lane.and_then(|name| self.lanes.get(name));
+        match lane {
+            Some(l) => l.ids.len(),
+            None if self.joined => self.lanes.values().map(|l| l.ids.len()).max().unwrap_or(0),
+            None => self.list.len(),
+        }
+    }
+
+    /// Which mode the strips are in right now.
+    pub fn mode(&self) -> cnde_config::WorkspaceMode {
+        use cnde_config::WorkspaceMode;
+        match (self.joined, self.individual) {
+            (true, _) => WorkspaceMode::Joined,
+            (_, true) => WorkspaceMode::Individual,
+            _ => WorkspaceMode::Continuous,
+        }
+    }
+
+    /// Joined mode: every lane rests at position `to`.
+    pub fn set_active_all(&mut self, to: usize) {
+        self.active = to;
+        if self.joined {
+            for lane in self.lanes.values_mut() {
+                lane.active = to;
+            }
+        }
+    }
+
+    /// Joined mode: give every lane the same length and active position by
+    /// adding empty workspaces at the front and back of the short ones.
+    /// Windows stay on the workspaces they are on, so nothing moves on
+    /// screen.
+    pub fn align_lanes(&mut self) {
+        let front = self.lanes.values().map(|l| l.active).max().unwrap_or(0);
+        let back = (self.lanes.values())
+            .map(|l| l.ids.len().saturating_sub(l.active))
+            .max()
+            .unwrap_or(1);
+        let names: Vec<String> = self.lanes.keys().cloned().collect();
+        for name in names {
+            let (active, len) = self.lanes[&name].pair();
+            let (add_front, add_back) = (front - active, back - (len - active).min(back));
+            let mut ids = Vec::new();
+            for _ in 0..add_front {
+                ids.push(self.new_empty_id());
+            }
+            ids.extend(self.lanes[&name].ids.iter().copied());
+            for _ in 0..add_back {
+                ids.push(self.new_empty_id());
+            }
+            let lane = self.lanes.get_mut(&name).expect("lane listed above");
+            lane.ids = ids;
+            lane.active = front;
+        }
+        self.active = front;
+    }
+
+    /// A new empty workspace in `list` (in no lane yet); returns its id.
+    fn new_empty_id(&mut self) -> WorkspaceId {
+        self.push_empty();
+        self.list[self.list.len() - 1].id
+    }
+
+    /// Joined mode: does any lane have windows at `position`?
+    pub fn occupied_at(&self, position: usize) -> bool {
+        self.lanes.values().any(|lane| {
+            lane.ids.get(position).is_some_and(|id| {
+                self.list
+                    .iter()
+                    .any(|ws| ws.id == *id && !ws.windows.is_empty())
+            })
+        })
+    }
+
+    /// Joined mode: drop `position` from every lane (it must be empty).
+    fn remove_position(&mut self, position: usize) {
+        let gone: Vec<WorkspaceId> = (self.lanes.values_mut())
+            .filter(|lane| position < lane.ids.len())
+            .map(|lane| lane.ids.remove(position))
+            .collect();
+        self.list.retain(|ws| !gone.contains(&ws.id));
+    }
+
+    /// Joined mode: a new empty workspace at `position` in every lane
+    /// (`None`: at the end).
+    fn insert_position(&mut self, position: Option<usize>) {
+        let names: Vec<String> = self.lanes.keys().cloned().collect();
+        for name in names {
+            let id = self.new_empty_id();
+            let lane = self.lanes.get_mut(&name).expect("lane listed above");
+            match position {
+                Some(p) => lane.ids.insert(p, id),
+                None => lane.ids.push(id),
+            }
+        }
+    }
+
+    /// Joined mode: a monitor went away; its windows move to the same
+    /// workspace on `into`'s lane and its workspaces go.
+    pub fn fold_lane(&mut self, name: &str, into: &str) {
+        let Some(gone) = self.lanes.remove(name) else {
+            return;
+        };
+        self.ensure_lane(into);
+        let target = self.lanes[into].ids.clone();
+        for (i, id) in gone.ids.iter().enumerate() {
+            let Some(from) = self.list.iter().position(|ws| ws.id == *id) else {
+                continue;
+            };
+            let ws = self.list.remove(from);
+            let dest = target
+                .get(i)
+                .and_then(|t| self.list.iter().position(|w| w.id == *t));
+            match dest {
+                Some(d) => self.list[d].windows.extend(ws.windows),
+                // Past the end of the other lane: keep it reachable there.
+                None => {
+                    let id = ws.id;
+                    self.list.push(ws);
+                    if let Some(lane) = self.lanes.get_mut(into) {
+                        lane.ids.push(id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Joined mode: tidy all lanes together like the global strip with a
+    /// single monitor, where a workspace counts as empty only if it is on
+    /// every monitor. `names` are the monitors; new ones join at the
+    /// active workspace and gone ones fold into `main`.
+    pub fn normalize_joined(&mut self, names: &[String], main: usize) {
+        let gone: Vec<String> = (self.lanes.keys())
+            .filter(|name| !names.contains(name))
+            .cloned()
+            .collect();
+        let anchor = names[main.min(names.len() - 1)].clone();
+        for name in gone {
+            self.fold_lane(&name, &anchor);
+        }
+        for name in names {
+            self.lanes.entry(name.clone()).or_default();
+        }
+        self.align_lanes();
+        // Hidden empty ones, except the spares at each end.
+        let mut i = self.len_of(None);
+        while i > 0 {
+            i -= 1;
+            let last = self.len_of(None) - 1;
+            if !self.occupied_at(i) && i != self.active && i != 0 && i != last {
+                self.remove_position(i);
+                if i < self.active {
+                    self.active -= 1;
+                }
+            }
+        }
+        while self.active < 1 || self.occupied_at(0) {
+            self.insert_position(Some(0));
+            self.active += 1;
+        }
+        while self.active > 1 && !self.occupied_at(0) && !self.occupied_at(1) {
+            self.remove_position(0);
+            self.active -= 1;
+        }
+        while self.len_of(None) <= self.active + 1 || self.occupied_at(self.len_of(None) - 1) {
+            self.insert_position(None);
+        }
+        while self.len_of(None) > self.active + 2
+            && !self.occupied_at(self.len_of(None) - 1)
+            && !self.occupied_at(self.len_of(None) - 2)
+        {
+            self.remove_position(self.len_of(None) - 1);
+        }
+        let active = self.active;
+        self.set_active_all(active);
     }
 
     /// Index into `list` of the workspace at `position` of `lane` (`None`:
@@ -246,6 +436,7 @@ impl<W: PartialEq + Clone> Workspaces<W> {
             next_id: self.next_id,
             motion: None,
             individual: false,
+            joined: false,
             lanes: HashMap::new(),
         };
         if strip.list.is_empty() {
@@ -323,6 +514,16 @@ impl<W: PartialEq + Clone> Workspaces<W> {
             self.lanes.insert(name.clone(), lane);
         }
         self.individual = true;
+        self.joined = false;
+    }
+
+    /// Continuous or individual to joined: see `align_lanes`.
+    pub fn become_joined(&mut self, outputs: &[String], main: usize) {
+        if !self.individual {
+            self.become_individual(outputs, main);
+        }
+        self.joined = true;
+        self.align_lanes();
     }
 
     /// Individual to continuous: one strip of every lane's workspaces
@@ -365,6 +566,7 @@ impl<W: PartialEq + Clone> Workspaces<W> {
         self.list.extend(old);
         self.lanes.clear();
         self.individual = false;
+        self.joined = false;
     }
 
     pub(crate) fn index_of(&self, window: &W) -> Option<usize> {
@@ -587,11 +789,8 @@ impl State {
         let order = (0..self.workspaces.len_of(Some(&name)))
             .filter_map(|p| self.workspaces.index_at(Some(&name), p))
             .collect();
-        let moving = self
-            .workspaces
-            .motion
-            .as_ref()
-            .is_some_and(|m| m.lane.as_deref() == Some(name.as_str()));
+        let moving = (self.workspaces.motion.as_ref())
+            .is_some_and(|m| self.workspaces.joined || m.lane.as_deref() == Some(name.as_str()));
         let position = if moving {
             self.workspaces.position(now)
         } else {
@@ -678,15 +877,18 @@ impl State {
     pub(crate) fn normalize_workspaces(&mut self) {
         let (outputs, main) = self.strip_outputs();
         let names: Vec<String> = outputs.iter().map(|o| o.name()).collect();
-        let individual = self.config.workspaces.mode == cnde_config::WorkspaceMode::Individual;
-        let switched = !names.is_empty() && individual != self.workspaces.individual;
+        let mode = self.config.workspaces.mode;
+        let switched = !names.is_empty() && mode != self.workspaces.mode();
         if switched {
-            self.switch_workspace_mode(&names, main, individual);
+            self.switch_workspace_mode(&names, main, mode);
         }
         if !self.workspaces.individual {
             let right_of_main = outputs.len().saturating_sub(main + 1);
             self.workspaces.normalize(main, right_of_main);
-        } else if !names.is_empty() {
+        } else if names.is_empty() {
+        } else if self.workspaces.joined {
+            self.workspaces.normalize_joined(&names, main);
+        } else {
             self.normalize_lanes(&names, main);
         }
         if switched {
@@ -715,7 +917,13 @@ impl State {
     /// the strip into per-monitor strips or back. See `become_individual`
     /// and `become_continuous` for where the workspaces end up; every
     /// window keeps its workspace, so none is lost.
-    fn switch_workspace_mode(&mut self, names: &[String], main: usize, individual: bool) {
+    fn switch_workspace_mode(
+        &mut self,
+        names: &[String],
+        main: usize,
+        mode: cnde_config::WorkspaceMode,
+    ) {
+        use cnde_config::WorkspaceMode;
         self.store_local_positions();
         // The motion's destination counts as where things are.
         if let Some(motion) = self.workspaces.motion.take() {
@@ -725,16 +933,17 @@ impl State {
                 .and_then(|n| self.workspaces.lanes.get_mut(n))
             {
                 Some(lane) => lane.active = motion.to,
-                None => self.workspaces.active = motion.to,
+                None => self.workspaces.set_active_all(motion.to),
             }
         }
-        if individual {
-            self.workspaces.become_individual(names, main);
-        } else {
-            self.workspaces.become_continuous(names, main);
+        match mode {
+            WorkspaceMode::Continuous => self.workspaces.become_continuous(names, main),
+            WorkspaceMode::Individual if self.workspaces.joined => self.workspaces.joined = false,
+            WorkspaceMode::Individual => self.workspaces.become_individual(names, main),
+            WorkspaceMode::Joined => self.workspaces.become_joined(names, main),
         }
         self.workspace_monitor = None;
-        debug!(individual, "workspace mode switched");
+        debug!(?mode, "workspace mode switched");
     }
 
     /// Record every visible window's position relative to its monitor, so
@@ -763,7 +972,9 @@ impl State {
         let carried = if carry { self.focused_window() } else { None };
         // Individual mode: only the strip of the monitor used last moves
         // (a carried window's own monitor), and one at a time.
-        let lane = self
+        // Joined mode: all monitors move together, so the motion has no lane,
+        // but a carried window still lands on its own monitor's.
+        let monitor = self
             .workspaces
             .individual
             .then(|| {
@@ -774,15 +985,15 @@ impl State {
                     .map(|o| o.name())
             })
             .flatten();
-        if let Some(name) = &lane {
-            let elsewhere =
-                (self.workspaces.motion.as_ref()).is_some_and(|m| m.lane.as_ref() != Some(name));
+        if let Some(name) = &monitor {
+            let elsewhere = !self.workspaces.joined
+                && (self.workspaces.motion.as_ref()).is_some_and(|m| m.lane.as_ref() != Some(name));
             if elsewhere {
                 self.complete_motion();
             }
             self.workspace_monitor = Some(name.clone());
         }
-        let lane = lane.as_deref();
+        let lane = monitor.as_deref().filter(|_| !self.workspaces.joined);
         if !self.workspaces.is_moving() {
             // Make sure the spare workspaces at both ends exist.
             self.normalize_workspaces();
@@ -801,8 +1012,8 @@ impl State {
         if let Some(window) = &carried {
             // It stays on its monitor, so it joins whichever workspace lands
             // there; drawn fixed on screen meanwhile.
-            let dest = if lane.is_some() {
-                self.workspaces.index_at(lane, target)
+            let dest = if monitor.is_some() {
+                self.workspaces.index_at(monitor.as_deref(), target)
             } else {
                 let (outputs, main) = self.strip_outputs();
                 let monitor = self
@@ -847,19 +1058,20 @@ impl State {
 
     pub fn swipe_begin(&mut self) {
         // Individual mode: the monitor under the fingers' pointer.
-        let lane = self
+        let monitor = self
             .workspaces
             .individual
             .then(|| self.output_under_pointer().map(|o| o.name()))
             .flatten();
-        if let Some(name) = &lane {
-            let elsewhere =
-                (self.workspaces.motion.as_ref()).is_some_and(|m| m.lane.as_ref() != Some(name));
+        if let Some(name) = &monitor {
+            let elsewhere = !self.workspaces.joined
+                && (self.workspaces.motion.as_ref()).is_some_and(|m| m.lane.as_ref() != Some(name));
             if elsewhere {
                 self.complete_motion();
             }
             self.workspace_monitor = Some(name.clone());
         }
+        let lane = monitor.filter(|_| !self.workspaces.joined);
         if !self.workspaces.is_moving() {
             self.normalize_workspaces();
         }
@@ -959,7 +1171,7 @@ impl State {
             .and_then(|name| self.workspaces.lanes.get_mut(name))
         {
             Some(lane) => lane.active = motion.to,
-            None => self.workspaces.active = motion.to,
+            None => self.workspaces.set_active_all(motion.to),
         }
         self.rebuild_space();
         self.normalize_workspaces();
@@ -1434,5 +1646,81 @@ mod tests {
         ws.become_continuous(&names(&["A", "B", "C"]), 1);
         ws.normalize(1, 1);
         assert_eq!(all_windows(&ws), vec![0, 2, 3, 5]);
+    }
+
+    /// Joined lanes: same length and active position.
+    fn assert_lockstep(ws: &Workspaces<u32>, lanes: &[&str]) {
+        let len = ws.len_of(None);
+        for n in lanes {
+            assert_eq!(ws.lanes[*n].ids.len(), len, "{n} length");
+            assert_eq!(ws.lanes[*n].active, ws.active, "{n} active");
+        }
+    }
+
+    #[test]
+    fn joining_lines_the_monitors_up_without_moving_windows() {
+        let mut ws = strip(&[true; 6], 2);
+        ws.become_joined(&names(&["L", "R"]), 0);
+        assert!(ws.joined && ws.individual);
+        assert_lockstep(&ws, &["L", "R"]);
+        assert_eq!(ws.mode(), cnde_config::WorkspaceMode::Joined);
+        assert_eq!(all_windows(&ws), vec![0, 1, 2, 3, 4, 5]);
+        // R still shows its window 3, L its window 2.
+        let shown = |n: &str| {
+            let at = ws.lanes[n].active;
+            ws.list[ws.index_at(Some(n), at).unwrap()].windows.clone()
+        };
+        assert_eq!(shown("L"), vec![2]);
+        assert_eq!(shown("R"), vec![3]);
+    }
+
+    #[test]
+    fn joined_normalize_adds_spares_and_settles() {
+        let mut ws = strip(&[true; 4], 1);
+        ws.become_joined(&names(&["L", "R"]), 0);
+        let n = names(&["L", "R"]);
+        ws.normalize_joined(&n, 0);
+        assert_lockstep(&ws, &["L", "R"]);
+        assert!(!ws.occupied_at(0));
+        assert!(!ws.occupied_at(ws.len_of(None) - 1));
+        assert_eq!(all_windows(&ws), vec![0, 1, 2, 3]);
+        let before = ws.len_of(None);
+        ws.normalize_joined(&n, 0);
+        assert_eq!(ws.len_of(None), before);
+        assert_lockstep(&ws, &["L", "R"]);
+    }
+
+    #[test]
+    fn joined_unplugged_monitor_hands_windows_to_the_same_workspace() {
+        let mut ws = strip(&[true; 4], 1);
+        ws.become_joined(&names(&["L", "R"]), 0);
+        ws.normalize_joined(&names(&["L", "R"]), 0);
+        ws.normalize_joined(&names(&["L"]), 0);
+        assert!(!ws.lanes.contains_key("R"));
+        assert_eq!(all_windows(&ws), vec![0, 1, 2, 3]);
+        assert_lockstep(&ws, &["L"]);
+    }
+
+    #[test]
+    fn joined_new_monitor_starts_empty() {
+        let mut ws = strip(&[true; 3], 1);
+        ws.become_joined(&names(&["L"]), 0);
+        ws.normalize_joined(&names(&["L"]), 0);
+        ws.normalize_joined(&names(&["L", "R"]), 0);
+        assert_lockstep(&ws, &["L", "R"]);
+        let empty = |id: &u64| ws.list.iter().any(|w| w.id == *id && w.windows.is_empty());
+        assert!(ws.lanes["R"].ids.iter().all(empty));
+        assert_eq!(all_windows(&ws), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn joined_to_continuous_loses_nothing() {
+        let mut ws = strip(&[true; 5], 2);
+        ws.become_joined(&names(&["L", "R"]), 0);
+        ws.normalize_joined(&names(&["L", "R"]), 0);
+        ws.become_continuous(&names(&["L", "R"]), 0);
+        assert!(!ws.joined && !ws.individual);
+        ws.normalize(0, 1);
+        assert_eq!(all_windows(&ws), vec![0, 1, 2, 3, 4]);
     }
 }
