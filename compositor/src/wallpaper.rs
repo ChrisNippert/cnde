@@ -7,7 +7,13 @@
 //! color), so nothing ever waits on a large image. The decoded image is
 //! dropped as soon as it's been scaled: only the per-monitor textures stay.
 
-use std::{collections::HashMap, path::PathBuf, sync::mpsc, thread};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use cnde_config::{ColorScheme, Config, Palette, WallpaperFit};
 use image::{RgbaImage, imageops::FilterType};
@@ -20,7 +26,7 @@ use smithay::{
                 Kind,
                 texture::{TextureBuffer, TextureRenderElement},
             },
-            gles::{GlesRenderer, GlesTexture},
+            gles::{GlesRenderer, GlesTexProgram, GlesTexture},
         },
     },
     output::Output,
@@ -29,7 +35,12 @@ use smithay::{
 };
 use tracing::{info, warn};
 
-use crate::{state::State, tint::dominant};
+use crate::{
+    animation::{Animation, Curve, Params},
+    scene_blur,
+    state::State,
+    tint::dominant,
+};
 
 /// What to draw: everything that affects the pixels.
 #[derive(Debug, Clone, PartialEq)]
@@ -74,8 +85,6 @@ struct Job {
     output: String,
     size: Size<i32, Physical>,
     source: Source,
-    /// `appearance.frost`: the blur's strength, in percent.
-    frost: u8,
     generation: u64,
 }
 
@@ -84,9 +93,10 @@ struct Done {
     size: Size<i32, Physical>,
     generation: u64,
     pixels: Vec<u8>,
-    /// The frosted copy, at 1/`BLUR_DOWNSCALE` size.
-    blurred: Vec<u8>,
-    blurred_size: Size<i32, Buffer>,
+    /// The strip along the top is light (see `top_is_light`).
+    top_light: bool,
+    /// A colour to tint UI with (see `wallpaper_tint`).
+    tint: Option<[u8; 3]>,
 }
 
 /// Whether the top strip (where the bar sits) of an RGBA image is light:
@@ -144,11 +154,71 @@ fn image_tint(pixels: &[u8], size: Size<i32, Buffer>) -> Option<[u8; 3]> {
     Some(wallpaper_tint(&sample))
 }
 
-/// The blurred copy is made this many times smaller; the GPU's filtering
-/// smooths it back up, and it costs 1/16 of the memory.
+/// The CPU copy that colours are measured from is made this many times
+/// smaller.
 const BLUR_DOWNSCALE: u32 = 4;
-/// Gaussian sigma at the reduced size (x4 on screen).
+/// Gaussian sigma of that copy at the reduced size.
 const BLUR_SIGMA: f32 = 16.0;
+
+/// The frosted copy kept for drawing is 1/`KEEP` of the wallpaper.
+const KEEP: i32 = 4;
+/// The blur itself runs at 1/`DEEP`, where a few passes reach far.
+const DEEP: i32 = 8;
+/// At 100 %, the CPU blur was sigma 16 then 8 at 1/4 size: sqrt(16^2 + 8^2)
+/// = 17.9 texels, i.e. 8.95 at 1/8. The shader's 9 taps are sigma 1.69 texels
+/// per pass at spread 1, and passes add in quadrature, so n passes of spread
+/// k give 1.69 * k * sqrt(n).
+const TARGET_SIGMA: f32 = 8.95;
+const TAP_SIGMA: f32 = 1.69;
+/// Wider spreads leave comb marks; more passes are used instead.
+const MAX_SPREAD: f32 = 3.5;
+
+/// How long a change of frost strength takes to ease in.
+const FROST_EASE: Params = Params {
+    duration: Duration::from_millis(180),
+    curve: Curve::EaseOutCubic,
+};
+/// A strength this close to the one blurred for isn't blurred again.
+const STRENGTH_EPSILON: f32 = 0.002;
+
+/// The blur passes and tap spread that approximate the old CPU blur at
+/// `strength` (1.0 is 100 %).
+fn blur_plan(strength: f32) -> (usize, f32) {
+    let sigma = TARGET_SIGMA * strength.max(0.0);
+    let passes = ((sigma / (TAP_SIGMA * MAX_SPREAD)).powi(2).ceil() as usize).max(1);
+    (passes, sigma / (TAP_SIGMA * (passes as f32).sqrt()))
+}
+
+/// The frost strength as drawn: it eases from the old value to a new one,
+/// and a new target mid-way starts from wherever it has got to.
+struct Strength {
+    /// Percent, as the config has it.
+    target: f64,
+    anim: Option<Animation>,
+}
+
+impl Strength {
+    fn new(percent: u8) -> Self {
+        Self { target: percent as f64, anim: None }
+    }
+
+    fn current(&self, now: Instant) -> f64 {
+        self.anim.as_ref().map_or(self.target, |a| a.value_at(now))
+    }
+
+    fn set_target(&mut self, percent: u8, now: Instant) {
+        if percent as f64 == self.target {
+            return;
+        }
+        let from = self.current(now);
+        self.target = percent as f64;
+        self.anim = Some(Animation::new(from, self.target, FROST_EASE));
+    }
+
+    fn is_animating(&self, now: Instant) -> bool {
+        self.anim.as_ref().is_some_and(|a| !a.is_done(now))
+    }
+}
 
 struct Entry {
     size: Size<i32, Physical>,
@@ -156,8 +226,12 @@ struct Entry {
     texture: Option<TextureBuffer<GlesTexture>>,
     blurred: Option<TextureBuffer<GlesTexture>>,
     blurred_size: Size<i32, Buffer>,
-    /// Pixels waiting to be uploaded (needs the renderer): sharp, blurred.
-    upload: Option<(Vec<u8>, Vec<u8>)>,
+    /// The sharp wallpaper, which the frosted copy is made from.
+    sharp: Option<GlesTexture>,
+    /// The strength (1.0 = 100 %) `blurred` was made at.
+    blurred_for: Option<f32>,
+    /// Pixels waiting to be uploaded (needs the renderer).
+    upload: Option<Vec<u8>>,
     /// The strip along the top is light (see `top_is_light`).
     top_light: bool,
     /// A colour to tint UI with (see `wallpaper_tint`).
@@ -166,8 +240,11 @@ struct Entry {
 
 pub struct Wallpapers {
     source: Source,
-    /// `appearance.frost` as the blurred copies were asked for.
-    frost: u8,
+    /// `appearance.frost`, eased.
+    strength: Strength,
+    /// The blur shader, made on first use.
+    shader: Option<GlesTexProgram>,
+    shader_broken: bool,
     /// Bumped whenever `source` changes; textures from older ones are stale.
     generation: u64,
     entries: HashMap<String, Entry>,
@@ -194,7 +271,9 @@ impl Wallpapers {
         }
         Self {
             source: Source::from_config(config),
-            frost: config.appearance.frost,
+            strength: Strength::new(config.appearance.frost),
+            shader: None,
+            shader_broken: false,
             generation: 0,
             entries: HashMap::new(),
             requested: HashMap::new(),
@@ -209,22 +288,30 @@ impl Wallpapers {
         for entry in self.entries.values_mut() {
             entry.texture = None;
             entry.blurred = None;
+            entry.sharp = None;
+            entry.blurred_for = None;
             entry.upload = None;
         }
+        self.shader = None;
+        self.shader_broken = false;
         self.generation += 1;
         self.requested.clear();
     }
 
     /// The config changed; reload if it affects the wallpaper. A new frost
-    /// strength only reblurs: the picture itself is kept.
+    /// strength only eases the blur on the GPU: the picture itself is kept.
     pub fn update_config(&mut self, config: &Config) {
         let source = Source::from_config(config);
-        let frost = config.appearance.frost;
-        if source != self.source || frost != self.frost {
+        if source != self.source {
             self.source = source;
-            self.frost = frost;
             self.generation += 1;
         }
+        self.strength.set_target(config.appearance.frost, Instant::now());
+    }
+
+    /// Whether the frost strength is still easing, so frames are needed.
+    pub fn is_animating(&self, now: Instant) -> bool {
+        self.strength.is_animating(now)
     }
 
     fn finished(&mut self, done: Done) {
@@ -233,7 +320,9 @@ impl Wallpapers {
             generation: done.generation,
             texture: None,
             blurred: None,
-            blurred_size: done.blurred_size,
+            blurred_size: Size::from((1, 1)),
+            sharp: None,
+            blurred_for: None,
             upload: None,
             top_light: false,
             tint: None,
@@ -243,10 +332,9 @@ impl Wallpapers {
         if done.generation >= entry.generation || entry.texture.is_none() {
             entry.size = done.size;
             entry.generation = done.generation;
-            entry.blurred_size = done.blurred_size;
-            entry.top_light = top_is_light(&done.blurred, done.blurred_size);
-            entry.tint = image_tint(&done.blurred, done.blurred_size);
-            entry.upload = Some((done.pixels, done.blurred));
+            entry.top_light = done.top_light;
+            entry.tint = done.tint;
+            entry.upload = Some(done.pixels);
         }
     }
 
@@ -283,16 +371,44 @@ impl Wallpapers {
                 output: name.clone(),
                 size,
                 source: self.source.clone(),
-                frost: self.frost,
                 generation: self.generation,
             });
         }
 
+        scene_blur::compile(
+            renderer,
+            &mut self.shader,
+            &mut self.shader_broken,
+            "the wallpaper has no frost",
+        );
+        let strength = (self.strength.current(Instant::now()) / 100.0) as f32;
         let entry = self.entries.get_mut(&name)?;
-        if let Some((pixels, blurred)) = entry.upload.take() {
+        if let Some(pixels) = entry.upload.take() {
             let size = Size::<i32, Buffer>::from((entry.size.w, entry.size.h));
-            entry.texture = upload(renderer, &pixels, size, &name);
-            entry.blurred = upload(renderer, &blurred, entry.blurred_size, &name);
+            let (texture, sharp) = upload(renderer, &pixels, size, &name).unzip();
+            entry.texture = texture;
+            entry.sharp = sharp;
+            entry.blurred = None;
+            entry.blurred_for = None;
+        }
+        let stale = entry
+            .blurred_for
+            .is_none_or(|made| (made - strength).abs() > STRENGTH_EPSILON);
+        if stale && let (Some(sharp), Some(shader)) = (&entry.sharp, &self.shader) {
+            // Whatever the outcome, don't retry the same strength every frame.
+            entry.blurred_for = Some(strength);
+            if let Some((texture, size)) = gpu_frost(renderer, shader, sharp, entry.size, strength)
+            {
+                let size = Size::<i32, Buffer>::from((size.w, size.h));
+                entry.blurred = Some(TextureBuffer::from_texture(
+                    renderer,
+                    texture,
+                    1,
+                    Transform::Normal,
+                    Some(vec![Rectangle::from_size(size)]),
+                ));
+                entry.blurred_size = size;
+            }
         }
         let texture = entry.texture.as_ref()?;
         Some(full_screen(
@@ -383,25 +499,57 @@ impl Wallpapers {
     }
 }
 
+/// The wallpaper's pixels as a texture, and the bare texture too.
 fn upload(
     renderer: &mut GlesRenderer,
     pixels: &[u8],
     size: Size<i32, Buffer>,
     output: &str,
-) -> Option<TextureBuffer<GlesTexture>> {
+) -> Option<(TextureBuffer<GlesTexture>, GlesTexture)> {
     match renderer.import_memory(pixels, Fourcc::Abgr8888, size, false) {
-        Ok(texture) => Some(TextureBuffer::from_texture(
-            renderer,
+        Ok(texture) => Some((
+            TextureBuffer::from_texture(
+                renderer,
+                texture.clone(),
+                1,
+                Transform::Normal,
+                Some(vec![Rectangle::from_size(size)]),
+            ),
             texture,
-            1,
-            Transform::Normal,
-            Some(vec![Rectangle::from_size(size)]),
         )),
         Err(err) => {
             warn!(?err, output, "can't upload wallpaper");
             None
         }
     }
+}
+
+/// The frosted copy of the sharp wallpaper, made on the GPU: halved down to
+/// 1/`DEEP` (each step averages 2x2 texels), blurred there, then drawn up to
+/// 1/`KEEP` with a light smoothing pass. `strength` is 1.0 at 100 %.
+fn gpu_frost(
+    renderer: &mut GlesRenderer,
+    shader: &GlesTexProgram,
+    sharp: &GlesTexture,
+    full: Size<i32, Physical>,
+    strength: f32,
+) -> Option<(GlesTexture, Size<i32, Physical>)> {
+    let mut texture = sharp.clone();
+    let mut by = 1;
+    let mut size = full;
+    while by < DEEP {
+        by *= 2;
+        size = scene_blur::shrink(full, by);
+        texture = scene_blur::resample(renderer, texture, size, None)?;
+    }
+    let (passes, spread) = blur_plan(strength);
+    for _ in 0..passes {
+        texture = scene_blur::blur(renderer, shader, texture, size, spread)?;
+    }
+    size = scene_blur::shrink(full, KEEP);
+    texture = scene_blur::resample(renderer, texture, size, None)?;
+    let texture = scene_blur::blur(renderer, shader, texture, size, 1.0)?;
+    Some((texture, size))
 }
 
 /// `texture` (`w` x `h` pixels) stretched over the whole output.
@@ -448,23 +596,25 @@ fn worker(jobs: mpsc::Receiver<Job>, done: channel::Sender<Done>) {
                             .and_then(|(_, image)| image.as_ref())
                     });
                     let done = done.clone();
-                    let frost_percent = job.frost;
                     scope.spawn(move || {
                         let (w, h) = (job.size.w.max(1) as u32, job.size.h.max(1) as u32);
                         let pixels = match image {
                             Some(image) => scale_to(image, w, h, job.source.fit),
                             None => gradient(w, h, &job.source),
                         };
-                        let blurred = frost(&pixels, frost_percent);
+                        // Colours are measured once per load, from a copy
+                        // blurred at the usual strength.
+                        let blurred = frost(&pixels, 100);
                         let blurred_size =
                             Size::from((blurred.width() as i32, blurred.height() as i32));
+                        let blurred = blurred.into_raw();
                         done.send(Done {
                             output: job.output,
                             size: job.size,
                             generation: job.generation,
                             pixels: pixels.into_raw(),
-                            blurred: blurred.into_raw(),
-                            blurred_size,
+                            top_light: top_is_light(&blurred, blurred_size),
+                            tint: image_tint(&blurred, blurred_size),
                         })
                         .is_ok()
                     })
@@ -478,8 +628,8 @@ fn worker(jobs: mpsc::Receiver<Job>, done: channel::Sender<Done>) {
     }
 }
 
-/// The frosted-glass copy: shrunk, then blurred hard. `percent` scales the
-/// blur (100 is `BLUR_SIGMA`).
+/// The frosted-glass copy that colours are measured from: shrunk, then
+/// blurred hard. `percent` scales the blur (100 is `BLUR_SIGMA`).
 fn frost(image: &RgbaImage, percent: u8) -> RgbaImage {
     let sigma = BLUR_SIGMA * percent as f32 / 100.0;
     let (w, h) = image.dimensions();
@@ -648,6 +798,49 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn blur_plan_matches_the_old_look_at_100() {
+        let (passes, spread) = blur_plan(1.0);
+        let sigma = TAP_SIGMA * spread * (passes as f32).sqrt();
+        assert!((sigma - TARGET_SIGMA).abs() < 0.01);
+        assert!(spread <= MAX_SPREAD + 1e-3);
+    }
+
+    #[test]
+    fn blur_plan_grows_smoothly_with_strength() {
+        let mut last = 0.0;
+        for percent in (25..=200).step_by(5) {
+            let (passes, spread) = blur_plan(percent as f32 / 100.0);
+            assert!(passes >= 1 && spread <= MAX_SPREAD + 1e-3);
+            let sigma = TAP_SIGMA * spread * (passes as f32).sqrt();
+            assert!(sigma > last, "{percent}%");
+            last = sigma;
+        }
+    }
+
+    #[test]
+    fn strength_eases_and_retargets_from_where_it_is() {
+        let t0 = Instant::now();
+        let mut s = Strength::new(100);
+        assert_eq!(s.current(t0), 100.0);
+        assert!(!s.is_animating(t0));
+        s.set_target(200, t0);
+        assert!(s.is_animating(t0));
+        let later = t0 + Duration::from_secs(5);
+        assert_eq!(s.current(later), 200.0);
+        assert!(!s.is_animating(later));
+        // Retargeting from a settled value starts there, not at 100.
+        s.set_target(50, later);
+        let now = Instant::now();
+        assert!((s.current(now) - 200.0).abs() < 5.0);
+        let mid = s.current(now + Duration::from_millis(40));
+        assert!(mid < 200.0 && mid > 50.0);
+        assert_eq!(s.current(now + Duration::from_secs(5)), 50.0);
+        // Same target again changes nothing.
+        s.set_target(50, later);
+        assert_eq!(s.target, 50.0);
+    }
 
     #[test]
     fn tint_prefers_a_colourful_group_over_black() {

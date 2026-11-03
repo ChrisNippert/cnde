@@ -1207,6 +1207,7 @@ impl State {
                 || self.popup_anims.is_animating(now)
                 || self.dock_frost.is_animating(now)
                 || self.crossfade.is_animating()
+                || self.wallpapers.is_animating(now)
                 || self.night_light.is_animating(now)
                 || self.launching.is_some(),
             now,

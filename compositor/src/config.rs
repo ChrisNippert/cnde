@@ -134,7 +134,8 @@ impl State {
         }
         // A new style or wallpaper fades in over the old one.
         if old.is_some_and(|old| {
-            old.appearance != self.config.appearance || old.wallpaper != self.config.wallpaper
+            look_changed(&old.appearance, &self.config.appearance)
+                || old.wallpaper != self.config.wallpaper
         }) {
             let outputs: Vec<_> = self.space.outputs().cloned().collect();
             self.crossfade.start(outputs.iter());
@@ -223,6 +224,16 @@ impl State {
     }
 }
 
+/// Whether `new` looks different from `old` enough to crossfade. The frost
+/// strength and live blur change on their own (the strength is animated), so
+/// they don't count.
+fn look_changed(old: &cnde_config::Appearance, new: &cnde_config::Appearance) -> bool {
+    let mut old = old.clone();
+    old.frost = new.frost;
+    old.live_blur = new.live_blur;
+    old != *new
+}
+
 /// Tell apps about light/dark. The GTK portal backend (our default for the
 /// Settings portal) serves `org.freedesktop.appearance.color-scheme` from
 /// this GNOME setting, and libadwaita, Qt 6 and browsers follow it. It's
@@ -288,4 +299,20 @@ fn gsettings_set(schema: &'static str, key: &'static str, value: &'static str) {
             tracing::debug!(%err, "no gsettings; apps won't follow the style");
         }
     });
+}
+
+#[cfg(test)]
+mod look_tests {
+    use super::*;
+
+    #[test]
+    fn frost_and_live_blur_alone_dont_crossfade() {
+        let old = cnde_config::Appearance::default();
+        let mut new = old.clone();
+        new.frost = 160;
+        new.live_blur = !old.live_blur;
+        assert!(!look_changed(&old, &new));
+        new.corner_radius += 2;
+        assert!(look_changed(&old, &new));
+    }
 }

@@ -133,7 +133,7 @@ fn draw<E: RenderElement<GlesRenderer>>(
 
 /// `texture` (of `from` texels) drawn stretched to `to`, through `shader`
 /// with `uniforms` if given.
-fn resample(
+pub(crate) fn resample(
     renderer: &mut GlesRenderer,
     texture: GlesTexture,
     to: Size<i32, Physical>,
@@ -162,7 +162,7 @@ fn resample(
 }
 
 /// A Gaussian pass each way over `texture` (`size` texels), `spread` apart.
-fn blur(
+pub(crate) fn blur(
     renderer: &mut GlesRenderer,
     shader: &GlesTexProgram,
     mut texture: GlesTexture,
@@ -176,13 +176,13 @@ fn blur(
     Some(texture)
 }
 
-fn shrink(full: Size<i32, Physical>, by: i32) -> Size<i32, Physical> {
+pub(crate) fn shrink(full: Size<i32, Physical>, by: i32) -> Size<i32, Physical> {
     Size::from((((full.w + by - 1) / by).max(1), ((full.h + by - 1) / by).max(1)))
 }
 
 /// Compile the blur shader into `shader` unless it's there already (or
 /// failed before): `what` says what goes without it.
-fn compile(
+pub(crate) fn compile(
     renderer: &mut GlesRenderer,
     shader: &mut Option<GlesTexProgram>,
     broken: &mut bool,
