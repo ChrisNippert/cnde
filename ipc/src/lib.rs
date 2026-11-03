@@ -65,6 +65,14 @@ pub enum Event {
     Edges {
         outputs: Vec<OutputEdges>,
     },
+    /// The keyboard layouts (from `input.keyboard.layout`, in order: their
+    /// xkb codes, e.g. "us", and names, e.g. "English (US)") and which one
+    /// is in use. Sent when either changes.
+    KeyboardLayouts {
+        codes: Vec<String>,
+        names: Vec<String>,
+        active: usize,
+    },
     /// The pointer moved onto (`inside`) or off the dock's window preview.
     DockPreviewHover {
         inside: bool,
@@ -238,6 +246,10 @@ pub enum Request {
     /// [`Event::ShortcutCaptured`]) instead of acting on it. Ends with that
     /// combo or when this connection closes.
     CaptureShortcut,
+    /// Use keyboard layout `index` (see `Event::KeyboardLayouts`).
+    SetKeyboardLayout {
+        index: usize,
+    },
     /// Minimize these windows (those on screen; others are left alone).
     MinimizeWindows {
         ids: Vec<u64>,

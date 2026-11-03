@@ -254,6 +254,7 @@
 # workspace_next = "Super+Alt+Right"        # next workspace
 # workspace_prev_carry = "Super+Alt+Shift+Left"   # previous workspace, with the window
 # workspace_next_carry = "Super+Alt+Shift+Right"  # next workspace, with the window
+# next_layout = "Super+Space"               # next keyboard layout (from input.keyboard.layout)
 # Your own keys run a command:
 # [[shortcuts.custom]]
 # keys = "Super+B"

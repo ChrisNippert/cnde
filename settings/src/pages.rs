@@ -208,6 +208,9 @@ pub enum Key {
     DefaultApp(&'static str),
     /// `shortcuts.<action>`: its combos, comma-separated in the value.
     Shortcut(&'static str),
+    /// One of `input.keyboard.layout`'s layouts (an id, see `layouts`;
+    /// empty removes it), or past the last one, a new one.
+    KeyboardLayout(usize),
     /// Not in the config: the sidebar's search field.
     Search,
 }
@@ -312,6 +315,17 @@ impl Key {
                 }
             }
             Key::Search => {}
+            Key::KeyboardLayout(slot) => {
+                let k = &config.input.keyboard;
+                let (layout, variant) =
+                    crate::layouts::edited(&k.layout, &k.variant, *slot, value.as_str());
+                file.set("input.keyboard.layout", layout.as_str());
+                if variant.is_empty() {
+                    file.remove("input.keyboard.variant");
+                } else {
+                    file.set("input.keyboard.variant", variant.as_str());
+                }
+            }
             Key::OutputMode { name, .. } => {
                 let parsed = value.as_str().split_once('x').and_then(|(w, rest)| {
                     let (h, hz) = match rest.split_once('@') {
@@ -2068,40 +2082,116 @@ fn mouse(c: &Config, d: &Config) -> Vec<Group> {
     groups
 }
 
+/// A dropdown row per keyboard layout (with Remove when there are
+/// several), and one to add another.
+fn layout_rows(k: &cnde_config::Keyboard) -> Vec<Row> {
+    use crate::layouts;
+    let ids = layouts::configured(&k.layout, &k.variant);
+    let common = |extra: Option<&str>| {
+        let mut list: Vec<Choice> = layouts::COMMON
+            .iter()
+            .map(|(l, v, name)| Choice {
+                label: name.to_string(),
+                value: s(&layouts::id(l, v)),
+            })
+            .collect();
+        if let Some(id) = extra.filter(|id| !list.iter().any(|c| c.value.as_str() == *id)) {
+            list.insert(
+                0,
+                Choice {
+                    label: layouts::name(id),
+                    value: s(id),
+                },
+            );
+        }
+        list
+    };
+    let row = |slot: usize, title: String, control: Control, value: Value| Row {
+        key: Key::KeyboardLayout(slot),
+        title,
+        subtitle: String::new(),
+        control,
+        default: value.clone(),
+        value,
+        advanced: false,
+        disabled: false,
+    };
+    let several = ids.len() > 1;
+    let mut rows: Vec<Row> = ids
+        .iter()
+        .enumerate()
+        .map(|(slot, id)| {
+            let mut list = common(Some(id));
+            if several {
+                list.push(Choice {
+                    label: "Remove".into(),
+                    value: s(""),
+                });
+            }
+            let title = if several {
+                format!("Layout {}", slot + 1)
+            } else {
+                "Layout".into()
+            };
+            let row = row(slot, title, Control::Dropdown(list), s(id));
+            if slot == 0 && several {
+                row.sub("Super+Space or the top bar switches between them")
+            } else {
+                row
+            }
+        })
+        .collect();
+    let mut add = common(None);
+    add.insert(
+        0,
+        Choice {
+            label: "Choose…".into(),
+            value: s(""),
+        },
+    );
+    rows.push(row(
+        ids.len(),
+        "Add a layout".into(),
+        Control::Dropdown(add),
+        s(""),
+    ));
+    rows
+}
+
 fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
     let (k, dk) = (&c.input.keyboard, &d.input.keyboard);
+    let mut layout_group = layout_rows(k);
+    layout_group.extend([
+        Row::new(
+            "input.keyboard.layout",
+            "Layout codes",
+            Control::text("us"),
+            s(&k.layout),
+            s(&dk.layout),
+        )
+        .sub("XKB layout codes; several with commas, like us,de")
+        .advanced(),
+        Row::new(
+            "input.keyboard.variant",
+            "Variant",
+            Control::text("None"),
+            s(&k.variant),
+            s(&dk.variant),
+        )
+        .sub("Like dvorak or intl")
+        .advanced(),
+        Row::new(
+            "input.keyboard.options",
+            "Options",
+            Control::text("None"),
+            s(&k.options),
+            s(&dk.options),
+        )
+        .sub("XKB options, like caps:escape")
+        .advanced(),
+    ]);
     vec![
-        group(
-            "Layout",
-            vec![
-                Row::new(
-                    "input.keyboard.layout",
-                    "Layout",
-                    Control::text("us"),
-                    s(&k.layout),
-                    s(&dk.layout),
-                )
-                .sub("XKB layout codes; several with commas, like us,de"),
-                Row::new(
-                    "input.keyboard.variant",
-                    "Variant",
-                    Control::text("None"),
-                    s(&k.variant),
-                    s(&dk.variant),
-                )
-                .sub("Like dvorak or intl")
-                .advanced(),
-                Row::new(
-                    "input.keyboard.options",
-                    "Options",
-                    Control::text("None"),
-                    s(&k.options),
-                    s(&dk.options),
-                )
-                .sub("XKB options, like caps:escape")
-                .advanced(),
-            ],
-        ),
+        group("Layouts", layout_group),
         group(
             "Typing",
             vec![

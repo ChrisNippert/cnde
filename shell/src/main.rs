@@ -231,6 +231,9 @@ pub struct App {
     screenshot_last: Option<screenshot::Last>,
     /// Every open window, from the compositor.
     windows: Vec<cnde_ipc::WindowInfo>,
+    /// The keyboard layouts' bar labels and the active one (see
+    /// `panel::layout_labels`); empty with just one layout.
+    layouts: (Vec<String>, usize),
     /// Which monitor edges windows touch (bars there go solid).
     edges: Vec<cnde_ipc::OutputEdges>,
     /// The colour the adaptive palette is worked out from.
@@ -388,6 +391,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dock_press: None,
         dock_preview: None,
         windows: Vec::new(),
+        layouts: (Vec::new(), 0),
         edges: Vec::new(),
         screen: None,
         dock_output: None,
@@ -593,6 +597,15 @@ impl App {
             cnde_ipc::Event::DockPreviewGone => self.dock_preview_gone(),
             // Sent to the Settings window alone.
             cnde_ipc::Event::ShortcutCaptured { .. } => {}
+            cnde_ipc::Event::KeyboardLayouts {
+                codes,
+                names,
+                active,
+            } => {
+                let labels = panel::layout_labels(&codes, &names);
+                self.layouts = (if labels.len() > 1 { labels } else { Vec::new() }, active);
+                self.redraw_panels();
+            }
             cnde_ipc::Event::Windows { windows } => {
                 self.windows = windows;
                 self.sync_dock();
@@ -1390,6 +1403,7 @@ impl App {
                 backdrop_light,
                 tint,
                 edge_line: self.config.panel.edge_line,
+                layout: self.layouts.0.get(self.layouts.1).map(String::as_str),
             },
         );
         // Popups wear the bar's colour, so they follow it.
@@ -2012,6 +2026,14 @@ impl PointerHandler for App {
                     Some(Button::Chevron) => self.toggle_tray_popover(index, serial),
                     Some(Button::Activities) => {
                         self.ipc.send(&cnde_ipc::Request::ToggleOverview);
+                    }
+                    Some(Button::Layout) => {
+                        let (labels, active) = &self.layouts;
+                        if !labels.is_empty() {
+                            self.ipc.send(&cnde_ipc::Request::SetKeyboardLayout {
+                                index: (active + 1) % labels.len(),
+                            });
+                        }
                     }
                     Some(Button::Tray(_)) | None => {}
                 },

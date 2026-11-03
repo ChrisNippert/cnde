@@ -472,6 +472,7 @@ pub const SHORTCUT_DEFAULTS: &[(&str, &[&str], &str)] = &[
     ("workspace_next", &["Super+Alt+Right"], "Next workspace"),
     ("workspace_prev_carry", &["Super+Alt+Shift+Left"], "Previous workspace, with the window"),
     ("workspace_next_carry", &["Super+Alt+Shift+Right"], "Next workspace, with the window"),
+    ("next_layout", &["Super+Space"], "Switch keyboard layout"),
 ];
 
 /// A key that runs a command.

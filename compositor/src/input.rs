@@ -428,6 +428,7 @@ impl State {
             Action::MoveTile(direction) => self.move_tile(direction),
             Action::ToggleFullscreen => self.toggle_focused_fullscreen(),
             Action::ToggleTiling => self.toggle_tiling(),
+            Action::NextLayout => self.set_keyboard_layout(None),
             Action::ToggleFloating => self.toggle_focused_floating(),
             Action::SwapMaster => self.swap_with_master(),
             Action::MasterRatio(step) => {

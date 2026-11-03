@@ -9,6 +9,7 @@ mod backlight;
 mod bluetooth;
 mod dbus;
 mod defaults;
+mod layouts;
 mod mixer;
 mod pages;
 mod power_mode;

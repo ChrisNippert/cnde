@@ -430,6 +430,7 @@ impl State {
             self.refresh_ext_workspaces();
             self.sync_ipc_windows();
             self.sync_ipc_edges();
+            self.sync_ipc_layouts();
             crate::perf::since("ipc_sync", start);
         }
         self.screenshot_ready_check();

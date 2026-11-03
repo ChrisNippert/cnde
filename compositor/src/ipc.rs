@@ -23,6 +23,8 @@ pub struct IpcClients {
     edges: Option<Vec<OutputEdges>>,
     /// The client waiting for a key combo (Settings' shortcut capture).
     pub capture: Option<u64>,
+    /// The keyboard layouts and the active one, as last sent.
+    layouts: Option<(Vec<String>, usize)>,
 }
 
 impl IpcClients {
@@ -107,6 +109,7 @@ impl State {
         // Everyone gets the window list again; the newcomer needs it.
         self.ipc.windows = None;
         self.ipc.edges = None;
+        self.ipc.layouts = None;
         debug!(id, "IPC client connected");
 
         let mut pending = Vec::new();
@@ -254,6 +257,7 @@ impl State {
                 }
             }
             Request::NewToken | Request::CaptureShortcut => {}
+            Request::SetKeyboardLayout { index } => self.set_keyboard_layout(Some(index)),
             Request::LockScreen => self.lock_screen(),
             Request::LogOut => self.loop_signal.stop(),
             Request::Perf { on } => crate::perf::set(on),
@@ -343,6 +347,59 @@ impl State {
             });
             self.ipc.windows = Some(windows);
         }
+    }
+
+    /// Switch to keyboard layout `index`, or the next one (Super+Space).
+    pub fn set_keyboard_layout(&mut self, index: Option<usize>) {
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return;
+        };
+        keyboard.with_xkb_state(self, |mut context| match index {
+            Some(index) => {
+                let count = context.xkb().lock().unwrap().layouts().count();
+                if index < count {
+                    context.set_layout(smithay::input::keyboard::Layout(index as u32));
+                }
+            }
+            None => context.cycle_next_layout(),
+        });
+        self.sync_ipc_layouts();
+    }
+
+    /// Send the keyboard layouts, if they or the active one changed (a new
+    /// keymap, Super+Space, or an xkb group switch option like
+    /// grp:alt_shift_toggle).
+    pub fn sync_ipc_layouts(&mut self) {
+        if self.ipc.clients.is_empty() {
+            return;
+        }
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return;
+        };
+        let (names, active) = keyboard.with_xkb_state(self, |context| {
+            let xkb = context.xkb().lock().unwrap();
+            let names: Vec<String> =
+                xkb.layouts().map(|l| xkb.layout_name(l).to_string()).collect();
+            (names, xkb.active_layout().0 as usize)
+        });
+        if self.ipc.layouts.as_ref() == Some(&(names.clone(), active)) {
+            return;
+        }
+        let configured = &self.config.input.keyboard.layout;
+        let configured = if configured.is_empty() {
+            std::env::var("XKB_DEFAULT_LAYOUT").unwrap_or_else(|_| "us".into())
+        } else {
+            configured.clone()
+        };
+        let mut codes: Vec<String> =
+            configured.split(',').map(|c| c.trim().to_string()).collect();
+        codes.resize(names.len(), String::new());
+        self.ipc.broadcast(&Event::KeyboardLayouts {
+            codes,
+            names: names.clone(),
+            active,
+        });
+        self.ipc.layouts = Some((names, active));
     }
 
     /// Send which monitor edges windows touch, if that changed.

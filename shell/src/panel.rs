@@ -68,6 +68,8 @@ pub struct Draw<'a> {
     pub tint: Option<cnde_ui::Tint>,
     /// `panel.edge_line`.
     pub edge_line: u32,
+    /// The keyboard layout's label, with more than one layout.
+    pub layout: Option<&'a str>,
 }
 
 /// Editing the bar in place (from its right-click menu).
@@ -106,6 +108,8 @@ pub enum Button {
     Tray(usize),
     /// The chevron that opens the tray popover.
     Chevron,
+    /// The keyboard layout: a click switches to the next.
+    Layout,
 }
 
 pub struct Panel {
@@ -126,6 +130,8 @@ pub struct Panel {
     tray_regions: Vec<(usize, f32, f32)>,
     /// The tray chevron's logical x range, from the last draw.
     chevron_region: Option<(f32, f32)>,
+    /// The keyboard layout's logical x range, from the last draw.
+    layout_region: Option<(f32, f32)>,
     /// The button under the pointer.
     hover: Option<Button>,
     /// Being edited in place.
@@ -185,6 +191,7 @@ impl Panel {
             status_region: None,
             tray_regions: Vec::new(),
             chevron_region: None,
+            layout_region: None,
             hover: None,
             edit: None,
             clock_region: None,
@@ -271,6 +278,8 @@ impl Panel {
             Some(Button::Tray(i))
         } else if self.chevron_region.is_some_and(|(a, b)| x >= a && x < b) {
             Some(Button::Chevron)
+        } else if self.layout_region.is_some_and(|(a, b)| x >= a && x < b) {
+            Some(Button::Layout)
         } else if self
             .clock_region
             .is_some_and(|(start, end)| x >= start && x < end)
@@ -421,6 +430,7 @@ impl Panel {
             backdrop_light,
             tint,
             edge_line,
+            layout,
         } = ctx;
         if self.width == 0 {
             return; // not configured yet
@@ -715,6 +725,19 @@ impl Panel {
             }
         }
 
+        // The keyboard layout, left of the tray.
+        self.layout_region = None;
+        if let Some(label) = layout {
+            let mut text = fonts.layout(label, theme.font_size, Weight::Bold, scale as f32);
+            let b = tray_start - if tray_start < region.0 { 0.0 } else { TRAY_GAP };
+            let a = b - text.width - pad * 2.0;
+            self.layout_region = Some((a, b));
+            self.button_background(&mut canvas, theme, (a, b), height, Button::Layout, false);
+            let y = ((height - text.height) / 2.0).round();
+            canvas.text(fonts, &mut text, (a + pad).round(), y, fg);
+            tray_start = a;
+        }
+
         // Editing: a Done button left of the status icons.
         self.done_region = None;
         let mut right_limit = tray_start;
@@ -875,6 +898,28 @@ impl Panel {
     }
 }
 
+/// The bar's label for each keyboard layout: its code ("us" is "US"), or
+/// where two share a code, the start of what tells them apart ("English
+/// (Dvorak)" is "DV").
+pub fn layout_labels(codes: &[String], names: &[String]) -> Vec<String> {
+    codes
+        .iter()
+        .zip(names)
+        .map(|(code, name)| {
+            let shared = codes.iter().filter(|c| *c == code).count() > 1;
+            let detail = name
+                .split_once('(')
+                .map(|(_, rest)| rest.trim_end_matches(')'));
+            let label = match detail {
+                Some(detail) if shared || code.is_empty() => detail,
+                _ if code.is_empty() => name.as_str(),
+                _ => code.as_str(),
+            };
+            label.chars().take(2).collect::<String>().to_uppercase()
+        })
+        .collect()
+}
+
 /// How far an island reaches past the buttons it holds.
 const ISLAND_PAD: f32 = 4.0;
 /// Islands closer than this (after padding) are one.
@@ -978,6 +1023,13 @@ fn format_clock(format: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layouts_are_labelled_apart() {
+        let codes = ["us", "us", "de", "gr"].map(String::from);
+        let names = ["English (US)", "English (Dvorak)", "German", "Greek"].map(String::from);
+        assert_eq!(layout_labels(&codes, &names), ["US", "DV", "DE", "GR"]);
+    }
 
     #[test]
     fn centre_clock_gets_its_own_island() {

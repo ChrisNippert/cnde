@@ -55,6 +55,8 @@ pub enum Action {
     Lock,
     /// Super+T: the current workspace floats or tiles.
     ToggleTiling,
+    /// Super+Space: the next keyboard layout.
+    NextLayout,
     /// Super+Shift+T: float the focused tile, or tile it again.
     ToggleFloating,
     /// Super+Enter: swap the focused tile with the main one.
@@ -247,6 +249,7 @@ fn action_named(name: &str) -> Option<Action> {
         "snap_right" => Action::SnapRight,
         "fullscreen" => Action::ToggleFullscreen,
         "toggle_tiling" => Action::ToggleTiling,
+        "next_layout" => Action::NextLayout,
         "toggle_floating" => Action::ToggleFloating,
         "swap_master" => Action::SwapMaster,
         "master_wider" => Action::MasterRatio(1),
