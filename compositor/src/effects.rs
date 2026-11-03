@@ -135,8 +135,8 @@ pub struct ClosingWindow {
     /// Where the window geometry was drawn when it closed.
     rect: Rectangle<f64, Logical>,
     anim: Animation,
-    /// A dock icon it flies into (minimizing), instead of shrinking away.
-    icon: Option<Rectangle<f64, Logical>>,
+    /// Where it goes when minimizing, instead of shrinking away.
+    hide: Option<Hide>,
     /// Stacking position: how many windows were below it.
     pub below: usize,
 }
@@ -157,10 +157,10 @@ impl ClosingWindow {
     pub fn new(
         snapshot: Snapshot,
         rect: Rectangle<f64, Logical>,
-        icon: Option<Rectangle<f64, Logical>>,
+        hide: Option<Hide>,
         below: usize,
     ) -> Self {
-        let params = if icon.is_some() {
+        let params = if hide.is_some() {
             presets::WINDOW_MINIMIZE
         } else {
             presets::WINDOW_CLOSE
@@ -169,7 +169,7 @@ impl ClosingWindow {
             snapshot,
             rect,
             anim: Animation::new(0.0, 1.0, params),
-            icon,
+            hide,
             below,
         }
     }
@@ -181,13 +181,9 @@ impl ClosingWindow {
     /// The snapshot to draw, where (space coordinates) and how opaque.
     pub fn frame(&self, now: Instant) -> (&Snapshot, Rectangle<f64, Logical>, f32) {
         let progress = self.anim.value_at(now);
-        if let Some(icon) = self.icon {
-            let to = fit_into(icon, self.rect.size);
-            return (
-                &self.snapshot,
-                lerp_rect(self.rect, to, progress),
-                dock_fade(progress),
-            );
+        if let Some(hide) = self.hide {
+            let (rect, alpha) = hidden_pose(self.rect, hide, progress);
+            return (&self.snapshot, rect, alpha);
         }
         let scale = 1.0 - (1.0 - presets::WINDOW_CLOSE_END_SCALE) * progress;
         (
@@ -263,10 +259,9 @@ pub fn window_frame(
 
     if let Some(open) = &state.open_anim {
         let progress = open.value_at(now);
-        if let Some(icon) = state.open_from {
-            // Restoring: grows out of its dock icon.
-            frame.rect = lerp_rect(fit_into(icon, frame.rect.size), frame.rect, progress);
-            frame.alpha = dock_fade(1.0 - progress);
+        if let Some(hide) = state.open_from {
+            // Restoring: the minimize animation backwards.
+            (frame.rect, frame.alpha) = hidden_pose(frame.rect, hide, 1.0 - progress);
         } else {
             let start = presets::WINDOW_OPEN_START_SCALE;
             frame.rect = scale_about_centre(frame.rect, start + (1.0 - start) * progress);
@@ -330,6 +325,39 @@ fn dock_fade(progress: f64) -> f32 {
     (1.0 - 0.5 * t) as f32
 }
 
+/// Where a minimized window rests, and so what it flies to and from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Hide {
+    /// Its dock icon (global coordinates).
+    Icon(Rectangle<f64, Logical>),
+    /// No icon to use (no dock, or the window isn't in it): sinks a little
+    /// and fades.
+    Drift,
+}
+
+/// How far a window without a dock icon sinks while minimizing.
+pub const DRIFT_DISTANCE: f64 = 80.0;
+/// And the scale it shrinks to on the way.
+pub const DRIFT_END_SCALE: f64 = 0.9;
+
+/// How a window whose shown geometry is `rect` is drawn `t` of the way to
+/// being minimized (0 shown, 1 hidden): where, and how opaque. Restoring
+/// runs it backwards.
+pub fn hidden_pose(
+    rect: Rectangle<f64, Logical>,
+    hide: Hide,
+    t: f64,
+) -> (Rectangle<f64, Logical>, f32) {
+    match hide {
+        Hide::Icon(icon) => (lerp_rect(rect, fit_into(icon, rect.size), t), dock_fade(t)),
+        Hide::Drift => {
+            let mut scaled = scale_about_centre(rect, 1.0 - (1.0 - DRIFT_END_SCALE) * t);
+            scaled.loc.y += DRIFT_DISTANCE * t;
+            (scaled, (1.0 - t).clamp(0.0, 1.0) as f32)
+        }
+    }
+}
+
 fn scale_about_centre(rect: Rectangle<f64, Logical>, scale: f64) -> Rectangle<f64, Logical> {
     let size = rect.size.upscale(scale);
     let loc = Point::from((
@@ -386,6 +414,35 @@ mod tests {
         // Later commits neither restart nor end it; window_frame does.
         assert!(!pending.on_commit(Some(Serial::from(4)), small));
         assert!(pending.is_fading());
+    }
+
+    #[test]
+    fn hidden_pose_icon_ends_in_the_icon() {
+        let rect = Rectangle::new(Point::from((100.0, 100.0)), Size::from((400.0, 200.0)));
+        let icon = Rectangle::new(Point::from((500.0, 900.0)), Size::from((50.0, 50.0)));
+        let (start, alpha) = hidden_pose(rect, Hide::Icon(icon), 0.0);
+        assert_eq!((start, alpha), (rect, 1.0));
+        let (end, alpha) = hidden_pose(rect, Hide::Icon(icon), 1.0);
+        assert_eq!(end.size, Size::from((50.0, 25.0)));
+        assert_eq!(end.loc, Point::from((500.0, 912.5)));
+        assert_eq!(alpha, 0.5);
+        let (mid, _) = hidden_pose(rect, Hide::Icon(icon), 0.5);
+        assert_eq!(mid.size, Size::from((225.0, 112.5)));
+    }
+
+    #[test]
+    fn hidden_pose_drift_sinks_shrinks_and_fades() {
+        let rect = Rectangle::new(Point::from((100.0, 100.0)), Size::from((400.0, 200.0)));
+        assert_eq!(hidden_pose(rect, Hide::Drift, 0.0), (rect, 1.0));
+        let (mid, alpha) = hidden_pose(rect, Hide::Drift, 0.5);
+        assert_eq!(alpha, 0.5);
+        assert_eq!(mid.size, Size::from((380.0, 190.0)));
+        // Centre moved down by half the drift.
+        assert_eq!(mid.loc.y + mid.size.h / 2.0, 200.0 + DRIFT_DISTANCE / 2.0);
+        let (end, alpha) = hidden_pose(rect, Hide::Drift, 1.0);
+        assert_eq!(alpha, 0.0);
+        assert_eq!(end.size, Size::from((360.0, 180.0)));
+        assert_eq!(end.loc.y + end.size.h / 2.0, 200.0 + DRIFT_DISTANCE);
     }
 
     #[test]
