@@ -60,6 +60,7 @@
 # A warm colour filter (less blue light), applied by the compositor.
 # schedule = "off"         # "off", "always", "sunset" (sunset to sunrise), "custom"
 # temperature = 4000       # kelvin, 2500 (warmest) to 6500 (no change)
+# intensity = 100         # percent, how strongly the filter applies (0 is none)
 # from = "20:00"           # "custom": on from this time (24-hour)...
 # to = "06:00"             # ...until this one; also used by "sunset" until [location] is set
 
@@ -114,6 +115,7 @@
 
 [workspaces]
 # mode = "continuous"      # "continuous": one strip, monitors show consecutive workspaces and switch together; "individual": every monitor has its own workspaces and switching moves only the monitor you used last
+# hot_corner = true        # false: the top-left corner of the main monitor no longer opens the overview
 
 [panel]
 # enabled = true           # false: hide the top bar (e.g. to use waybar via autostart)

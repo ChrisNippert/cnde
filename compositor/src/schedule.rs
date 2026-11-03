@@ -86,7 +86,7 @@ impl State {
         let clock = Clock::now();
         let config = &self.config;
         let night = config.night_light.target(&config.location, &clock);
-        if self.night_light.set(night) {
+        if self.night_light.set(night, config.night_light.intensity) {
             info!(?night, "night light: fading");
             self.queue_redraw();
         }

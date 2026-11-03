@@ -1821,6 +1821,19 @@ fn night_light(c: &Config, d: &Config) -> Group {
             )
             .sub("Lower is warmer"),
         );
+        rows.push(Row::new(
+            "night_light.intensity",
+            "Intensity",
+            Control::Slider {
+                min: 0.0,
+                max: 100.0,
+                step: 5.0,
+                int: true,
+                format: |v| format!("{v:.0}%"),
+            },
+            Value::Int(light.intensity as i64),
+            Value::Int(d.night_light.intensity as i64),
+        ));
     }
     let times = match light.schedule {
         NightSchedule::Off | NightSchedule::Always => false,
@@ -2087,6 +2100,14 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
                     workspace_mode(d.workspaces.mode),
                 )
                 .sub("Span: monitors show neighbouring workspaces and switch together. Separate: each monitor has its own, and switching moves the one you used last"),
+                Row::new(
+                    "workspaces.hot_corner",
+                    "Hot corner",
+                    Control::switch(),
+                    Value::Bool(c.workspaces.hot_corner),
+                    Value::Bool(d.workspaces.hot_corner),
+                )
+                .sub("Pushing the pointer into the top-left corner opens the overview"),
             ],
         ),
         group(
@@ -3354,13 +3375,19 @@ mod tests {
         config.night_light.schedule = cnde_config::NightSchedule::Custom;
         assert_eq!(
             titles(&config),
-            ["Night light", "Colour temperature", "On from", "Off from"]
+            [
+                "Night light",
+                "Colour temperature",
+                "Intensity",
+                "On from",
+                "Off from"
+            ]
         );
         config.night_light.schedule = cnde_config::NightSchedule::Sunset;
         config.location.coordinates = "52.52, 13.40".into();
         assert_eq!(
             titles(&config),
-            ["Night light", "Colour temperature", "Location"]
+            ["Night light", "Colour temperature", "Intensity", "Location"]
         );
         for row in night_light(&config, &Config::default()).rows {
             let mut file = ConfigFile::open(std::path::Path::new("/nonexistent")).unwrap();

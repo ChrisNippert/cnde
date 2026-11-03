@@ -282,6 +282,8 @@ pub struct NightLight {
     pub schedule: NightSchedule,
     /// Colour temperature in kelvin: lower is warmer.
     pub temperature: u32,
+    /// How strongly the filter applies, in percent (0 is none).
+    pub intensity: u8,
     /// When it starts and ends ("HH:MM", 24-hour), for `schedule =
     /// "custom"`, and for "sunset" until a location is set.
     pub from: String,
@@ -293,6 +295,7 @@ impl Default for NightLight {
         Self {
             schedule: NightSchedule::Off,
             temperature: 4000,
+            intensity: 100,
             from: "20:00".into(),
             to: "06:00".into(),
         }
@@ -339,6 +342,12 @@ pub(crate) fn validate(config: &Config) -> Result<(), Error> {
             NIGHT_LIGHT_RANGE.start(),
             NIGHT_LIGHT_RANGE.end(),
             config.night_light.temperature
+        )));
+    }
+    if config.night_light.intensity > 100 {
+        return Err(Error::Invalid(format!(
+            "night_light.intensity must be between 0 and 100 percent, got {}",
+            config.night_light.intensity
         )));
     }
     for (name, text) in [
@@ -591,6 +600,8 @@ mod tests {
     fn night_light_validation() {
         assert!(Config::parse("[night_light]\ntemperature = 1000\n").is_err());
         assert!(Config::parse("[night_light]\ntemperature = 7000\n").is_err());
+        assert!(Config::parse("[night_light]\nintensity = 101\n").is_err());
+        assert_eq!(Config::default().night_light.intensity, 100);
         assert!(Config::parse("[night_light]\nfrom = \"late\"\n").is_err());
         let config =
             Config::parse("[night_light]\nschedule = \"sunset\"\ntemperature = 2500\n").unwrap();

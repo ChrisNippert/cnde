@@ -946,10 +946,22 @@ impl Default for Autostart {
 }
 
 /// `[workspaces]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Workspaces {
     pub mode: WorkspaceMode,
+    /// Pushing the pointer into the main monitor's top-left corner toggles
+    /// the overview.
+    pub hot_corner: bool,
+}
+
+impl Default for Workspaces {
+    fn default() -> Self {
+        Self {
+            mode: WorkspaceMode::default(),
+            hot_corner: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
