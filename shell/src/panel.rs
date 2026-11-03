@@ -68,6 +68,8 @@ pub struct Draw<'a> {
     pub tint: Option<cnde_ui::Tint>,
     /// `panel.edge_line`.
     pub edge_line: u32,
+    /// The bar is frosted: islands take the bar's lighter tint, as it does.
+    pub frosted: bool,
 }
 
 /// Editing the bar in place (from its right-click menu).
@@ -148,6 +150,11 @@ pub struct Panel {
     /// A frame callback is outstanding; draw when it fires.
     frame_pending: bool,
     dirty: bool,
+    /// The islands drawn last: their logical x ranges, and how visible.
+    islands: Vec<(f32, f32)>,
+    island_alpha: f32,
+    /// The frost cards last sent to the compositor for them.
+    pub frost_sent: Vec<cnde_ipc::CardFrost>,
 }
 
 impl Panel {
@@ -198,6 +205,9 @@ impl Panel {
             mode: BarMode::Attached,
             frame_pending: false,
             dirty: false,
+            islands: Vec::new(),
+            island_alpha: 0.0,
+            frost_sent: Vec::new(),
         }
     }
 
@@ -323,6 +333,20 @@ impl Panel {
         }
     }
 
+    /// The islands drawn last, as frost cards for the compositor: each as
+    /// tall as the bar, as visible as the islands are. Empty without islands.
+    pub fn island_cards(&self) -> Vec<cnde_ipc::CardFrost> {
+        let height = self.height as f64;
+        self.islands
+            .iter()
+            .map(|&(a, b)| cnde_ipc::CardFrost {
+                rect: [a as f64, 0.0, (b - a) as f64, height],
+                alpha: self.island_alpha,
+                radius: Some(height / 2.0),
+            })
+            .collect()
+    }
+
     pub fn height(&self) -> u32 {
         self.height
     }
@@ -421,6 +445,7 @@ impl Panel {
             backdrop_light,
             tint,
             edge_line,
+            frosted,
         } = ctx;
         if self.width == 0 {
             return; // not configured yet
@@ -791,9 +816,13 @@ impl Panel {
         } else {
             0.0
         };
+        self.islands.clear();
+        self.island_alpha = amount;
         if amount > 0.0 {
             let bg = theme.panel_background;
-            let color = bg.with_alpha(bg.a.max(0.8) * amount);
+            // Frosted, the islands take the bar's own lighter tint.
+            let tint = if frosted { bg.a } else { bg.a.max(0.8) };
+            let color = bg.with_alpha(tint * amount);
             let spans = island_spans(
                 &[
                     activities,
@@ -803,9 +832,10 @@ impl Panel {
                 ISLAND_PAD,
                 ISLAND_MERGE,
             );
-            for (a, b) in spans {
+            for &(a, b) in &spans {
                 canvas.rounded_rect_behind(a, 0.0, b - a, height, height / 2.0, color);
             }
+            self.islands = spans;
         }
 
         if self.edit.is_some() {

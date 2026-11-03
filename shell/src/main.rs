@@ -1331,6 +1331,32 @@ impl App {
         }
     }
 
+    /// Tell the compositor where the bar's islands are, so it frosts them,
+    /// when that's changed (nothing unless the bar is frosted).
+    fn send_island_frost(&mut self, index: usize) {
+        let frosted = self.config.panel_frosted();
+        let Some(panel) = self.panels.get_mut(index) else {
+            return;
+        };
+        let cards = if frosted {
+            panel.island_cards()
+        } else {
+            Vec::new()
+        };
+        if cards == panel.frost_sent {
+            return;
+        }
+        let Some(output) = self.outputs.info(&panel.output).and_then(|i| i.name) else {
+            return;
+        };
+        panel.frost_sent = cards.clone();
+        self.ipc.send(&cnde_ipc::Request::NotificationFrost {
+            output,
+            cards,
+            layer: "cnde-panel".to_string(),
+        });
+    }
+
     fn draw_panel(&mut self, index: usize) {
         let solid = self
             .panels
@@ -1390,8 +1416,10 @@ impl App {
                 backdrop_light,
                 tint,
                 edge_line: self.config.panel.edge_line,
+                frosted: self.config.panel_frosted(),
             },
         );
+        self.send_island_frost(index);
         // Popups wear the bar's colour, so they follow it.
         if self.panels[index].shown != was {
             self.draw_quick_settings();
