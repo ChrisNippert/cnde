@@ -84,6 +84,23 @@ impl Painter<'_, '_> {
         weight: Weight,
         color: Color,
     ) -> f32 {
+        let (w, h) = self.canvas.size();
+        self.label_v_clipped(text, x, cy, max_width, size, weight, color, (0.0, 0.0, w, h))
+    }
+
+    /// [`Painter::label_v`], drawing only inside `clip` (logical x, y, w, h).
+    #[allow(clippy::too_many_arguments)]
+    pub fn label_v_clipped(
+        &mut self,
+        text: &str,
+        x: f32,
+        cy: f32,
+        max_width: f32,
+        size: f32,
+        weight: Weight,
+        color: Color,
+        clip: (f32, f32, f32, f32),
+    ) -> f32 {
         let scale = self.canvas.scale();
         let mut layout = self.fonts.layout(text, size, weight, scale);
         if layout.width > max_width && max_width > 0.0 {
@@ -95,7 +112,8 @@ impl Painter<'_, '_> {
             }
         }
         let y = cy - layout.height / 2.0;
-        self.canvas.text(self.fonts, &mut layout, x, y, color);
+        self.canvas
+            .text_clipped(self.fonts, &mut layout, x, y, color, clip);
         layout.width
     }
 
@@ -108,6 +126,28 @@ impl Painter<'_, '_> {
             cy - size / 2.0,
             size,
             color,
+        );
+    }
+
+    /// [`Painter::icon`], drawing only inside `clip` (logical x, y, w, h).
+    #[allow(clippy::too_many_arguments)]
+    pub fn icon_clipped(
+        &mut self,
+        name: &str,
+        cx: f32,
+        cy: f32,
+        size: f32,
+        color: Color,
+        clip: (f32, f32, f32, f32),
+    ) {
+        self.canvas.icon_clipped(
+            self.icons,
+            name,
+            cx - size / 2.0,
+            cy - size / 2.0,
+            size,
+            color,
+            clip,
         );
     }
 

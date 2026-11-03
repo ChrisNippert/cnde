@@ -103,6 +103,10 @@ pub struct Ui {
     /// Advanced rows are shown, on every page.
     pub advanced: bool,
     pub scroll: f32,
+    /// How far the sidebar's pages are scrolled (the search field stays put).
+    pub sidebar_scroll: f32,
+    /// How far the open dropdown's choices are scrolled.
+    pub popover_scroll: f32,
     pub hover: Option<Target>,
     /// The dropdown that's open.
     pub popover: Option<Key>,
@@ -186,6 +190,11 @@ pub struct Painted {
     pub device_list: Option<Rect>,
     /// How far the page can scroll.
     pub max_scroll: f32,
+    /// The sidebar's area, and how far its pages can scroll.
+    pub sidebar: Option<Rect>,
+    pub sidebar_max_scroll: f32,
+    /// How far the open dropdown's choices can scroll.
+    pub popover_max_scroll: f32,
     /// Window px per logical px on the arrangement canvas.
     pub arrange_scale: f32,
 }
@@ -465,49 +474,90 @@ fn sidebar(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted, h:
         _ => p.entry(field, &ui.search, "Search", None, false),
     }
     out.hits.push((field, Target::Search));
-    let mut y = field.bottom() + 8.0;
-    let top = y;
+    // The pages scroll under the search field, clipped to the space below it.
+    let top = field.bottom() + 8.0;
+    let list = Rect::new(0.0, top, sw, (h - top).max(0.0));
+    let clip = (list.x, list.y, list.w, list.h);
+    out.sidebar = Some(Rect::new(0.0, 0.0, sw, h));
+    let mut y = top - ui.sidebar_scroll;
     let mut section = "";
     for page in Page::visible(&ui.config) {
-        if y + t.sidebar_row_height > h {
-            break;
-        }
         if page.section() != section {
+            // A gap before every section but the first.
+            if !section.is_empty() {
+                y += 8.0;
+            }
             section = page.section();
             // Quiet, like a group title on a page.
-            y += if y > top { 8.0 } else { 0.0 };
-            p.label(section, 20.0, y + 4.0, 11.0, Weight::Bold, t.window_dim);
+            clipped_text(p, section, 20.0, y + 4.0, 11.0, Weight::Bold, t.window_dim, clip);
             y += 22.0;
         }
         let rect = Rect::new(10.0, y, sw - 21.0, t.sidebar_row_height);
-        let selected = a.get(
-            AnimKey::Selected(page),
-            if ui.page == page { 1.0 } else { 0.0 },
-            SHORT,
-        );
-        let hovered = hover(a, ui, Target::Page(page)) * (1.0 - selected);
-        for (color, amount) in [(t.hover, hovered), (t.sidebar_selected, selected)] {
-            if amount > 0.0 {
-                let fill = color.with_alpha(color.a * amount);
-                p.canvas
-                    .rounded_rect(rect.x, rect.y, rect.w, rect.h, t.button_radius, fill);
+        // Rows scrolled out of the list are skipped (their place still counts).
+        if rect.bottom() > list.y && rect.y < list.bottom() {
+            let selected = a.get(
+                AnimKey::Selected(page),
+                if ui.page == page { 1.0 } else { 0.0 },
+                SHORT,
+            );
+            let hovered = hover(a, ui, Target::Page(page)) * (1.0 - selected);
+            for (color, amount) in [(t.hover, hovered), (t.sidebar_selected, selected)] {
+                if amount > 0.0 {
+                    let fill = color.with_alpha(color.a * amount);
+                    p.canvas.rounded_rect_clipped(
+                        rect.x,
+                        rect.y,
+                        rect.w,
+                        rect.h,
+                        t.button_radius,
+                        fill,
+                        clip,
+                    );
+                }
             }
+            let cy = rect.y + rect.h / 2.0;
+            let ink = t.window_text.mix(on_pill, selected);
+            p.icon_clipped(page.icon(), rect.x + 20.0, cy, 16.0, ink, clip);
+            p.label_v_clipped(
+                page.title(),
+                rect.x + 40.0,
+                cy,
+                rect.w - 48.0,
+                t.font_size,
+                Weight::Normal,
+                ink,
+                clip,
+            );
+            // Only the visible part takes the pointer.
+            let shown = Rect::new(
+                rect.x,
+                rect.y.max(list.y),
+                rect.w,
+                rect.bottom().min(list.bottom()) - rect.y.max(list.y),
+            );
+            out.hits.push((shown, Target::Page(page)));
         }
-        let cy = rect.y + rect.h / 2.0;
-        let ink = t.window_text.mix(on_pill, selected);
-        p.icon(page.icon(), rect.x + 20.0, cy, 16.0, ink);
-        p.label_v(
-            page.title(),
-            rect.x + 40.0,
-            cy,
-            rect.w - 48.0,
-            t.font_size,
-            Weight::Normal,
-            ink,
-        );
-        out.hits.push((rect, Target::Page(page)));
         y += t.sidebar_row_height + 2.0;
     }
+    // The last row's gap goes below it, so it isn't flush with the window's edge.
+    let content_h = y + ui.sidebar_scroll - top + 8.0;
+    out.sidebar_max_scroll = (content_h - list.h).max(0.0);
+}
+
+/// Text with its top-left at (`x`, `y`), drawn only inside `clip`.
+#[allow(clippy::too_many_arguments)]
+fn clipped_text(
+    p: &mut Painter<'_, '_>,
+    text: &str,
+    x: f32,
+    y: f32,
+    size: f32,
+    weight: Weight,
+    color: Color,
+    clip: (f32, f32, f32, f32),
+) {
+    let mut layout = p.fonts.layout(text, size, weight, p.canvas.scale());
+    p.canvas.text_clipped(p.fonts, &mut layout, x, y, color, clip);
 }
 
 fn page(
@@ -1462,6 +1512,8 @@ mod tests {
             page,
             advanced: false,
             scroll: 0.0,
+            sidebar_scroll: 0.0,
+            popover_scroll: 0.0,
             hover: None,
             popover: None,
             edit: None,

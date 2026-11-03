@@ -379,6 +379,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             page,
             advanced: state::load().advanced,
             scroll: 0.0,
+            sidebar_scroll: 0.0,
+            popover_scroll: 0.0,
             hover: None,
             popover: None,
             edit: search.as_ref().map(|text| Edit {
@@ -1098,6 +1100,10 @@ impl App {
         // Scrolled past the end (the page got shorter): clamp and repaint.
         if self.ui.scroll > self.painted.max_scroll {
             self.ui.scroll = self.painted.max_scroll;
+            self.dirty = true;
+        }
+        if self.ui.sidebar_scroll > self.painted.sidebar_max_scroll {
+            self.ui.sidebar_scroll = self.painted.sidebar_max_scroll;
             self.dirty = true;
         }
         let swapped = self.shm_format == wl_shm::Format::Argb8888;
@@ -2363,19 +2369,34 @@ impl PointerHandler for App {
                     }
                 }
                 PointerEventKind::Axis { vertical, .. } => {
-                    if self.ui.popover.is_some() {
-                        continue;
-                    }
                     // Wheel clicks come as 15 px steps; make them bigger.
                     let delta = if vertical.discrete != 0 || vertical.value120 != 0 {
                         vertical.absolute as f32 * 3.0
                     } else {
                         vertical.absolute as f32
                     };
-                    let scroll = (self.ui.scroll + delta).clamp(0.0, self.painted.max_scroll);
-                    if scroll != self.ui.scroll {
-                        self.ui.scroll = scroll;
-                        self.redraw();
+                    // An open dropdown takes the wheel for its choices; over
+                    // the sidebar it scrolls the pages, elsewhere the page.
+                    if self.ui.popover.is_some() {
+                        let scroll = (self.ui.popover_scroll + delta)
+                            .clamp(0.0, self.painted.popover_max_scroll);
+                        if scroll != self.ui.popover_scroll {
+                            self.ui.popover_scroll = scroll;
+                            self.redraw();
+                        }
+                    } else if self.painted.sidebar.is_some_and(|r| r.contains(event.position)) {
+                        let scroll = (self.ui.sidebar_scroll + delta)
+                            .clamp(0.0, self.painted.sidebar_max_scroll);
+                        if scroll != self.ui.sidebar_scroll {
+                            self.ui.sidebar_scroll = scroll;
+                            self.redraw();
+                        }
+                    } else {
+                        let scroll = (self.ui.scroll + delta).clamp(0.0, self.painted.max_scroll);
+                        if scroll != self.ui.scroll {
+                            self.ui.scroll = scroll;
+                            self.redraw();
+                        }
                     }
                 }
                 _ => {}
