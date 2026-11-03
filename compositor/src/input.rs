@@ -1,5 +1,6 @@
 // Adapted from smithay: smallvil/src/input.rs
 
+use smithay::wayland::input_method::InputMethodSeat as _;
 use smithay::wayland::shell::wlr_layer::Layer as WlrLayer;
 use smithay::{
     backend::input::{
@@ -281,6 +282,16 @@ impl State {
                     }
                 }
                 match keybinds::action_for(&state.shortcuts, mods, sym) {
+                    // An input method (fcitx5) switches layouts and its
+                    // engines itself: its trigger key is Super+Space too.
+                    Some(action)
+                        if keybinds::input_method_owns(
+                            &action,
+                            state.seat.input_method().keyboard_grabbed(),
+                        ) =>
+                    {
+                        FilterResult::Forward
+                    }
                     Some(action) => {
                         state.suppressed_keys.push(keycode);
                         FilterResult::Intercept(Some(action))

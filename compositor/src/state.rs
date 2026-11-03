@@ -576,6 +576,7 @@ impl State {
         crate::spawn::ClientEnv {
             wayland_display: self.socket_name.clone(),
             x11_display: self.xwayland.as_ref().map(|x| x.display_name()),
+            xmodifiers: crate::spawn::xmodifiers_for(&self.config.input),
         }
     }
 

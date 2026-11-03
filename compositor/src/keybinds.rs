@@ -697,3 +697,21 @@ mod tests {
         }
     }
 }
+
+/// With an input method running (it holds the keyboard), switching layouts
+/// is its job, so the key goes to it instead of cnde's own `next_layout`.
+pub fn input_method_owns(action: &Action, grabbed: bool) -> bool {
+    grabbed && matches!(action, Action::NextLayout)
+}
+
+#[cfg(test)]
+mod input_method_tests {
+    use super::*;
+
+    #[test]
+    fn input_method_takes_layout_switching_only() {
+        assert!(input_method_owns(&Action::NextLayout, true));
+        assert!(!input_method_owns(&Action::NextLayout, false));
+        assert!(!input_method_owns(&Action::Launcher, true));
+    }
+}

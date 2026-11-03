@@ -2313,6 +2313,22 @@ fn keyboard(c: &Config, d: &Config) -> Vec<Group> {
             ],
         ),
         group(
+            "Input method",
+            vec![
+                Row::new(
+                    "input.input_method",
+                    "Input method",
+                    Control::Dropdown(choices(&[
+                        ("None", s("")),
+                        ("Fcitx5", s("fcitx5")),
+                    ])),
+                    s(&c.input.input_method),
+                    s(&d.input.input_method),
+                )
+                .sub("For Japanese, Chinese, Korean: install fcitx5 and fcitx5-mozc (Japanese)"),
+            ],
+        ),
+        group(
             "Workspaces",
             vec![
                 Row::new(
