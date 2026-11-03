@@ -2546,6 +2546,14 @@ fn panel(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .sub("A power icon on the status button; power options are in quick settings"),
                 Row::new(
+                    "panel.keyboard_button",
+                    "On-screen keyboard button",
+                    Control::switch(),
+                    Value::Bool(p.keyboard_button),
+                    Value::Bool(dp.keyboard_button),
+                )
+                .sub("A keyboard icon left of the tray that shows a touch keyboard"),
+                Row::new(
                     "panel.media_controls",
                     "Media controls",
                     Control::switch(),

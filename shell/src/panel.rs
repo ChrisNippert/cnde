@@ -46,6 +46,9 @@ pub struct Draw<'a> {
     pub power_icon: bool,
     /// A microphone while an app is recording.
     pub mic_indicator: bool,
+    /// A keyboard button left of the tray, and whether the keyboard is up.
+    pub keyboard_button: bool,
+    pub keyboard_open: bool,
     /// What the buttons open is open (they're drawn highlighted).
     pub overview_open: bool,
     pub quick_settings_open: bool,
@@ -106,6 +109,8 @@ pub enum Button {
     Tray(usize),
     /// The chevron that opens the tray popover.
     Chevron,
+    /// Shows or hides the on-screen keyboard.
+    Keyboard,
 }
 
 pub struct Panel {
@@ -126,6 +131,8 @@ pub struct Panel {
     tray_regions: Vec<(usize, f32, f32)>,
     /// The tray chevron's logical x range, from the last draw.
     chevron_region: Option<(f32, f32)>,
+    /// The keyboard button's logical x range, from the last draw.
+    keyboard_region: Option<(f32, f32)>,
     /// The button under the pointer.
     hover: Option<Button>,
     /// Being edited in place.
@@ -185,6 +192,7 @@ impl Panel {
             status_region: None,
             tray_regions: Vec::new(),
             chevron_region: None,
+            keyboard_region: None,
             hover: None,
             edit: None,
             clock_region: None,
@@ -271,6 +279,8 @@ impl Panel {
             Some(Button::Tray(i))
         } else if self.chevron_region.is_some_and(|(a, b)| x >= a && x < b) {
             Some(Button::Chevron)
+        } else if self.keyboard_region.is_some_and(|(a, b)| x >= a && x < b) {
+            Some(Button::Keyboard)
         } else if self
             .clock_region
             .is_some_and(|(start, end)| x >= start && x < end)
@@ -408,6 +418,8 @@ impl Panel {
             tray_popover_open,
             power_icon,
             mic_indicator,
+            keyboard_button,
+            keyboard_open,
             overview_open,
             quick_settings_open,
             calendar_open,
@@ -713,6 +725,24 @@ impl Panel {
                 self.tray_regions.push((i, x, x + slot));
                 x += slot;
             }
+        }
+
+        // The on-screen keyboard's button, left of the tray.
+        self.keyboard_region = None;
+        if keyboard_button && self.edit.is_none() {
+            let a = tray_start - TRAY_GAP / 2.0 - slot;
+            let b = a + slot;
+            self.keyboard_region = Some((a, b));
+            self.button_background(
+                &mut canvas,
+                theme,
+                (a, b),
+                height,
+                Button::Keyboard,
+                keyboard_open,
+            );
+            canvas.icon(icons, "input-keyboard-symbolic", a + gap / 2.0, icon_y, icon, fg);
+            tray_start = a;
         }
 
         // Editing: a Done button left of the status icons.

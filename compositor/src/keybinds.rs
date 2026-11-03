@@ -40,6 +40,8 @@ pub enum Action {
     CancelScreenshot,
     /// Super+A: the overview's app grid.
     AppGrid,
+    /// Show or hide the shell's on-screen keyboard.
+    ToggleOsk,
     /// Super+Shift+S or Print Screen.
     Screenshot,
     /// Slide the workspace strip: +1 = next (content moves left).
@@ -237,6 +239,7 @@ fn action_named(name: &str) -> Option<Action> {
         "close" => Action::CloseWindow,
         "lock" => Action::Lock,
         "app_grid" => Action::AppGrid,
+        "osk" => Action::ToggleOsk,
         "show_desktop" => Action::ShowDesktop,
         "screenshot" => Action::Screenshot,
         "switcher" => Action::Switcher { back: false },

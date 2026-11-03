@@ -123,6 +123,7 @@
 # tray = "collapsed"       # "collapsed" (a chevron next to the status button opens a popover of icons), "inline" (each icon in the bar), "off"; true/false still work
 # power_icon = true        # a power icon at the end of the status button (power options live in quick settings)
 # media_controls = true    # the clock's popover shows the playing song (any MPRIS player) with prev/play/next
+# keyboard_button = false  # a bar button for the on-screen keyboard (shortcut: osk)
 # mic_indicator = true     # a microphone icon in the status button while an app is recording
 # height = 32
 # rounded = false          # rounded bottom corners and a soft shadow
