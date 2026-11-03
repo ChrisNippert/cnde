@@ -4,6 +4,8 @@
 //! treat them like a real keyboard's. It never takes keyboard focus. Held
 //! keys repeat by themselves: apps repeat a key that stays down.
 
+use std::time::{Duration, Instant};
+
 use cnde_ui::{Canvas, Painter, Weight};
 use smithay_client_toolkit::{
     compositor::FrameCallbackData,
@@ -27,6 +29,8 @@ const ROW_HEIGHT: f32 = 46.0;
 const GAP: f32 = 6.0;
 /// Kept free below it, so it floats a little like the dock.
 const BOTTOM_MARGIN: i32 = 8;
+/// How long it takes to slide in or out (as the notifications do).
+const ANIM: Duration = Duration::from_millis(230);
 const RADIUS: f32 = 18.0;
 const KEY_RADIUS: f32 = 9.0;
 const ROWS: usize = 5;
@@ -317,6 +321,54 @@ pub fn surface_height() -> f32 {
     ROWS as f32 * ROW_HEIGHT + (ROWS as f32 + 1.0) * GAP
 }
 
+/// The bottom margin for a presence `p` (0-1): at 0 the whole surface is
+/// below the bottom edge, at 1 it sits `BOTTOM_MARGIN` up from it. The
+/// layer moves, so the windows (and the frost, which follows the layer)
+/// don't have to be told anything.
+pub fn bottom_margin(p: f32) -> i32 {
+    let below = surface_height().ceil() as i32 + BOTTOM_MARGIN;
+    BOTTOM_MARGIN - ((1.0 - p.clamp(0.0, 1.0)) * below as f32).round() as i32
+}
+
+
+/// Scales premultiplied ARGB pixels by `presence` (0 clears them, 1 leaves
+/// them as they are).
+fn fade(pixels: &mut [u8], presence: f32) {
+    for byte in pixels.iter_mut() {
+        *byte = (f32::from(*byte) * presence).round() as u8;
+    }
+}
+
+/// Where the keyboard is in its slide: presence eases from `from` to `to`
+/// starting at `at`, so turning back starts from wherever it has got to.
+#[derive(Debug, Clone, Copy)]
+struct Slide {
+    from: f32,
+    to: f32,
+    at: Instant,
+}
+
+impl Slide {
+    /// 0 (below the edge) to 1 (in place), eased.
+    fn value(&self, now: Instant, duration: Duration) -> f32 {
+        let t = cnde_ui::anim::ease_out(cnde_ui::anim::progress(self.at, duration, now));
+        self.from + (self.to - self.from) * t
+    }
+
+    fn done(&self, now: Instant, duration: Duration) -> bool {
+        cnde_ui::anim::progress(self.at, duration, now) >= 1.0
+    }
+
+    /// Head for `to` from wherever it is now.
+    fn turn(&mut self, to: f32, now: Instant, duration: Duration) {
+        *self = Self {
+            from: self.value(now, duration),
+            to,
+            at: now,
+        };
+    }
+}
+
 /// Every key of `page` laid out across a surface `width` wide.
 pub fn layout(page: Page, width: f32) -> Vec<Placed> {
     let unit = (width - 2.0 * GAP) / ROW_UNITS;
@@ -416,17 +468,52 @@ pub struct Osk {
     /// For the frost behind it.
     output: Option<String>,
     frame_pending: bool,
+    slide: Slide,
+}
+
+impl Osk {
+    /// Heading for the bottom edge (or already there).
+    fn closing(&self) -> bool {
+        self.slide.to == 0.0
+    }
+
+    /// Up, rather than on its way out.
+    pub fn open(&self) -> bool {
+        !self.closing()
+    }
 }
 
 impl App {
-    /// Show the keyboard, or put it away.
+    /// Show the keyboard, or slide it away; toggled mid-slide, it turns
+    /// back from where it is.
     pub fn toggle_osk(&mut self) {
-        if self.osk.is_some() {
-            self.drop_osk();
-        } else {
-            self.show_osk();
+        match self.osk.as_ref().map(Osk::closing) {
+            None => self.show_osk(),
+            Some(true) => self.turn_osk(1.0),
+            Some(false) => self.close_osk(),
         }
         self.redraw_panels();
+    }
+
+    /// Slide the keyboard to `to` (1 up, 0 down) from where it is.
+    fn turn_osk(&mut self, to: f32) {
+        let now = Instant::now();
+        let duration = cnde_ui::anim::scaled(ANIM);
+        let Some(osk) = &mut self.osk else {
+            return;
+        };
+        osk.slide.turn(to, now, duration);
+        self.draw_osk();
+    }
+
+    /// Slide the keyboard away, letting go of anything held. It is destroyed
+    /// once it's below the edge (at once if animations are off).
+    fn close_osk(&mut self) {
+        self.osk_release();
+        if let Some(osk) = &mut self.osk {
+            osk.hover = None;
+        }
+        self.turn_osk(0.0);
     }
 
     fn show_osk(&mut self) {
@@ -445,8 +532,10 @@ impl App {
             Some(&output),
         );
         let height = surface_height().ceil() as u32;
+        let now = Instant::now();
         layer.set_anchor(Anchor::BOTTOM);
-        layer.set_margin(0, 0, BOTTOM_MARGIN, 0);
+        // Starts below the edge, and slides up.
+        layer.set_margin(0, 0, bottom_margin(0.0), 0);
         layer.set_size(width, height);
         // Drawn over windows, so it reserves no space.
         layer.set_exclusive_zone(0);
@@ -454,6 +543,11 @@ impl App {
         layer.wl_surface().set_buffer_scale(scale);
         layer.commit();
         self.osk = Some(Osk {
+            slide: Slide {
+                from: 0.0,
+                to: 1.0,
+                at: now,
+            },
             layer,
             page: Page::Letters,
             shift: Shift::Off,
@@ -498,6 +592,7 @@ impl App {
             && osk.layer.wl_surface() == surface
         {
             osk.frame_pending = false;
+            self.draw_osk();
         }
     }
 
@@ -521,6 +616,10 @@ impl App {
         let Some(osk) = &mut self.osk else {
             return;
         };
+        // On its way out: nothing gets typed.
+        if osk.closing() {
+            return;
+        }
         let Some(index) = hit(&osk.keys, x, y) else {
             return;
         };
@@ -537,7 +636,7 @@ impl App {
                 osk.hover = None;
             }
             Kind::Hide => {
-                self.drop_osk();
+                self.close_osk();
                 self.redraw_panels();
                 return;
             }
@@ -593,12 +692,21 @@ impl App {
     }
 
     fn draw_osk(&mut self) {
+        let now = Instant::now();
+        let duration = cnde_ui::anim::scaled(ANIM);
         let Some(osk) = &self.osk else {
             return;
         };
+        // Slid all the way down: gone.
+        if osk.closing() && osk.slide.done(now, duration) {
+            self.drop_osk();
+            return;
+        }
         if !osk.configured {
             return;
         }
+        let presence = osk.slide.value(now, duration);
+        let animating = !osk.slide.done(now, duration);
         let scale = osk.scale;
         let (lw, lh) = (osk.width as f32, surface_height().ceil());
         let (w, h) = (osk.width as i32 * scale, lh as i32 * scale);
@@ -677,6 +785,11 @@ impl App {
                 p.label_v(label, cx - tw / 2.0, cy, placed.w - 4.0, size, Weight::Normal, ink);
             }
         }
+        // Fades in and out with the slide (the pixels are premultiplied, so
+        // every channel scales with the alpha).
+        if presence < 1.0 {
+            fade(pixels, presence);
+        }
         if self.shm_format == wl_shm::Format::Argb8888 {
             for pixel in pixels.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
@@ -685,11 +798,13 @@ impl App {
         let Some(osk) = &mut self.osk else {
             return;
         };
+        // The layer itself moves, so the frost behind it moves too.
+        osk.layer.set_margin(0, 0, bottom_margin(presence), 0);
         let surface = osk.layer.wl_surface();
         surface.set_buffer_scale(scale);
         surface.damage_buffer(0, 0, w, h);
         if buffer.attach_to(surface).is_ok() {
-            if !osk.frame_pending {
+            if animating && !osk.frame_pending {
                 surface.frame(&self.qh, FrameCallbackData(surface.clone()));
                 osk.frame_pending = true;
             }
@@ -700,7 +815,7 @@ impl App {
                 output,
                 cards: vec![cnde_ipc::CardFrost {
                     rect: [0.0, 0.0, lw.into(), lh.into()],
-                    alpha: 1.0,
+                    alpha: presence,
                     radius: Some(RADIUS.into()),
                 }],
                 layer: NAMESPACE.to_string(),
@@ -781,5 +896,68 @@ mod tests {
         assert!(mods.contains(&LEFT_CTRL) && mods.contains(&LEFT_ALT));
         toggle_mod(&mut mods, LEFT_CTRL);
         assert!(!mods.contains(&LEFT_CTRL) && mods.contains(&LEFT_ALT));
+    }
+
+    #[test]
+    fn margin_slides_from_below_the_edge() {
+        // At 0 the whole surface is below the bottom edge.
+        assert_eq!(bottom_margin(0.0), -(surface_height().ceil() as i32));
+        assert_eq!(bottom_margin(1.0), BOTTOM_MARGIN);
+        let mid = bottom_margin(0.5);
+        assert!(mid > bottom_margin(0.0) && mid < BOTTOM_MARGIN);
+    }
+
+    #[test]
+    fn slide_eases_in_and_out() {
+        let t0 = Instant::now();
+        let d = Duration::from_millis(200);
+        let up = Slide {
+            from: 0.0,
+            to: 1.0,
+            at: t0,
+        };
+        assert_eq!(up.value(t0, d), 0.0);
+        // Halfway through an ease-out is 7/8 of the way.
+        assert!((up.value(t0 + d / 2, d) - 0.875).abs() < 1e-5);
+        assert!(!up.done(t0 + d / 2, d));
+        assert_eq!(up.value(t0 + d, d), 1.0);
+        assert!(up.done(t0 + d, d));
+        let down = Slide {
+            from: 1.0,
+            to: 0.0,
+            at: t0,
+        };
+        assert_eq!(down.value(t0 + d, d), 0.0);
+        // No animation: it's already where it's going.
+        assert_eq!(up.value(t0, Duration::ZERO), 1.0);
+    }
+
+    #[test]
+    fn turning_back_starts_from_where_it_is() {
+        let t0 = Instant::now();
+        let d = Duration::from_millis(200);
+        let mut slide = Slide {
+            from: 0.0,
+            to: 1.0,
+            at: t0,
+        };
+        let mid = t0 + d / 2;
+        let p = slide.value(mid, d);
+        slide.turn(0.0, mid, d);
+        assert_eq!(slide.to, 0.0);
+        // No jump at the reversal, and it heads down from there.
+        assert!((slide.value(mid, d) - p).abs() < 1e-6);
+        assert!(slide.value(mid + d / 2, d) < p);
+        assert_eq!(slide.value(mid + d, d), 0.0);
+        assert!(slide.done(mid + d, d));
+    }
+
+    #[test]
+    fn fade_scales_pixels_with_presence() {
+        let mut px = [200u8, 100, 50, 255];
+        fade(&mut px, 0.5);
+        assert_eq!(px, [100, 50, 25, 128]);
+        fade(&mut px, 0.0);
+        assert_eq!(px, [0, 0, 0, 0]);
     }
 }
