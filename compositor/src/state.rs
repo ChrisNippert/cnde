@@ -137,6 +137,8 @@ pub struct State {
     /// The Alt+Tab switcher, and windows by last focus, newest first.
     pub switcher: crate::switcher::Switcher,
     pub mru: Vec<smithay::desktop::Window>,
+    /// The window the pointer last moved onto, for focus-follows-mouse.
+    pub hovered: Option<smithay::desktop::Window>,
     pub ipc: crate::ipc::IpcClients,
     pub popup_anims: crate::popup_anim::PopupAnims,
     pub capture: crate::capture::CaptureState,
@@ -301,6 +303,7 @@ impl State {
             overview: crate::overview::Overview::new(),
             switcher: Default::default(),
             mru: Vec::new(),
+            hovered: None,
             ipc: Default::default(),
             popup_anims: Default::default(),
             capture,

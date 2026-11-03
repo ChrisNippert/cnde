@@ -23,6 +23,8 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::compositor::RegionAttributes;
 use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
 
+use cnde_config::FocusFollowsMouse;
+
 use crate::{
     grabs::{MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab, SnapPairResizeGrab, TileResizeGrab},
     keybinds::{self, Action, Direction, ModKey},
@@ -617,11 +619,55 @@ impl State {
             self.overview_motion(location);
             self.bar_motion(location);
             self.check_hot_corner(location);
+            self.hover_focus(location);
         }
         // We draw the cursor ourselves on real hardware; the overview's
         // close button follows the pointer.
         if self.backend.draws_cursor() || self.overview.is_open() {
             self.queue_redraw();
+        }
+    }
+
+    /// Focus follows the mouse (`[windows] focus_follows_mouse`): moving onto
+    /// another window focuses it, but not while a grab, a held button or
+    /// another piece of UI has the input.
+    fn hover_focus(&mut self, location: Point<f64, Logical>) {
+        let mode = self.config.windows.focus_follows_mouse;
+        if mode == FocusFollowsMouse::Off {
+            return;
+        }
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        let busy = pointer.is_grabbed()
+            || self.lock.is_locked()
+            || self.overview.is_open()
+            || self.switcher.is_open()
+            || self.screenshot.active
+            || self.exclusive_layer().is_some()
+            || self.preview_covers(location)
+            || self
+                .layer_surface_under(self.layers_above_windows(location), location)
+                .is_some();
+        if busy {
+            return;
+        }
+        // Only the first motion onto a window counts, not every one after.
+        let window = self.space.element_under(location).map(|(w, _)| w.clone());
+        if window == self.hovered {
+            return;
+        }
+        self.hovered = window.clone();
+        let Some(window) = window else {
+            return;
+        };
+        let wanted = match mode {
+            FocusFollowsMouse::Off => false,
+            FocusFollowsMouse::Tiling => self.is_tiled(&window),
+            FocusFollowsMouse::Always => true,
+        };
+        if wanted && self.focused_window().as_ref() != Some(&window) {
+            self.focus_hovered(&window);
         }
     }
 

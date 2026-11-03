@@ -2241,6 +2241,14 @@ fn workspace_mode(v: cnde_config::WorkspaceMode) -> Value {
     })
 }
 
+fn focus_follows_mouse(v: cnde_config::FocusFollowsMouse) -> Value {
+    s(match v {
+        cnde_config::FocusFollowsMouse::Off => "off",
+        cnde_config::FocusFollowsMouse::Tiling => "tiling",
+        cnde_config::FocusFollowsMouse::Always => "always",
+    })
+}
+
 fn tiling_toggle(v: cnde_config::TilingToggle) -> Value {
     s(match v {
         cnde_config::TilingToggle::All => "all",
@@ -2259,6 +2267,23 @@ fn windows(c: &Config, d: &Config) -> Vec<Group> {
     let (t, dt) = (&c.tiling, &d.tiling);
     let px = |v: f64| format!("{v:.0} px");
     vec![
+        group(
+            "Focus",
+            vec![
+                Row::new(
+                    "windows.focus_follows_mouse",
+                    "Focus follows mouse",
+                    Control::Dropdown(choices(&[
+                        ("Off", s("off")),
+                        ("When tiling", s("tiling")),
+                        ("Always", s("always")),
+                    ])),
+                    focus_follows_mouse(c.windows.focus_follows_mouse),
+                    focus_follows_mouse(d.windows.focus_follows_mouse),
+                )
+                .sub("Hovering a window focuses it. Off: click to focus. Focus doesn't move while you drag, or while a menu or the overview is open"),
+            ],
+        ),
         group(
             "Snapping",
             vec![Row::new(

@@ -44,6 +44,8 @@ pub struct Config {
     pub workspaces: Workspaces,
     /// Snapping windows dragged to a monitor's edges.
     pub snap: Snap,
+    /// Which windows get focus when the pointer moves over them.
+    pub windows: Windows,
     /// Switching to the dark style and back by the time of day.
     pub dark_mode: DarkMode,
     /// A warm colour filter, on a schedule.
@@ -1027,6 +1029,27 @@ impl Default for Snap {
     fn default() -> Self {
         Self { edge: 10 }
     }
+}
+
+/// `[windows]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Windows {
+    /// Hovering a window focuses it: "off", "tiling" (only tiled windows)
+    /// or "always".
+    pub focus_follows_mouse: FocusFollowsMouse,
+}
+
+/// Which windows the pointer focuses when it moves over them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FocusFollowsMouse {
+    #[default]
+    Off,
+    /// Only windows on a tiling workspace.
+    Tiling,
+    /// Any window, floating or tiled.
+    Always,
 }
 
 /// Hyprland-style master-stack tiling (ARCHITECTURE.md §4.4). Each

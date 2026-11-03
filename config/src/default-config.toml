@@ -113,6 +113,9 @@
 [snap]
 # edge = 10                # px from a monitor's side or top where a dragged window snaps (2-96)
 
+[windows]
+# focus_follows_mouse = "off"  # "off": click to focus; "tiling": hovering a tiled window focuses it; "always": hovering any window focuses it
+
 [workspaces]
 # mode = "continuous"      # "continuous": one strip, monitors show consecutive workspaces and switch together; "individual": every monitor has its own workspaces and switching moves only the monitor you used last
 # hot_corner = true        # false: the top-left corner of the main monitor no longer opens the overview
