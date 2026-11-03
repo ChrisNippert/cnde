@@ -265,8 +265,8 @@ pub struct Appearance {
     /// blurred wallpaper, or solid. Snapped or maximized windows are
     /// always solid.
     pub material: Material,
-    /// How blurred the frost is, in percent (25-200): 100 is the usual
-    /// look, more blurs it further.
+    /// How blurred the frost is, in percent (0-200): 100 is the usual
+    /// look, more blurs it further, 0 is clear glass.
     pub frost: u8,
     /// With a frosted material: blur what's really behind the bar, dock,
     /// popups and cards (windows too), not just the wallpaper. Costs some
@@ -1285,7 +1285,7 @@ impl Config {
         in_range(
             "appearance.frost",
             self.appearance.frost as f64,
-            25.0,
+            0.0,
             200.0,
         )?;
         in_range("tiling.master_ratio", self.tiling.master_ratio, 0.1, 0.9)?;
@@ -1531,6 +1531,7 @@ mod tests {
         let c = Config::parse("[appearance]\nfrost = 150\n").unwrap();
         assert_eq!(c.appearance.frost, 150);
         assert!(Config::parse("[appearance]\nfrost = 300\n").is_err());
+        assert_eq!(Config::parse("[appearance]\nfrost = 0\n").unwrap().appearance.frost, 0);
     }
 
     #[test]

@@ -120,7 +120,7 @@ impl State {
         output: &Output,
         now: Instant,
     ) -> Vec<crate::render::OutputElement> {
-        let (Some(area), Some(geo)) = (self.usable_area(output), self.space.output_geometry(output))
+        let (Some(area), Some(geo)) = (self.snap_area(output), self.space.output_geometry(output))
         else {
             return Vec::new();
         };
@@ -374,8 +374,10 @@ impl State {
         let output = self.space.output_under(pointer).next().cloned();
         // Snap within what panels leave free, like maximize does.
         let area = output.as_ref().and_then(|o| self.usable_area(o));
-        let target = area
-            .and_then(|area| snap_target(pointer, area, self.config.snap.edge as f64))
+        // The zones start where a floating bar and dock really are.
+        let zones = output.as_ref().and_then(|o| self.snap_area(o));
+        let target = zones
+            .and_then(|zones| snap_target(pointer, zones, self.config.snap.edge as f64))
             .filter(|t| !(was_tile && *t == Placement::Maximized));
 
         let current = self

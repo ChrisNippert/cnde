@@ -212,8 +212,14 @@ impl State {
             // is cut from (see udev.rs).
             let wallpaper = self.wallpapers.element(renderer, &backend.output);
             let wallpaper = wallpaper.map(render::OutputElement::Wallpaper);
-            self.live_blur.set_frost(self.config.appearance.frost);
-            let live = self.config.live_blur();
+            let from = self
+                .crossfade
+                .wants_capture(&backend.output)
+                .then(|| self.crossfade_from.clone())
+                .flatten();
+            let cfg: &cnde_config::Config = from.as_deref().unwrap_or(&self.config);
+            self.live_blur.set_frost(cfg.appearance.frost);
+            let live = cfg.live_blur();
             let backdrop = match output_geo {
                 Some(geo) => crate::overview::backdrop(
                     &mut self.overview,
@@ -272,7 +278,7 @@ impl State {
                         &mut self.dock_frost,
                         &self.wallpapers,
                         &backend.output,
-                        &self.config,
+                        cfg,
                         now,
                         live.then_some(&mut self.live_blur),
                     ),
@@ -292,7 +298,7 @@ impl State {
                             renderer,
                             &self.wallpapers,
                             &backend.output,
-                            &self.config,
+                            cfg,
                             &self.popup_anims,
                             &crate::frost::Behind::new(&self.space, &backend.output, bar_tint),
                             now,
@@ -330,7 +336,7 @@ impl State {
                         &mut self.dock_frost,
                         &self.wallpapers,
                         &backend.output,
-                        &self.config,
+                        cfg,
                         now,
                         None,
                     ),

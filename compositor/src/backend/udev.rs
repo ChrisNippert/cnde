@@ -949,8 +949,16 @@ impl State {
             // and nothing redraws to add it.
             let wallpaper = self.wallpapers.element(&mut gpu.renderer, &output);
             let wallpaper = wallpaper.map(render::OutputElement::Wallpaper);
-            self.live_blur.set_frost(self.config.appearance.frost);
-            let live = self.config.live_blur();
+            // The frame that's copied for a crossfade is drawn with the old
+            // config's frost.
+            let from = self
+                .crossfade
+                .wants_capture(&output)
+                .then(|| self.crossfade_from.clone())
+                .flatten();
+            let cfg: &cnde_config::Config = from.as_deref().unwrap_or(&self.config);
+            self.live_blur.set_frost(cfg.appearance.frost);
+            let live = cfg.live_blur();
             let start = crate::perf::now();
             let backdrop = match self.space.output_geometry(&output) {
                 Some(geo) => crate::overview::backdrop(
@@ -1000,7 +1008,7 @@ impl State {
                     &mut self.dock_frost,
                     &self.wallpapers,
                     &output,
-                    &self.config,
+                    cfg,
                     now,
                     live.then_some(&mut self.live_blur),
                 ),
@@ -1023,7 +1031,7 @@ impl State {
                         &mut gpu.renderer,
                         &self.wallpapers,
                         &output,
-                        &self.config,
+                        cfg,
                         &self.popup_anims,
                         &crate::frost::Behind::new(&self.space, &output, bar_tint),
                         now,
@@ -1057,7 +1065,7 @@ impl State {
                     &mut self.dock_frost,
                     &self.wallpapers,
                     &output,
-                    &self.config,
+                    cfg,
                     now,
                     None,
                 ),

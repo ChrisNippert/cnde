@@ -1445,7 +1445,7 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     "appearance.frost",
                     "Frost",
                     Control::Slider {
-                        min: 25.0,
+                        min: 0.0,
                         max: 200.0,
                         step: 5.0,
                         int: true,

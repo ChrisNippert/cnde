@@ -810,7 +810,7 @@ mod tests {
     #[test]
     fn blur_plan_grows_smoothly_with_strength() {
         let mut last = 0.0;
-        for percent in (25..=200).step_by(5) {
+        for percent in (5..=200).step_by(5) {
             let (passes, spread) = blur_plan(percent as f32 / 100.0);
             assert!(passes >= 1 && spread <= MAX_SPREAD + 1e-3);
             let sigma = TAP_SIGMA * spread * (passes as f32).sqrt();

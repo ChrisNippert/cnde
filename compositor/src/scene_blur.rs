@@ -375,7 +375,7 @@ fn live_size(full: Size<i32, Physical>) -> Size<i32, Physical> {
 /// At 1/8 resolution, use the same calibrated plan as the static wallpaper
 /// frost; the live scene is captured at 1/4 first to keep its source smooth.
 fn live_strength(frost: u8) -> (usize, f32) {
-    crate::wallpaper::blur_plan(frost.clamp(25, 200) as f32 / 100.0)
+    crate::wallpaper::blur_plan(frost.min(200) as f32 / 100.0)
 }
 
 /// Whether the scene drawn into a slot has to be blurred again: the first

@@ -141,6 +141,7 @@ impl State {
                 || old.wallpaper != self.config.wallpaper
         }) {
             let outputs: Vec<_> = self.space.outputs().cloned().collect();
+            self.crossfade_from = old.map(|old| std::sync::Arc::new(old.clone()));
             self.crossfade.start(outputs.iter());
         }
         self.wallpapers.update_config(&self.config);
