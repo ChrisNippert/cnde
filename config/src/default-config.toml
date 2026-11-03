@@ -121,7 +121,7 @@
 # focus_follows_mouse = "off"  # "off": click to focus; "tiling": hovering a tiled window focuses it; "always": hovering any window focuses it
 
 [workspaces]
-# mode = "continuous"      # "continuous": one strip, monitors show consecutive workspaces and switch together; "individual": every monitor has its own workspaces and switching moves only the monitor you used last
+# mode = "continuous"      # "continuous": one strip, monitors show consecutive workspaces and switch together; "individual": every monitor has its own workspaces and switching moves only the monitor you used last; "joined": all monitors are one workspace, each shows the same number with its own windows on it, and switching moves them all
 # hot_corner = true        # false: the top-left corner of the main monitor no longer opens the overview
 
 [panel]

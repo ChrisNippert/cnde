@@ -3,8 +3,9 @@
 //! ARCHITECTURE.md §6: the shell gets workspaces the same way as any bar.
 //!
 //! Mapping: one group spanning every monitor (they share one strip), or in
-//! individual mode (`workspaces.mode`) one group per monitor. We publish
-//! workspaces that have windows or are on screen; the spare empty ones at
+//! individual mode (`workspaces.mode`) one group per monitor. In joined mode
+//! it's one group again, for the workspaces every monitor shows at once. We
+//! publish workspaces that have windows or are on screen; the spare empty ones at
 //! the strip's ends are an implementation detail. Names are their 1-based
 //! position (in the group), "active" means on a monitor right now, and
 //! activating one slides its strip to bring it onto the main monitor (its
@@ -69,7 +70,13 @@ impl State {
         let (outputs, main) = self.strip_outputs();
         if self.workspaces.individual {
             let mut infos = Vec::new();
-            for output in &outputs {
+            // Joined mode: the monitors share positions, so the main one
+            // speaks for all in a single group.
+            let shown: Vec<&Output> = match self.workspaces.joined {
+                true => outputs.get(main).into_iter().collect(),
+                false => outputs.iter().collect(),
+            };
+            for output in shown {
                 let name = output.name();
                 let target = self.workspaces.target_in(Some(&name));
                 let mut position = 0;
@@ -82,12 +89,20 @@ impl State {
                         continue;
                     };
                     let visible = p == target;
-                    if ws.windows.is_empty() && !visible {
+                    let empty = match self.workspaces.joined {
+                        true => !self.workspaces.occupied_at(p),
+                        false => ws.windows.is_empty(),
+                    };
+                    if empty && !visible {
                         continue;
                     }
                     infos.push(Info {
                         id: ws.id,
-                        group: name.clone(),
+                        group: if self.workspaces.joined {
+                            String::new()
+                        } else {
+                            name.clone()
+                        },
                         name: (position + 1).to_string(),
                         position,
                         active: visible,
@@ -126,15 +141,16 @@ impl State {
             return;
         }
         let infos = self.ext_workspace_infos();
-        let groups: Vec<(String, Vec<Output>)> = if self.workspaces.individual {
-            self.strip_outputs()
-                .0
-                .into_iter()
-                .map(|o| (o.name(), vec![o]))
-                .collect()
-        } else {
-            vec![(String::new(), self.space.outputs().cloned().collect())]
-        };
+        let groups: Vec<(String, Vec<Output>)> =
+            if self.workspaces.individual && !self.workspaces.joined {
+                self.strip_outputs()
+                    .0
+                    .into_iter()
+                    .map(|o| (o.name(), vec![o]))
+                    .collect()
+            } else {
+                vec![(String::new(), self.space.outputs().cloned().collect())]
+            };
         let dh = self.display_handle.clone();
 
         for client in &mut self.ext_workspace_state.clients {

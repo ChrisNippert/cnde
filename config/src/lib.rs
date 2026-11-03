@@ -1028,6 +1028,9 @@ pub enum WorkspaceMode {
     /// Every monitor has its own workspaces, and switching moves only the
     /// monitor you last used.
     Individual,
+    /// All monitors are one workspace: they show the same number, windows
+    /// stay on their own monitor, and switching moves every monitor together.
+    Joined,
 }
 
 /// `[snap]`.
@@ -1379,12 +1382,13 @@ mod tests {
     }
 
     #[test]
-    fn workspace_mode_reads_both_modes() {
+    fn workspace_mode_reads_all_modes() {
         let mode = |v: &str| {
             Config::parse(&format!("[workspaces]\nmode = \"{v}\"\n")).map(|c| c.workspaces.mode)
         };
         assert_eq!(mode("continuous").unwrap(), WorkspaceMode::Continuous);
         assert_eq!(mode("individual").unwrap(), WorkspaceMode::Individual);
+        assert_eq!(mode("joined").unwrap(), WorkspaceMode::Joined);
         assert!(mode("spiral").is_err());
         assert_eq!(Config::default().workspaces.mode, WorkspaceMode::Continuous);
     }
