@@ -154,6 +154,24 @@ impl Value {
     }
 }
 
+/// A monitor turned a quarter further, clockwise or not: the `rotation`
+/// value to write (unset for upright).
+pub fn turned(now: cnde_config::Rotation, clockwise: bool) -> Value {
+    use cnde_config::Rotation::*;
+    let next = match (now, clockwise) {
+        (Normal, true) | (UpsideDown, false) => Right,
+        (Right, true) | (Left, false) => UpsideDown,
+        (UpsideDown, true) | (Normal, false) => Left,
+        (Left, true) | (Right, false) => Normal,
+    };
+    match next {
+        Normal => Value::Unset,
+        Right => s("right"),
+        UpsideDown => s("upside-down"),
+        Left => s("left"),
+    }
+}
+
 fn s(text: &str) -> Value {
     Value::Str(text.into())
 }
@@ -1779,12 +1797,12 @@ fn displays_page(c: &Config, displays: &[Display], brightness: Option<u32>) -> V
             rows.push(Row {
                 key: output_key("rotation"),
                 title: "Rotation".into(),
-                subtitle: "For a monitor turned on its side".into(),
+                subtitle: "Which way the monitor is turned; or use the arrows on it above".into(),
                 control: Control::Dropdown(choices(&[
-                    ("Landscape", Value::Unset),
-                    ("Portrait (turned right)", s("right")),
-                    ("Portrait (turned left)", s("left")),
-                    ("Landscape (upside down)", s("upside-down")),
+                    ("Upright", Value::Unset),
+                    ("Turned clockwise", s("right")),
+                    ("Upside down", s("upside-down")),
+                    ("Turned anticlockwise", s("left")),
                 ])),
                 value: rotation,
                 default: Value::Unset,
@@ -3512,6 +3530,18 @@ mod tests {
         assert!(matches!(groups[0].rows[0].control, Control::Mixer));
         assert_eq!(groups[1].title, "System sounds");
         assert_eq!(groups[1].rows.len(), 1);
+    }
+
+    #[test]
+    fn turning_goes_round_both_ways() {
+        use cnde_config::Rotation::*;
+        assert_eq!(turned(Normal, true), s("right"));
+        assert_eq!(turned(Right, true), s("upside-down"));
+        assert_eq!(turned(UpsideDown, true), s("left"));
+        assert_eq!(turned(Left, true), Value::Unset);
+        assert_eq!(turned(Normal, false), s("left"));
+        assert_eq!(turned(Left, false), s("upside-down"));
+        assert_eq!(turned(Right, false), Value::Unset);
     }
 
     #[test]

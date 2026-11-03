@@ -37,6 +37,8 @@ pub enum Target {
     Mixer(crate::mixer::Hit),
     /// A monitor on the arrangement canvas (index into `Ui::displays`).
     Screen(usize),
+    /// Its turn button: clockwise (top right) or not (top left).
+    Rotate(usize, bool),
     /// A wallpaper tile; `None` is the built-in one.
     Wallpaper(Option<usize>),
     /// The tile after the wallpapers: pick a picture of your own.
@@ -1177,6 +1179,35 @@ fn arrangement(ui: &Ui, a: &mut Anim, p: &mut Painter<'_, '_>, out: &mut Painted
             t.window_dim,
         );
         out.hits.push((r, Target::Screen(i)));
+        // Turn it a quarter: anticlockwise at the top left, clockwise at
+        // the top right (below the top bar's line).
+        if r.w >= 72.0 && r.h >= 52.0 {
+            for clockwise in [false, true] {
+                let size = 22.0;
+                let bx = if clockwise { r.x + r.w - 8.0 - size } else { r.x + 8.0 };
+                let b = Rect::new(bx, r.y + 14.0, size, size);
+                let lit = hover(a, ui, Target::Rotate(i, clockwise));
+                p.canvas.circle(
+                    b.x + size / 2.0,
+                    b.y + size / 2.0,
+                    size / 2.0,
+                    t.window_text.with_alpha(0.08 + 0.14 * lit),
+                );
+                let icon = if clockwise {
+                    "object-rotate-right-symbolic"
+                } else {
+                    "object-rotate-left-symbolic"
+                };
+                p.icon(
+                    icon,
+                    b.x + size / 2.0,
+                    b.y + size / 2.0,
+                    14.0,
+                    t.window_text.with_alpha(0.6 + 0.4 * lit),
+                );
+                out.hits.push((b, Target::Rotate(i, clockwise)));
+            }
+        }
     }
 }
 

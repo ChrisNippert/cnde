@@ -1485,6 +1485,21 @@ impl App {
                     }
                 }
             }
+            Target::Rotate(i, clockwise) => {
+                if let Some(d) = self.ui.displays.get(i) {
+                    let now = self
+                        .ui
+                        .config
+                        .output(&d.name)
+                        .map(|o| o.rotation)
+                        .unwrap_or_default();
+                    let key = Key::Output {
+                        name: d.name.clone(),
+                        field: "rotation",
+                    };
+                    self.write(&[(key, pages::turned(now, clockwise))]);
+                }
+            }
             Target::AddWallpaper => self.add_wallpaper(),
             Target::Advanced => {
                 self.ui.advanced = !self.ui.advanced;
