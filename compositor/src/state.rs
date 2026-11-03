@@ -248,6 +248,14 @@ impl State {
                 &dh,
                 client_is_unrestricted,
             );
+        // Typing Japanese and the like: apps send their text field's state
+        // (text-input) and an IME such as fcitx5 answers (input-method).
+        // The IME can type into any window, so sandboxes don't see it.
+        smithay::wayland::text_input::TextInputManagerState::new::<Self>(&dh);
+        smithay::wayland::input_method::InputMethodManagerState::new::<Self, _>(
+            &dh,
+            client_is_unrestricted,
+        );
         let idle = crate::power::Idle::new(&dh, event_loop.handle());
         let capture = crate::capture::CaptureState::new(&dh);
         let mut seat_state = SeatState::new();
@@ -701,6 +709,7 @@ pub struct ClientState {
 ///   - wlr-layer-shell (overlays, panels, input grabs)
 ///   - ext-session-lock (locking and unlocking the session)
 ///   - wp-security-context itself (a sandbox can't mint new contexts)
+///   - zwp-input-method (an IME sees every keystroke; text-input is fine)
 ///
 /// Everything else is ordinary app plumbing and stays visible. The idle
 /// notifier is the one privileged-ish global smithay gives no filter for.

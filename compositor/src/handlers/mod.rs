@@ -7,17 +7,18 @@ use smithay::{
     backend::allocator::dmabuf::Dmabuf,
     delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
     delegate_output, delegate_pointer_constraints, delegate_relative_pointer, delegate_seat,
-    delegate_presentation, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_dialog,
+    delegate_input_method_manager, delegate_presentation, delegate_text_input_manager, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_dialog,
     input::{
         Seat, SeatHandler, SeatState,
         pointer::{CursorImageStatus, PointerHandle},
     },
-    utils::{Logical, Point},
+    utils::{Logical, Point, Rectangle},
     reexports::{
         wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
         wayland_server::{Resource, protocol::wl_surface::WlSurface},
     },
     wayland::{
+        input_method::{InputMethodHandler, PopupSurface as ImePopupSurface},
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         output::OutputHandler,
         pointer_constraints::{PointerConstraintsHandler, with_pointer_constraint},
@@ -58,6 +59,39 @@ impl SeatHandler for State {
     }
 }
 delegate_seat!(State);
+delegate_text_input_manager!(State);
+delegate_input_method_manager!(State);
+
+/// The IME's candidate list is a popup of the window being typed into, so it
+/// is drawn with that window's popups, at the text cursor the app reported.
+impl InputMethodHandler for State {
+    fn new_popup(&mut self, surface: ImePopupSurface) {
+        if let Err(err) = self.popups.track_popup(smithay::desktop::PopupKind::from(surface)) {
+            tracing::warn!(?err, "failed to track an input method popup");
+        }
+        self.queue_redraw();
+    }
+
+    fn dismiss_popup(&mut self, surface: ImePopupSurface) {
+        if let Some(parent) = surface.get_parent().map(|p| p.surface.clone()) {
+            let _ = smithay::desktop::PopupManager::dismiss_popup(
+                &parent,
+                &smithay::desktop::PopupKind::from(surface),
+            );
+        }
+        self.queue_redraw();
+    }
+
+    fn popup_repositioned(&mut self, _surface: ImePopupSurface) {
+        self.queue_redraw();
+    }
+
+    fn parent_geometry(&self, parent: &WlSurface) -> Rectangle<i32, Logical> {
+        self.window_for_surface(parent)
+            .map(|w| w.geometry())
+            .unwrap_or_default()
+    }
+}
 
 impl SelectionHandler for State {
     type SelectionUserData = ();
