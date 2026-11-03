@@ -777,6 +777,18 @@ impl App {
         }
         if let Err(err) = state.set(cat, value.as_str()) {
             self.show_error(format!("Can't set the default app: {err}"));
+            return;
+        }
+        // Apps' file pickers follow the file manager.
+        if cat.id == "files" {
+            match defaults::set_file_chooser(&state.env, defaults::file_chooser_for(value.as_str()))
+            {
+                Ok(true) => {
+                    std::thread::spawn(defaults::restart_portal);
+                }
+                Ok(false) => {}
+                Err(err) => self.show_error(format!("Can't change the file picker: {err}")),
+            }
         }
     }
 

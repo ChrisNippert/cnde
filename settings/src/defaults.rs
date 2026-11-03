@@ -172,6 +172,74 @@ impl State {
     }
 }
 
+/// The file picker that goes with a file manager (xdg-desktop-portal
+/// backends, most wanted first): its own where it has one, else GTK's.
+pub fn file_chooser_for(app_id: &str) -> &'static str {
+    match app_id.trim_end_matches(".desktop") {
+        "cnde-files" => "cnde;gtk",
+        "org.gnome.Nautilus" | "nautilus" => "gnome;gtk",
+        "org.kde.dolphin" => "kde;gtk",
+        _ => "gtk",
+    }
+}
+
+/// Point the portal's file picker at `backends` in the user's
+/// `cnde-portals.conf` (the compositor puts it there at first login).
+/// Whether it changed.
+pub fn set_file_chooser(env: &Env, backends: &str) -> std::io::Result<bool> {
+    let path = env.config_home.join("xdg-desktop-portal/cnde-portals.conf");
+    let old = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            include_str!("../../data/cnde-portals.conf").to_string()
+        }
+        Err(err) => return Err(err),
+    };
+    let new = with_file_chooser(&old, backends);
+    if new == old && path.exists() {
+        return Ok(false);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&path, new)?;
+    Ok(true)
+}
+
+const FILE_CHOOSER: &str = "org.freedesktop.impl.portal.FileChooser=";
+
+/// `conf` with its FileChooser line set to `backends` (added under
+/// `[preferred]` if it has none); the rest left as it was.
+fn with_file_chooser(conf: &str, backends: &str) -> String {
+    let line = format!("{FILE_CHOOSER}{backends}");
+    let mut lines: Vec<String> = conf.lines().map(str::to_string).collect();
+    if let Some(old) = lines.iter_mut().find(|l| l.trim_start().starts_with(FILE_CHOOSER)) {
+        *old = line;
+    } else if let Some(at) = lines.iter().position(|l| l.trim() == "[preferred]") {
+        lines.insert(at + 1, line);
+    } else {
+        lines.extend(["[preferred]".to_string(), line]);
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+/// Stop the running portal (the one on our session bus), so it reads its
+/// config again: D-Bus starts it afresh the next time an app asks.
+pub fn restart_portal() {
+    let pid = (|| -> zbus::Result<u32> {
+        let conn = zbus::blocking::Connection::session()?;
+        let bus = zbus::blocking::fdo::DBusProxy::new(&conn)?;
+        let name = zbus::names::BusName::try_from("org.freedesktop.portal.Desktop")?;
+        Ok(bus.get_connection_unix_process_id(name)?)
+    })();
+    // Not running: it reads the new config when it starts.
+    if let Ok(pid) = pid {
+        let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+    }
+}
+
 /// The category's types `app` lists.
 fn handled_types<'a>(app: &App, cat: &Category) -> Vec<&'a str> {
     cat.types
@@ -237,6 +305,41 @@ pub fn fake_state(root: &std::path::Path) -> State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_chooser_line_is_swapped_in_place() {
+        let conf = include_str!("../../data/cnde-portals.conf");
+        let gtk = with_file_chooser(conf, "gtk");
+        assert!(gtk.contains("\norg.freedesktop.impl.portal.FileChooser=gtk\n"));
+        assert!(!gtk.contains("=cnde;gtk"));
+        assert_eq!(gtk.lines().count(), conf.lines().count());
+        assert_eq!(with_file_chooser(&gtk, "cnde;gtk"), conf);
+        let bare = with_file_chooser("[preferred]\ndefault=gtk\n", "kde;gtk");
+        assert_eq!(
+            bare,
+            "[preferred]\norg.freedesktop.impl.portal.FileChooser=kde;gtk\ndefault=gtk\n"
+        );
+        assert_eq!(file_chooser_for("cnde-files.desktop"), "cnde;gtk");
+        assert_eq!(file_chooser_for("thunar"), "gtk");
+    }
+
+    #[test]
+    fn file_chooser_is_written_to_the_user_config() {
+        let root = std::env::temp_dir().join(format!("cnde-chooser-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let env = Env {
+            config_home: root.clone(),
+            config_dirs: Vec::new(),
+            data_home: root.join("data"),
+            data_dirs: Vec::new(),
+        };
+        assert!(set_file_chooser(&env, "gnome;gtk").unwrap());
+        assert!(!set_file_chooser(&env, "gnome;gtk").unwrap());
+        let text =
+            std::fs::read_to_string(root.join("xdg-desktop-portal/cnde-portals.conf")).unwrap();
+        assert!(text.contains("FileChooser=gnome;gtk"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     fn temp(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("cnde-settings-{tag}-{}", std::process::id()));
