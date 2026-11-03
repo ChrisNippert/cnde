@@ -2,8 +2,47 @@
 
 `install.sh` builds the workspace and installs what the Arch PKGBUILD
 installs (binaries, session entry, `.desktop` files, portal and D-Bus
-files, icons, the lock screen's PAM file). Arch users can use
-`packaging/arch/PKGBUILD` instead.
+files, icons, the lock screen's PAM file). Arch users can use the pacman
+repository below, or `packaging/arch/PKGBUILD`.
+
+## Arch Linux: the pacman repository
+
+Each release is also published as a small signed pacman repository, so
+cnde installs and updates like any other package. Trust its signing key
+once (the key is `packaging/cnde-repo.asc` in this repository):
+
+```sh
+curl -LO https://raw.githubusercontent.com/ChrisNippert/cnde/main/packaging/cnde-repo.asc
+sudo pacman-key --add cnde-repo.asc
+sudo pacman-key --lsign-key <fingerprint printed by the line above>
+```
+
+Then add to `/etc/pacman.conf`:
+
+```ini
+[cnde]
+Server = https://github.com/ChrisNippert/cnde/releases/download/repo
+```
+
+and install with `sudo pacman -Syu cnde` (or just the parts you want,
+such as `cnde-compositor cnde-shell`). Later releases arrive with
+`pacman -Syu`. The packages are built against the Arch of release day; if
+an Arch library update breaks one before the next release, build from
+source (`packaging/arch`) or use the AUR's `cnde-git`.
+
+### Setting up the signing key (maintainer)
+
+```sh
+gpg --quick-gen-key "cnde repository" ed25519 sign never   # empty passphrase
+gpg --armor --export "cnde repository" > packaging/cnde-repo.asc
+gpg --armor --export-secret-keys "cnde repository"         # -> secret REPO_GPG_KEY
+gpg --list-keys --with-colons "cnde repository" | awk -F: '/^fpr/ {print $10; exit}'
+                                                           # -> secret REPO_GPG_KEY_ID
+```
+
+Add both secrets under the GitHub repository's Settings → Secrets and
+variables → Actions, and commit `cnde-repo.asc`. The release workflow
+skips the repository until the secrets are there.
 
 ## Build dependencies
 

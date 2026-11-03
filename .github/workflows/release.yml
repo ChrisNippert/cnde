@@ -1,7 +1,16 @@
-# Pushing a tag like v0.1.0-beta1 builds cnde on Arch and attaches
-# cnde-<version>-x86_64.tar.zst (files laid out under usr/ and etc/, as
-# installed) and its .sha256 to a GitHub release. The AUR's cnde-bin
-# installs from that tarball.
+# Pushing a tag like v0.1.0-beta1 builds cnde's pacman packages on Arch
+# (packaging/arch/PKGBUILD, at the tag's version) and publishes them:
+#
+# - To a GitHub release for the tag: cnde-<version>-x86_64.tar.zst (files
+#   laid out under usr/ and etc/, as installed) and its .sha256. The AUR's
+#   cnde-bin installs from that tarball.
+# - To the pacman repository, a release named "repo": the signed packages
+#   and the signed cnde.db (see packaging/README.md for the pacman.conf
+#   lines). Its old packages are replaced.
+#
+# Signing needs two repository secrets: REPO_GPG_KEY (an armored private
+# key without a passphrase, kept only for this) and REPO_GPG_KEY_ID (its
+# fingerprint). Without them the repo step is skipped.
 name: Release
 
 on:
@@ -15,28 +24,62 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     container: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HAS_KEY: ${{ secrets.REPO_GPG_KEY != '' }}
     steps:
       - name: Install build dependencies
         run: >
           pacman -Syu --noconfirm --needed
-          git rust libdrm libinput libxkbcommon mesa pam seatd systemd-libs
+          git rust github-cli libdrm libinput libxkbcommon mesa pam seatd systemd-libs
 
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Build
-        run: cargo build --release --locked --workspace
+      # makepkg won't run as root.
+      - name: Set up a build user
+        run: |
+          useradd -m builder
+          chown -R builder: .
+          sudo -u builder git config --global --add safe.directory '*'
+          git config --global --add safe.directory '*'
 
-      - name: Test
-        run: cargo test --release --locked --workspace
+      - name: Import the signing key
+        if: env.HAS_KEY == 'true'
+        env:
+          REPO_GPG_KEY: ${{ secrets.REPO_GPG_KEY }}
+        run: printf '%s\n' "$REPO_GPG_KEY" | sudo -u builder gpg --batch --import
 
-      - name: Package
+      # The tag's version (v0.1.0-beta1 is 0.1.0beta1, which pacman sorts
+      # before 0.1.0), in place of the checkout's pkgver().
+      - name: Build the packages
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # On a branch, so makepkg's clone of the checkout has the tag's commit.
+          git checkout -B release
+          sed -i \
+              -e "s/^pkgver=.*/pkgver=${version//-/}/" \
+              -e 's/^pkgbase=.*/pkgbase=cnde/' \
+              -e 's/^pkgver() {/_checkout_pkgver() {/' \
+              packaging/arch/PKGBUILD
+          cd packaging/arch
+          sudo -u builder makepkg --noconfirm --nodeps
+          cd src/cnde
+          sudo -u builder cargo test --release --frozen --workspace
+
+      - name: Package the tarball
         run: |
           version="${GITHUB_REF_NAME#v}"
           name="cnde-$version-x86_64"
           root="dist/$name"
+          built=packaging/arch/src/cnde
           for bin in cnde-compositor cnde-share-picker cnde-shell cnde-settings \
               cnde-lock cnde-files cnde-files-portal; do
-              install -Dm755 "target/release/$bin" -t "$root/usr/bin"
+              install -Dm755 "$built/target/release/$bin" -t "$root/usr/bin"
           done
           install -Dm644 data/cnde.desktop -t "$root/usr/share/wayland-sessions"
           install -Dm644 data/cnde-settings.desktop files/cnde-files.desktop \
@@ -57,3 +100,38 @@ jobs:
           files: |
             dist/*.tar.zst
             dist/*.sha256
+
+      # GitHub can't hold the symlinks repo-add makes, so cnde.db and
+      # cnde.files go up as copies.
+      - name: Publish the pacman repository
+        if: env.HAS_KEY == 'true'
+        env:
+          KEY: ${{ secrets.REPO_GPG_KEY_ID }}
+        run: |
+          mkdir repo
+          cp packaging/arch/*.pkg.tar.zst repo/
+          chown -R builder: repo
+          cd repo
+          for pkg in *.pkg.tar.zst; do
+              sudo -u builder gpg --batch --yes --detach-sign --local-user "$KEY" "$pkg"
+          done
+          sudo -u builder repo-add --sign --key "$KEY" cnde.db.tar.zst *.pkg.tar.zst
+          for link in cnde.db cnde.db.sig cnde.files cnde.files.sig; do
+              cp --remove-destination "$(readlink -f "$link")" "$link"
+          done
+          gh release view repo --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+              gh release create repo --repo "$GITHUB_REPOSITORY" --latest=false \
+                  --title "pacman repository" \
+                  --notes "cnde's pacman repository. See packaging/README.md to add it."
+          # Old packages out, then the new ones and the database in.
+          gh release view repo --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' |
+              while read -r asset; do
+                  case "$asset" in
+                      *.pkg.tar.zst | *.pkg.tar.zst.sig)
+                          [ -e "$asset" ] ||
+                              gh release delete-asset repo "$asset" --repo "$GITHUB_REPOSITORY" -y ;;
+                  esac
+              done
+          gh release upload repo --repo "$GITHUB_REPOSITORY" --clobber \
+              *.pkg.tar.zst *.pkg.tar.zst.sig \
+              cnde.db cnde.db.sig cnde.files cnde.files.sig
