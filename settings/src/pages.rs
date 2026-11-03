@@ -1424,6 +1424,14 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     material(d.appearance.material),
                 )
                 .sub("The top bar, dock, menus and this window; solid over a window"),
+                Row::new(
+                    "appearance.live_blur",
+                    "Live blur",
+                    Control::switch(),
+                    Value::Bool(c.appearance.live_blur),
+                    Value::Bool(d.appearance.live_blur),
+                )
+                .sub("Blur the windows behind popups and the bar too. Uses more GPU while they're open"),
             ],
         ),
         group(

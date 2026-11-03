@@ -117,6 +117,7 @@ pub struct State {
     pub dock_icons: std::collections::HashMap<u64, (String, [f64; 4])>,
     pub wallpapers: crate::wallpaper::Wallpapers,
     pub dock_frost: crate::frost::DockFrost,
+    pub live_blur: crate::scene_blur::LiveBlur,
     /// Window colours for the adaptive palette.
     pub tints: crate::tint::Tints,
     /// A timer is set to sample a window `tints` held back.
@@ -290,6 +291,7 @@ impl State {
             dock_icons: Default::default(),
             wallpapers: crate::wallpaper::Wallpapers::new(&event_loop.handle(), &Config::default()),
             dock_frost: Default::default(),
+            live_blur: Default::default(),
             tints: Default::default(),
             tint_wake: false,
             sync_at: Instant::now(),
@@ -455,6 +457,7 @@ impl State {
         self.closing.clear();
         self.wallpapers.clear_gpu();
         self.dock_frost.clear_gpu();
+        self.live_blur.clear_gpu();
         self.crossfade.clear_gpu();
         self.night_light.clear_gpu();
         self.overview.clear_gpu();

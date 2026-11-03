@@ -90,6 +90,7 @@ pub static ENTRIES: &[Entry] = &[
     option("Corner radius", "appearance", "Appearance", "Corner radius", &["rounded", "round"]),
     option("Material", "appearance", "Appearance", "Material", &["frosted", "blur", "solid", "transparency"]),
     option("Frost", "appearance", "Appearance", "Frost", &["blur", "blurred", "glass"]),
+    option("Live blur", "appearance", "Appearance", "Live blur", &["frosted", "blur", "transparency", "gpu"]),
     option("Night light", "displays", "Displays", "Night light", &["blue light", "warm", "colour temperature", "color temperature"]),
     option("Resolution", "displays", "Displays", "Resolution", &["refresh rate", "scale", "fractional"]),
     option("Display rotation", "displays", "Displays", "Rotation", &["orientation", "portrait"]),
