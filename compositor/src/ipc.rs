@@ -472,6 +472,7 @@ impl State {
     ) -> Touching {
         let zone = smithay::desktop::layer_map_for_output(output).non_exclusive_zone();
         let zone = smithay::utils::Rectangle::new(zone.loc + geo.loc, zone.size);
+        let reach = self.auto_float_offsets(output);
         let mut touching = Touching::default();
         // Bottom to top, so the last one found is in front.
         for window in self.space.elements_for_output(output) {
@@ -501,14 +502,15 @@ impl State {
                 rect.loc.x < zone.loc.x + zone.size.w && rect.loc.x + rect.size.w > zone.loc.x;
             let overlaps_y =
                 top < zone.loc.y + zone.size.h && rect.loc.y + rect.size.h > zone.loc.y;
-            if overlaps_x && top <= zone.loc.y + slack {
+            if overlaps_x && top <= zone.loc.y + slack + reach.top {
                 touching.top = Some(window.clone());
             }
-            if overlaps_x && rect.loc.y + rect.size.h + slack >= zone.loc.y + zone.size.h {
+            if overlaps_x && rect.loc.y + rect.size.h + slack + reach.bottom >= zone.loc.y + zone.size.h {
                 touching.bottom = Some(window.clone());
             }
-            touching.left |= overlaps_y && rect.loc.x <= zone.loc.x;
-            touching.right |= overlaps_y && rect.loc.x + rect.size.w >= zone.loc.x + zone.size.w;
+            touching.left |= overlaps_y && rect.loc.x <= zone.loc.x + reach.left;
+            touching.right |=
+                overlaps_y && rect.loc.x + rect.size.w + reach.right >= zone.loc.x + zone.size.w;
         }
         touching
     }

@@ -168,8 +168,8 @@ const DEEP: i32 = 8;
 /// = 17.9 texels, i.e. 8.95 at 1/8. The shader's 9 taps are sigma 1.69 texels
 /// per pass at spread 1, and passes add in quadrature, so n passes of spread
 /// k give 1.69 * k * sqrt(n).
-const TARGET_SIGMA: f32 = 8.95;
-const TAP_SIGMA: f32 = 1.69;
+pub(crate) const TARGET_SIGMA: f32 = 8.95;
+pub(crate) const TAP_SIGMA: f32 = 1.69;
 /// Wider spreads leave comb marks; more passes are used instead.
 const MAX_SPREAD: f32 = 3.5;
 
@@ -183,7 +183,7 @@ const STRENGTH_EPSILON: f32 = 0.002;
 
 /// The blur passes and tap spread that approximate the old CPU blur at
 /// `strength` (1.0 is 100 %).
-fn blur_plan(strength: f32) -> (usize, f32) {
+pub(crate) fn blur_plan(strength: f32) -> (usize, f32) {
     let sigma = TARGET_SIGMA * strength.max(0.0);
     let passes = ((sigma / (TAP_SIGMA * MAX_SPREAD)).powi(2).ceil() as usize).max(1);
     (passes, sigma / (TAP_SIGMA * (passes as f32).sqrt()))
@@ -810,7 +810,7 @@ mod tests {
     #[test]
     fn blur_plan_grows_smoothly_with_strength() {
         let mut last = 0.0;
-        for percent in (25..=200).step_by(5) {
+        for percent in (5..=200).step_by(5) {
             let (passes, spread) = blur_plan(percent as f32 / 100.0);
             assert!(passes >= 1 && spread <= MAX_SPREAD + 1e-3);
             let sigma = TAP_SIGMA * spread * (passes as f32).sqrt();

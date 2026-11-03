@@ -36,6 +36,8 @@ pub fn theme_from(config: &Config, screen: Option<Color>) -> Theme {
     };
     let mut theme = Theme::for_screen(&config.appearance, screen);
     theme.panel_height = panel.height;
+    theme.grid_icon_size = config.launcher.icon_size as f32;
+    theme.dock_radius = config.dock.corner_radius.unwrap_or(theme.dock_radius);
     if !panel.rounded {
         theme.panel_radius = 0.0;
         theme.panel_shadow = 0;
@@ -190,5 +192,27 @@ impl App {
             panel.apply_theme(&self.theme);
         }
         self.redraw_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_grid_icon_and_dock_radius_reach_the_shell_theme() {
+        let defaults = Config::default();
+        let theme = theme_from(&defaults, None);
+        assert_eq!(theme.grid_icon_size, 64.0);
+        assert_eq!(
+            theme.dock_radius,
+            Theme::for_screen(&defaults.appearance, None).dock_radius
+        );
+
+        let configured =
+            Config::parse("[launcher]\nicon_size = 80\n[dock]\ncorner_radius = 12\n").unwrap();
+        let theme = theme_from(&configured, None);
+        assert_eq!(theme.grid_icon_size, 80.0);
+        assert_eq!(theme.dock_radius, 12.0);
     }
 }

@@ -63,7 +63,7 @@
 # material = "frosted"     # "frosted" or "solid": the top bar, dock, the shell's popups and cnde's own windows (solid when snapped, maximized or a window touches them)
 # live_blur = false        # blur what's really behind the bar, dock, popups and notifications, windows too, not just the wallpaper; costs some GPU while they're showing (frosted material only)
 # corner_radius = 10       # window corners in px (0-48); the dock, bar and menus scale with it
-# frost = 100              # how blurred the frost behind the bar, dock and popups is, in percent (25-200); 100 is the usual look
+# frost = 100              # how blurred the frost behind the bar, dock and popups is, in percent (0-200); 100 is the usual look, 0 is clear glass
 
 [dark_mode]
 # Switch appearance.color_scheme by the time of day. Switching by hand
@@ -133,6 +133,8 @@
 
 [windows]
 # focus_follows_mouse = "off"  # "off": click to focus; "tiling": hovering a tiled window focuses it; "always": hovering any window focuses it
+# focused_shadow = true       # draw a soft drop shadow around the focused floating window
+# shadow_strength = 50       # shadow opacity, 0 to 100
 
 [workspaces]
 # mode = "continuous"      # "continuous": one strip, monitors show consecutive workspaces and switch together; "individual": every monitor has its own workspaces and switching moves only the monitor you used last; "joined": all monitors are one workspace, each shows the same number with its own windows on it, and switching moves them all
@@ -169,6 +171,7 @@
 # favorites = ["firefox.desktop", "org.gnome.Nautilus.desktop", "Alacritty.desktop"]
 # icon_size = 48
 # padding = 8              # room either side of each icon
+# corner_radius = 24       # px; unset follows the appearance palette (0 is square)
 # launcher = "end"         # the app grid button: "start" (before the icons) or "end"
 # launcher_gap = 12        # space between it and the icons
 # background = "frosted"   # just the dock, overriding appearance.material: "solid" or "frosted"
@@ -185,6 +188,7 @@
 [launcher]
 # Tapping Super opens the overview. Set a command to run that instead.
 # command = ""             # e.g. "fuzzel"
+# icon_size = 64            # app drawer icons, 32 to 96 px
 
 [autostart]
 # Run once at startup.

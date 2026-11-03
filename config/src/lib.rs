@@ -265,8 +265,8 @@ pub struct Appearance {
     /// blurred wallpaper, or solid. Snapped or maximized windows are
     /// always solid.
     pub material: Material,
-    /// How blurred the frost is, in percent (25-200): 100 is the usual
-    /// look, more blurs it further.
+    /// How blurred the frost is, in percent (0-200): 100 is the usual
+    /// look, more blurs it further, 0 is clear glass.
     pub frost: u8,
     /// With a frosted material: blur what's really behind the bar, dock,
     /// popups and cards (windows too), not just the wallpaper. Costs some
@@ -783,6 +783,9 @@ pub struct Dock {
     pub icon_size: u32,
     /// Room either side of each icon; twice this between two icons.
     pub padding: f32,
+    /// Background corner radius in logical pixels; unset follows the
+    /// appearance palette.
+    pub corner_radius: Option<f32>,
     /// Which end of the icons the app grid button sits at.
     pub launcher: LauncherSide,
     /// Space between the app grid button and the nearest icon.
@@ -826,6 +829,7 @@ impl Default for Dock {
             ],
             icon_size: 48,
             padding: 8.0,
+            corner_radius: None,
             launcher: LauncherSide::End,
             launcher_gap: 12.0,
             background: None,
@@ -919,12 +923,23 @@ pub fn parse_color(text: &str) -> Option<(u8, u8, u8, u8)> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Launcher {
     /// Run when Super is tapped on its own, instead of opening the
     /// overview (e.g. "fuzzel"). Empty: the overview.
     pub command: String,
+    /// App drawer icon size in logical pixels, 32 to 96.
+    pub icon_size: u32,
+}
+
+impl Default for Launcher {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            icon_size: 64,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1070,12 +1085,26 @@ impl Default for Snap {
 }
 
 /// `[windows]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Windows {
     /// Hovering a window focuses it: "off", "tiling" (only tiled windows)
     /// or "always".
     pub focus_follows_mouse: FocusFollowsMouse,
+    /// Draw a soft shadow around the focused floating window.
+    pub focused_shadow: bool,
+    /// Shadow opacity, 0 to 100 percent of the full-strength look.
+    pub shadow_strength: u32,
+}
+
+impl Default for Windows {
+    fn default() -> Self {
+        Self {
+            focus_follows_mouse: FocusFollowsMouse::Off,
+            focused_shadow: true,
+            shadow_strength: 50,
+        }
+    }
 }
 
 /// Which windows the pointer focuses when it moves over them.
@@ -1256,7 +1285,7 @@ impl Config {
         in_range(
             "appearance.frost",
             self.appearance.frost as f64,
-            25.0,
+            0.0,
             200.0,
         )?;
         in_range("tiling.master_ratio", self.tiling.master_ratio, 0.1, 0.9)?;
@@ -1341,6 +1370,9 @@ impl Config {
             32.0,
         )?;
         in_range("dock.padding", self.dock.padding as f64, 0.0, 32.0)?;
+        if let Some(radius) = self.dock.corner_radius {
+            in_range("dock.corner_radius", radius as f64, 0.0, 48.0)?;
+        }
         in_range(
             "dock.launcher_gap",
             self.dock.launcher_gap as f64,
@@ -1351,6 +1383,18 @@ impl Config {
             return Err(Error::Invalid(format!(
                 "dock.icon_size must be 24 to 128, got {}",
                 self.dock.icon_size
+            )));
+        }
+        if !(32..=96).contains(&self.launcher.icon_size) {
+            return Err(Error::Invalid(format!(
+                "launcher.icon_size must be 32 to 96, got {}",
+                self.launcher.icon_size
+            )));
+        }
+        if self.windows.shadow_strength > 100 {
+            return Err(Error::Invalid(format!(
+                "windows.shadow_strength must be 0 to 100, got {}",
+                self.windows.shadow_strength
             )));
         }
         for output in &self.outputs {
@@ -1487,6 +1531,7 @@ mod tests {
         let c = Config::parse("[appearance]\nfrost = 150\n").unwrap();
         assert_eq!(c.appearance.frost, 150);
         assert!(Config::parse("[appearance]\nfrost = 300\n").is_err());
+        assert_eq!(Config::parse("[appearance]\nfrost = 0\n").unwrap().appearance.frost, 0);
     }
 
     #[test]
@@ -1494,6 +1539,27 @@ mod tests {
         assert!(!Config::default().dock.locked);
         let config = Config::parse("[dock]\nlocked = true\n").unwrap();
         assert!(config.dock.locked);
+    }
+
+    #[test]
+    fn sizing_and_window_shadow_options_parse_and_validate() {
+        let config = Config::parse(
+            "[dock]\ncorner_radius = 12.5\n\
+             [launcher]\nicon_size = 80\n\
+             [windows]\nfocused_shadow = false\nshadow_strength = 30\n",
+        )
+        .unwrap();
+        assert_eq!(config.dock.corner_radius, Some(12.5));
+        assert_eq!(config.launcher.icon_size, 80);
+        assert!(!config.windows.focused_shadow);
+        assert_eq!(config.windows.shadow_strength, 30);
+        assert_eq!(Config::default().windows.shadow_strength, 50);
+        assert!(Config::parse("[windows]\nshadow_strength = 101\n").is_err());
+        assert_eq!(Config::default().dock.corner_radius, None);
+        assert_eq!(Config::default().launcher.icon_size, 64);
+        assert!(Config::default().windows.focused_shadow);
+        assert!(Config::parse("[dock]\ncorner_radius = 50\n").is_err());
+        assert!(Config::parse("[launcher]\nicon_size = 128\n").is_err());
     }
 
     #[test]

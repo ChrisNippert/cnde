@@ -1445,7 +1445,7 @@ fn appearance(c: &Config, d: &Config) -> Vec<Group> {
                     "appearance.frost",
                     "Frost",
                     Control::Slider {
-                        min: 25.0,
+                        min: 0.0,
                         max: 200.0,
                         step: 5.0,
                         int: true,
@@ -2601,6 +2601,28 @@ fn windows(c: &Config, d: &Config) -> Vec<Group> {
                     focus_follows_mouse(d.windows.focus_follows_mouse),
                 )
                 .sub("Hovering a window focuses it. Off: click to focus. Focus doesn't move while you drag, or while a menu or the overview is open"),
+                Row::new(
+                    "windows.focused_shadow",
+                    "Focused window shadow",
+                    Control::switch(),
+                    Value::Bool(c.windows.focused_shadow),
+                    Value::Bool(d.windows.focused_shadow),
+                )
+                .sub("A soft drop shadow around the focused floating window"),
+                Row::new(
+                    "windows.shadow_strength",
+                    "Shadow strength",
+                    Control::Slider {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 5.0,
+                        int: true,
+                        format: |v| format!("{v:.0}%"),
+                    },
+                    Value::Int(c.windows.shadow_strength as i64),
+                    Value::Int(d.windows.shadow_strength as i64),
+                )
+                .sub("How dark the focused window's shadow is"),
             ],
         ),
         group(
@@ -3155,6 +3177,27 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
             )
             .sub("Room either side of each icon"),
         );
+        let radius = |config: &Config| {
+            config.dock.corner_radius.unwrap_or_else(|| {
+                cnde_ui::Theme::for_appearance(&config.appearance).dock_radius
+            })
+        };
+        rows.push(
+            Row::new(
+                "dock.corner_radius",
+                "Corner radius",
+                Control::Slider {
+                    min: 0.0,
+                    max: 48.0,
+                    step: 1.0,
+                    int: false,
+                    format: |v| format!("{v:.0} px"),
+                },
+                Value::Float(radius(c) as f64),
+                Value::Float(radius(d) as f64),
+            )
+            .sub("Shape of the dock background; 0 makes it square"),
+        );
         let side = matches!(c.dock.position, DockPosition::Left | DockPosition::Right);
         let (before, after) = if side {
             ("Top", "Bottom")
@@ -3223,6 +3266,25 @@ fn dock(c: &Config, d: &Config) -> Vec<Group> {
         );
     }
     let mut groups = vec![group("Dock", rows)];
+    groups.push(group(
+        "App Drawer",
+        vec![
+            Row::new(
+                "launcher.icon_size",
+                "App drawer icon size",
+                Control::Slider {
+                    min: 32.0,
+                    max: 96.0,
+                    step: 4.0,
+                    int: true,
+                    format: |v| format!("{v:.0} px"),
+                },
+                Value::Int(c.launcher.icon_size as i64),
+                Value::Int(d.launcher.icon_size as i64),
+            )
+            .sub("Size of app icons in the overview grid"),
+        ],
+    ));
     let look = dock_look(c, d);
     if !look.is_empty() {
         groups.push(group("Colour", look));
@@ -3611,6 +3673,35 @@ fn accessibility(c: &Config, d: &Config) -> Vec<Group> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dock_page_keeps_existing_sizes_with_new_controls() {
+        let config = Config::default();
+        let dock = build(
+            Page::Dock,
+            &config,
+            &[],
+            WifiView::default(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let keys: Vec<_> = dock
+            .iter()
+            .flat_map(|group| &group.rows)
+            .map(|row| row.key.clone())
+            .collect();
+        for expected in [
+            Key::Path("dock.icon_size"),
+            Key::Path("dock.padding"),
+            Key::Path("dock.corner_radius"),
+            Key::Path("launcher.icon_size"),
+        ] {
+            assert!(keys.contains(&expected), "missing {expected:?}");
+        }
+    }
 
     /// Writing every row's default back must leave a valid config: catches
     /// a row pointing at a misspelled key or writing the wrong type.

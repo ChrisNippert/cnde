@@ -720,7 +720,7 @@ impl App {
         pixels.fill(0);
         if let Some(mut canvas) = Canvas::new(pixels, w as u32, h as u32, scale as f32) {
             let t = &self.theme;
-            canvas.rounded_rect(0.0, 0.0, lw, lh, RADIUS, t.qs_background);
+            canvas.rounded_rect(0.0, 0.0, lw, lh, RADIUS.min(t.qs_radius), t.qs_background);
             let mut p = Painter {
                 canvas: &mut canvas,
                 fonts: &mut self.fonts,
@@ -748,14 +748,14 @@ impl App {
                     base
                 };
                 p.canvas
-                    .rounded_rect(placed.x, placed.y, placed.w, placed.h, KEY_RADIUS, fill);
+                    .rounded_rect(placed.x, placed.y, placed.w, placed.h, KEY_RADIUS.min(t.menu_radius), fill);
                 if osk.hover == Some(i) && !on && !pressed {
                     p.canvas.rounded_rect(
                         placed.x,
                         placed.y,
                         placed.w,
                         placed.h,
-                        KEY_RADIUS,
+                        KEY_RADIUS.min(t.menu_radius),
                         t.button_hover,
                     );
                 }
@@ -816,7 +816,7 @@ impl App {
                 cards: vec![cnde_ipc::CardFrost {
                     rect: [0.0, 0.0, lw.into(), lh.into()],
                     alpha: presence,
-                    radius: Some(RADIUS.into()),
+                    radius: Some(RADIUS.min(self.theme.qs_radius).into()),
                 }],
                 layer: NAMESPACE.to_string(),
             });

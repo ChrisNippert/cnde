@@ -237,6 +237,51 @@ impl State {
         Some(zone)
     }
 
+    /// How far an auto bar or dock floats off its edge while no window
+    /// touches it. Its reserved space is the attached one, so the snap zones
+    /// and the touch that attaches it measure from where it really sits.
+    pub fn auto_float_offsets(&self, output: &Output) -> FloatOffsets {
+        use cnde_config::{BarMode, DockPosition};
+        let reserving = |namespace: &str| {
+            layer_map_for_output(output).layers().any(|layer| {
+                layer.namespace() == namespace
+                    && matches!(
+                        layer.cached_state().exclusive_zone,
+                        smithay::wayland::shell::wlr_layer::ExclusiveZone::Exclusive(_)
+                    )
+            })
+        };
+        let mut offsets = FloatOffsets::default();
+        if self.config.panel.mode == BarMode::Auto && reserving("cnde-panel") {
+            offsets.top = cnde_ipc::panel::GAP;
+        }
+        if self.config.dock.mode == BarMode::Auto && reserving(cnde_ipc::dock::NAMESPACE) {
+            let pad = cnde_ipc::dock::EDGE_MARGIN;
+            match self.config.dock.position {
+                DockPosition::Left => offsets.left = pad,
+                DockPosition::Right => offsets.right = pad,
+                DockPosition::Bottom => offsets.bottom = pad,
+                _ => {}
+            }
+        }
+        offsets
+    }
+
+    /// `usable_area` as far as snap zones go: measured from the floating
+    /// bar and dock rather than the space they reserve.
+    pub fn snap_area(&self, output: &Output) -> Option<Rectangle<i32, Logical>> {
+        let area = self.usable_area(output)?;
+        let o = self.auto_float_offsets(output);
+        Some(Rectangle::new(
+            (area.loc.x + o.left, area.loc.y + o.top).into(),
+            (
+                (area.size.w - o.left - o.right).max(1),
+                (area.size.h - o.top - o.bottom).max(1),
+            )
+                .into(),
+        ))
+    }
+
     /// `usable_area` for tiling: a bar or dock that floats for good keeps
     /// a gap of its own free beyond itself, but tiles are spaced by the
     /// tiling gap alone, so that padding is given back.
@@ -275,6 +320,15 @@ fn wants_exclusive_keyboard(layer: &LayerSurface) -> bool {
     let state = layer.cached_state();
     state.keyboard_interactivity == KeyboardInteractivity::Exclusive
         && matches!(state.layer, Layer::Top | Layer::Overlay)
+}
+
+/// See `State::auto_float_offsets`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FloatOffsets {
+    pub top: i32,
+    pub left: i32,
+    pub right: i32,
+    pub bottom: i32,
 }
 
 /// `area` grown by the padding a permanently floating bar (`top`) and dock

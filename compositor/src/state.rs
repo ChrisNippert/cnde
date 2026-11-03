@@ -127,6 +127,9 @@ pub struct State {
     sync_at: Instant,
     sync_wake: bool,
     pub crossfade: crate::crossfade::Crossfade,
+    /// The config before the change a crossfade starts from: the frame that
+    /// is copied is drawn with its frost, as the shell's old surfaces expect.
+    pub crossfade_from: Option<std::sync::Arc<cnde_config::Config>>,
     /// Dark mode on a timer.
     pub schedules: crate::schedule::Schedules,
     pub night_light: crate::night_light::NightLight,
@@ -305,6 +308,7 @@ impl State {
             sync_at: Instant::now(),
             sync_wake: false,
             crossfade: Default::default(),
+            crossfade_from: None,
             schedules: Default::default(),
             night_light: Default::default(),
             idle,

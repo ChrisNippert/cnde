@@ -123,10 +123,13 @@ impl State {
     /// startup, when everything is applied.
     pub fn apply_config(&mut self, old: Option<&Config>) {
         if old.is_none_or(|old| old.shortcuts != self.config.shortcuts) {
-            self.shortcuts = crate::keybinds::Shortcuts::build(&self.config.shortcuts, self.mod_key);
+            self.shortcuts =
+                crate::keybinds::Shortcuts::build(&self.config.shortcuts, self.mod_key);
         }
         animation::set_speed(self.config.animations.speed);
         self.decorations.appearance = self.config.appearance.clone();
+        self.decorations.focused_shadow = self.config.windows.focused_shadow;
+        self.decorations.shadow_strength = self.config.windows.shadow_strength;
         self.decorations.all_buttons =
             self.config.appearance.window_buttons == cnde_config::WindowButtons::All;
         if old.is_some_and(|old| old.appearance.titlebars != self.config.appearance.titlebars) {
@@ -138,6 +141,7 @@ impl State {
                 || old.wallpaper != self.config.wallpaper
         }) {
             let outputs: Vec<_> = self.space.outputs().cloned().collect();
+            self.crossfade_from = old.map(|old| std::sync::Arc::new(old.clone()));
             self.crossfade.start(outputs.iter());
         }
         self.wallpapers.update_config(&self.config);

@@ -61,6 +61,10 @@ const BORDER: f64 = 6.0;
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// How far a press on the bar moves before it becomes a drag.
 const DRAG_THRESHOLD: f64 = 4.0;
+const SHADOW_HALO: f32 = 18.0;
+const SHADOW_LAYERS: u32 = 9;
+/// Cached focused-window shadow pixels, independent of the client surfaces.
+const SHADOW_CACHE_BUDGET: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Part {
@@ -117,12 +121,25 @@ fn part_at(width: f64, x: f64, all: bool, tiled: bool) -> Part {
     } else if !all {
         Part::Title
     } else if on(close - step) {
-        if tiled { Part::Minimize } else { Part::Maximize }
+        if tiled {
+            Part::Minimize
+        } else {
+            Part::Maximize
+        }
     } else if !tiled && on(close - 2.0 * step) {
         Part::Minimize
     } else {
         Part::Title
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShadowKey {
+    width: i32,
+    height: i32,
+    scale: u64,
+    radius: u32,
+    strength: u32,
 }
 
 /// A bar's last drawing, redrawn when anything shown on it changes.
@@ -157,6 +174,12 @@ pub struct Decorations {
     pub all_buttons: bool,
     /// The overview's close button, per scale and hover state.
     close_buttons: Vec<((u64, bool), MemoryRenderBuffer)>,
+    /// The current focused window's shadow, keyed by size and scale.
+    shadow: Option<(ShadowKey, MemoryRenderBuffer, (u32, u32))>,
+    /// Draw a shadow behind the focused floating window.
+    pub focused_shadow: bool,
+    /// Shadow opacity, percent of full strength.
+    pub shadow_strength: u32,
     /// Averages windows drawn small (`render::window_elements`).
     pub downscale: crate::downscale::Downscale,
 }
@@ -321,6 +344,107 @@ impl Decorations {
         )))
     }
 
+    /// A soft shadow behind a focused floating window. `rect` is the
+    /// unzoomed window frame; its shadow follows overview and workspace
+    /// animations with it.
+    pub fn shadow_element(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        rect: Rectangle<f64, Logical>,
+        zoom: crate::render::Zoom,
+        output_loc: Point<f64, Logical>,
+        scale: Scale<f64>,
+        alpha: f32,
+    ) -> Option<OutputElement> {
+        if !self.focused_shadow
+            || self.shadow_strength == 0
+            || rect.size.w <= 0.0
+            || rect.size.h <= 0.0
+        {
+            return None;
+        }
+        let width = rect.size.w.round().clamp(1.0, MAX_WIDTH as f64) as i32;
+        let height = rect.size.h.round().clamp(1.0, MAX_WIDTH as f64) as i32;
+        let radius = cnde_ui::Theme::for_appearance(&self.appearance)
+            .window_radius
+            .round()
+            .max(0.0) as u32;
+        let key = ShadowKey {
+            width,
+            height,
+            scale: scale.x.to_bits(),
+            radius,
+            strength: self.shadow_strength,
+        };
+        if self
+            .shadow
+            .as_ref()
+            .is_none_or(|(cached, _, _)| *cached != key)
+        {
+            // Only the focused window needs a shadow. Drop the previous
+            // buffer before allocating its replacement.
+            self.shadow = None;
+            let (buffer, size, bytes) = self.paint_shadow(key, scale.x)?;
+            debug_assert!(bytes <= SHADOW_CACHE_BUDGET);
+            self.shadow = Some((key, buffer, size));
+        }
+        let (_, buffer, buffer_size) = self
+            .shadow
+            .as_ref()
+            .filter(|(cached, _, _)| *cached == key)?;
+        let frame = Rectangle::new(rect.loc, Size::from((width as f64, height as f64)));
+        let halo = SHADOW_HALO as f64;
+        let outer = Rectangle::new(
+            Point::from((frame.loc.x - halo, frame.loc.y - halo)),
+            Size::from((frame.size.w + halo * 2.0, frame.size.h + halo * 2.0)),
+        );
+        let mapped = zoom.apply(outer);
+        let location = (mapped.loc - output_loc).to_physical(scale);
+        let element = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            location,
+            buffer,
+            Some(alpha),
+            Some(Rectangle::from_size(Size::from((
+                buffer_size.0 as f64,
+                buffer_size.1 as f64,
+            )))),
+            Some(outer.size.to_i32_round()),
+            Kind::Unspecified,
+        )
+        .map_err(|err| warn!(?err, "can't upload a window shadow"))
+        .ok()?;
+        Some(OutputElement::Titlebar(RescaleRenderElement::from_element(
+            element,
+            location.to_i32_round(),
+            Scale {
+                x: zoom.scale_x,
+                y: zoom.scale_y,
+            },
+        )))
+    }
+
+    fn paint_shadow(
+        &mut self,
+        key: ShadowKey,
+        scale: f64,
+    ) -> Option<(MemoryRenderBuffer, (u32, u32), usize)> {
+        let (w, h, pixels) = shadow_pixels(key, scale)?;
+        let bytes = pixels.len();
+        Some((
+            MemoryRenderBuffer::from_slice(
+                &pixels,
+                Fourcc::Abgr8888,
+                (w as i32, h as i32),
+                1,
+                Transform::Normal,
+                None,
+            ),
+            (w, h),
+            bytes,
+        ))
+    }
+
     fn paint(&mut self, key: &Key) -> Option<MemoryRenderBuffer> {
         let scale = f64::from_bits(key.scale);
         let (w, h) = (
@@ -352,6 +476,58 @@ impl Decorations {
             None,
         ))
     }
+}
+
+fn shadow_pixels(key: ShadowKey, scale: f64) -> Option<(u32, u32, Vec<u8>)> {
+    let logical_width = key.width as f32 + SHADOW_HALO * 2.0;
+    let logical_height = key.height as f32 + SHADOW_HALO * 2.0;
+    let render_scale = shadow_render_scale(logical_width, logical_height, scale);
+    let (w, h) = (
+        (logical_width as f64 * render_scale).ceil().max(1.0) as u32,
+        (logical_height as f64 * render_scale).ceil().max(1.0) as u32,
+    );
+    if shadow_buffer_bytes(w, h)? > SHADOW_CACHE_BUDGET {
+        return None;
+    }
+    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    {
+        let mut canvas = Canvas::new(&mut pixels, w, h, render_scale as f32)?;
+        canvas.clear(Color::rgba(0, 0, 0, 0.0));
+        for layer in (0..=SHADOW_LAYERS).rev() {
+            let spread = layer as f32 * SHADOW_HALO / SHADOW_LAYERS as f32;
+            let alpha = (0.012 + (1.0 - spread / SHADOW_HALO) * 0.07) * key.strength as f32 / 100.0;
+            canvas.rounded_rect(
+                SHADOW_HALO - spread,
+                SHADOW_HALO - spread + 2.0,
+                key.width as f32 + spread * 2.0,
+                key.height as f32 + spread * 2.0,
+                key.radius as f32 + spread,
+                Color::rgba(0, 0, 0, alpha),
+            );
+        }
+    }
+    Some((w, h, pixels))
+}
+
+fn shadow_render_scale(width: f32, height: f32, scale: f64) -> f64 {
+    let native_scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let native_width = (width as f64 * native_scale).ceil().max(1.0);
+    let native_height = (height as f64 * native_scale).ceil().max(1.0);
+    let native_bytes = native_width * native_height * 4.0;
+    if native_bytes <= SHADOW_CACHE_BUDGET as f64 {
+        return native_scale;
+    }
+    native_scale * ((SHADOW_CACHE_BUDGET as f64 * 0.99) / native_bytes).sqrt()
+}
+
+fn shadow_buffer_bytes(width: u32, height: u32) -> Option<usize> {
+    (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)
 }
 
 /// libadwaita's header bar colours.
@@ -535,7 +711,10 @@ impl State {
                         DecorationMode::ServerSide => HEIGHT,
                         _ => 0,
                     };
-                    let rect = content_rect(crate::window::window_placement_rect(&window, placement, area), bar);
+                    let rect = content_rect(
+                        crate::window::window_placement_rect(&window, placement, area),
+                        bar,
+                    );
                     self.move_window(&window, rect.loc);
                     Some(rect.size)
                 }
@@ -786,7 +965,10 @@ mod tests {
     fn buttons_sit_at_the_right_end() {
         let width = 600.0;
         assert_eq!(part_at(width, 10.0, true, false), Part::Title);
-        assert_eq!(part_at(width, width - SIDE as f64 - 1.0, true, false), Part::Close);
+        assert_eq!(
+            part_at(width, width - SIDE as f64 - 1.0, true, false),
+            Part::Close
+        );
         let maximize = width - SIDE as f64 - 2.0 * BUTTON as f64 - BUTTON_GAP as f64 + 1.0;
         assert_eq!(part_at(width, maximize, true, false), Part::Maximize);
         let minimize = maximize - (BUTTON + BUTTON_GAP) as f64;
@@ -802,5 +984,51 @@ mod tests {
         let content = content_rect(rect, HEIGHT);
         assert_eq!(content.loc.y, 32 + HEIGHT);
         assert_eq!(content.size.h, 600 - HEIGHT);
+    }
+
+    #[test]
+    fn focused_shadow_renders_outside_the_window_bounds() {
+        let key = ShadowKey {
+            width: 80,
+            height: 60,
+            scale: 1.0f64.to_bits(),
+            radius: 12,
+            strength: 100,
+        };
+        let (width, _, pixels) = shadow_pixels(key, 1.0).unwrap();
+        let alpha = |x: u32, y: u32| pixels[((y * width + x) * 4 + 3) as usize];
+        assert_eq!(alpha(0, 0), 0);
+        assert!(alpha(width / 2, 4) > 0);
+    }
+
+    #[test]
+    fn shadow_strength_scales_opacity() {
+        let key = |strength| ShadowKey {
+            width: 80,
+            height: 60,
+            scale: 1.0f64.to_bits(),
+            radius: 12,
+            strength,
+        };
+        let peak = |strength| {
+            let (_, _, pixels) = shadow_pixels(key(strength), 1.0).unwrap();
+            pixels.chunks(4).map(|p| p[3]).max().unwrap()
+        };
+        assert!(peak(25) < peak(50) && peak(50) < peak(100));
+    }
+
+    #[test]
+    fn focused_shadow_memory_is_bounded_even_for_maximum_windows() {
+        let key = ShadowKey {
+            width: MAX_WIDTH,
+            height: MAX_WIDTH,
+            scale: 2.0f64.to_bits(),
+            radius: 24,
+            strength: 100,
+        };
+        let (width, height, pixels) = shadow_pixels(key, 2.0).unwrap();
+        assert_eq!(pixels.len(), shadow_buffer_bytes(width, height).unwrap());
+        assert!(pixels.len() <= SHADOW_CACHE_BUDGET);
+        assert_eq!(SHADOW_CACHE_BUDGET, 16 * 1024 * 1024);
     }
 }

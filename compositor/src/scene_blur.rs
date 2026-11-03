@@ -68,17 +68,20 @@ uniform float alpha;
 varying vec2 v_coords;
 
 uniform vec2 step;
+uniform vec2 edge;
 
 #if defined(DEBUG_FLAGS)
 uniform float tint;
 #endif
 
 void main() {
-    vec4 c = texture2D(tex, v_coords) * 0.2270270270;
-    c += (texture2D(tex, v_coords + step * 1.3846153846)
-        + texture2D(tex, v_coords - step * 1.3846153846)) * 0.3162162162;
-    c += (texture2D(tex, v_coords + step * 3.2307692308)
-        + texture2D(tex, v_coords - step * 3.2307692308)) * 0.0702702703;
+    vec2 lo = edge;
+    vec2 hi = vec2(1.0) - edge;
+    vec4 c = texture2D(tex, clamp(v_coords, lo, hi)) * 0.2270270270;
+    c += (texture2D(tex, clamp(v_coords + step * 1.3846153846, lo, hi))
+        + texture2D(tex, clamp(v_coords - step * 1.3846153846, lo, hi))) * 0.3162162162;
+    c += (texture2D(tex, clamp(v_coords + step * 3.2307692308, lo, hi))
+        + texture2D(tex, clamp(v_coords - step * 3.2307692308, lo, hi))) * 0.0702702703;
 #if defined(NO_ALPHA)
     c = vec4(c.rgb, 1.0);
 #endif
@@ -137,7 +140,7 @@ pub(crate) fn resample(
     renderer: &mut GlesRenderer,
     texture: GlesTexture,
     to: Size<i32, Physical>,
-    shader: Option<(&GlesTexProgram, [f32; 2])>,
+    shader: Option<(&GlesTexProgram, [f32; 2], [f32; 2])>,
 ) -> Option<GlesTexture> {
     let from = smithay::backend::renderer::Texture::size(&texture);
     let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
@@ -152,9 +155,12 @@ pub(crate) fn resample(
         Kind::Unspecified,
     );
     match shader {
-        Some((shader, step)) => {
-            let element =
-                TextureShaderElement::new(source, shader.clone(), vec![Uniform::new("step", step)]);
+        Some((shader, step, edge)) => {
+            let element = TextureShaderElement::new(
+                source,
+                shader.clone(),
+                vec![Uniform::new("step", step), Uniform::new("edge", edge)],
+            );
             draw(renderer, &[element], to, Scale::from(1.0))
         }
         None => draw(renderer, &[source], to, Scale::from(1.0)),
@@ -170,8 +176,9 @@ pub(crate) fn blur(
     spread: f32,
 ) -> Option<GlesTexture> {
     let texel = [1.0 / size.w as f32, 1.0 / size.h as f32];
+    let edge = blur_edge(size);
     for step in [[texel[0] * spread, 0.0], [0.0, texel[1] * spread]] {
-        texture = resample(renderer, texture, size, Some((shader, step)))?;
+        texture = resample(renderer, texture, size, Some((shader, step, edge)))?;
     }
     Some(texture)
 }
@@ -191,8 +198,13 @@ pub(crate) fn compile(
     if shader.is_some() || *broken {
         return;
     }
-    match renderer.compile_custom_texture_shader(BLUR, &[UniformName::new("step", UniformType::_2f)])
-    {
+    match renderer.compile_custom_texture_shader(
+        BLUR,
+        &[
+            UniformName::new("step", UniformType::_2f),
+            UniformName::new("edge", UniformType::_2f),
+        ],
+    ) {
         Ok(program) => *shader = Some(program),
         Err(err) => {
             warn!(?err, "can't compile the blur shader; {what}");
@@ -355,27 +367,15 @@ impl SceneBlur {
 const LIVE_BY: i32 = 4;
 /// Blur passes over a live copy, and how far apart their taps sit: wider
 /// than the held copy's, since this one is bigger.
-const LIVE_PASSES: usize = 2;
-const LIVE_SPREAD: f32 = 2.5;
-/// The most blur passes a live copy gets, however strong the frost.
-const LIVE_PASSES_MAX: usize = 4;
-
-/// The passes and tap spread of a live blur at `frost` percent (100 is
-/// the usual look). Past what the spread alone can do smoothly, another
-/// pass is added; the cost stays bounded.
-fn live_strength(frost: u8) -> (usize, f32) {
-    let scale = frost.clamp(25, 200) as f32 / 100.0;
-    // Two Gaussian passes add their variances, so the blur grows with
-    // sqrt(passes) * spread; the spread makes up for the pass count.
-    let passes = if scale > 1.5 { LIVE_PASSES + 1 } else { LIVE_PASSES };
-    let passes = passes.min(LIVE_PASSES_MAX);
-    let spread = LIVE_SPREAD * scale * (LIVE_PASSES as f32 / passes as f32).sqrt();
-    (passes, spread)
-}
-
 /// The size a live copy of an output of `full` physical pixels is drawn at.
 fn live_size(full: Size<i32, Physical>) -> Size<i32, Physical> {
     shrink(full, LIVE_BY)
+}
+
+/// At 1/8 resolution, use the same calibrated plan as the static wallpaper
+/// frost; the live scene is captured at 1/4 first to keep its source smooth.
+fn live_strength(frost: u8) -> (usize, f32) {
+    crate::wallpaper::blur_plan(frost.min(200) as f32 / 100.0)
 }
 
 /// Whether the scene drawn into a slot has to be blurred again: the first
@@ -553,12 +553,16 @@ impl LiveBlur {
             return;
         }
         let blurred = (|| {
-            let mut texture = slot.scene.clone();
+            // Match the static frost's 1/8 blur, then its 1/4 upsample and
+            // smoothing pass. Capturing at 1/4 first avoids aliasing text.
+            let deep = shrink(size, 2);
+            let mut texture = resample(renderer, slot.scene.clone(), deep, None)?;
             let (passes, spread) = live_strength(frost);
             for _ in 0..passes {
-                texture = blur(renderer, &shader, texture, size, spread)?;
+                texture = blur(renderer, &shader, texture, deep, spread)?;
             }
-            // Smooth out the sampling's creases.
+            texture = resample(renderer, texture, size, None)?;
+            // Match the static wallpaper frost's final smoothing pass.
             blur(renderer, &shader, texture, size, 1.0)
         })();
         let Some(texture) = blurred else {
@@ -632,6 +636,10 @@ fn crop_of(
     (element, crop)
 }
 
+fn blur_edge(size: Size<i32, Physical>) -> [f32; 2] {
+    [0.5 / size.w.max(1) as f32, 0.5 / size.h.max(1) as f32]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,21 +648,32 @@ mod tests {
     fn live_copy_is_a_quarter_size_and_never_empty() {
         assert_eq!(live_size((1920, 1080).into()), (480, 270).into());
         assert_eq!(live_size((1366, 768).into()), (342, 192).into());
+        assert_eq!(
+            shrink(live_size((1366, 768).into()), 2),
+            shrink((1366, 768).into(), 8)
+        );
         assert_eq!(live_size((2, 1).into()), (1, 1).into());
     }
 
     #[test]
-    fn live_strength_follows_frost() {
-        assert_eq!(live_strength(100), (LIVE_PASSES, LIVE_SPREAD));
-        let width = |f| {
-            let (p, s) = live_strength(f);
-            s * (p as f32).sqrt()
+    fn live_strength_matches_wallpaper_frost_at_one_hundred_percent() {
+        assert_eq!(live_strength(100), crate::wallpaper::blur_plan(1.0));
+        let sigma = |percent| {
+            let (passes, spread) = live_strength(percent);
+            crate::wallpaper::TAP_SIGMA * spread * (passes as f32).sqrt()
         };
-        let base = width(100);
-        assert!((width(200) / base - 2.0).abs() < 0.01);
-        assert!((width(50) / base - 0.5).abs() < 0.01);
-        assert!(live_strength(200).0 <= LIVE_PASSES_MAX);
+        assert!((sigma(100) - crate::wallpaper::TARGET_SIGMA).abs() < 0.01);
+        assert!(sigma(200) > sigma(100));
+        assert!(sigma(50) < sigma(100));
         assert_eq!(live_strength(255), live_strength(200));
+    }
+
+    #[test]
+    fn blur_sampling_bounds_stay_inside_the_texture() {
+        let edge = blur_edge((480, 270).into());
+        assert_eq!(edge, [1.0 / 960.0, 1.0 / 540.0]);
+        let one_pixel = blur_edge((1, 1).into());
+        assert_eq!(one_pixel, [0.5, 0.5]);
     }
 
     #[test]
@@ -664,4 +683,5 @@ mod tests {
         assert!(needs_blur(true, false, true));
         assert!(!needs_blur(true, false, false));
     }
+
 }

@@ -1619,9 +1619,11 @@ fn paint_volume_row(
         theme.qs_slider_track,
         fill,
     );
-    let icon_size = 20.0;
-    let icon_x = v.x + (v.h - icon_size) / 2.0 + 4.0;
-    let covered = shown * v.w > icon_x - v.x + icon_size;
+    // The slot stays 20px; only the glyph is scaled, centred in it.
+    let slot = 20.0;
+    let icon_size = slot * glyph_scale(icon);
+    let slot_x = v.x + (v.h - slot) / 2.0 + 4.0;
+    let covered = shown * v.w > slot_x - v.x + slot;
     let icon_color = if covered && !muted {
         theme.qs_on_fill
     } else {
@@ -1630,11 +1632,21 @@ fn paint_volume_row(
     canvas.icon(
         icons,
         icon,
-        icon_x,
+        slot_x + (slot - icon_size) / 2.0,
         v.y + (v.h - icon_size) / 2.0,
         icon_size,
         icon_color,
     );
+}
+
+/// Microphone glyphs fill more of their box than the speaker's, so they
+/// are drawn smaller to look the same size.
+fn glyph_scale(icon: &str) -> f32 {
+    if icon.contains("microphone") {
+        0.85
+    } else {
+        1.0
+    }
 }
 
 /// The round arrow at a slider's end.
@@ -1835,6 +1847,13 @@ fn ellipsize(text: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn microphone_glyph_is_scaled_down_only() {
+        assert!(super::glyph_scale("audio-input-microphone-symbolic") < 1.0);
+        assert!(super::glyph_scale("microphone-sensitivity-muted-symbolic") < 1.0);
+        assert_eq!(super::glyph_scale("audio-volume-high-symbolic"), 1.0);
+    }
+
     use super::*;
 
     #[test]
