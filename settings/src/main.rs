@@ -1106,6 +1106,10 @@ impl App {
             self.ui.sidebar_scroll = self.painted.sidebar_max_scroll;
             self.dirty = true;
         }
+        if self.ui.popover_scroll > self.painted.popover_max_scroll {
+            self.ui.popover_scroll = self.painted.popover_max_scroll;
+            self.dirty = true;
+        }
         let swapped = self.shm_format == wl_shm::Format::Argb8888;
         if swapped {
             for pixel in pixels.as_chunks_mut::<4>().0 {
@@ -1403,7 +1407,23 @@ impl App {
                         self.write(&[(row.key.clone(), value.clone())]);
                     }
                     Control::Shortcut => self.start_capture(row.key.clone()),
-                    Control::Dropdown(_) => {
+                    Control::Dropdown(choices) => {
+                        // The selected choice starts in view.
+                        let selected = choices.iter().position(|c| c.value == row.value);
+                        let anchor = self
+                            .painted
+                            .hits
+                            .iter()
+                            .find(|(_, t)| *t == Target::Dropdown(i))
+                            .map(|(r, _)| *r);
+                        self.ui.popover_scroll = anchor.map_or(0.0, |anchor| {
+                            view::dropdown_open_scroll(
+                                self.size.1 as f32,
+                                anchor,
+                                choices.len(),
+                                selected,
+                            )
+                        });
                         self.ui.popover = Some(row.key.clone());
                         self.res.anim.restart(
                             view::AnimKey::Popover,

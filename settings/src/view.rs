@@ -1456,23 +1456,103 @@ fn popover(
     };
     let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
     let width = (p.dropdown_width(&labels) + 16.0).max(anchor.w);
-    let height = Painter::popover_height(labels.len());
+    let list = dropdown_box(h, anchor.y, anchor.bottom(), labels.len());
     let x = (anchor.right() - width).clamp(8.0, (w - width - 8.0).max(8.0));
-    let below = anchor.bottom() + 4.0;
-    let y = if below + height <= h - 8.0 {
-        below
-    } else {
-        (anchor.y - 4.0 - height).max(8.0)
-    };
+    let scroll = ui.popover_scroll.clamp(0.0, list.max_scroll);
+    out.popover_max_scroll = list.max_scroll;
     let selected = choices.iter().position(|c| c.value == row.value);
     let hovers: Vec<f32> = (0..labels.len())
         .map(|i| hover(a, ui, Target::Choice(i)))
         .collect();
     let appear = a.get(AnimKey::Popover, 1.0, SHORT);
-    let rects = p.popover(x, y, width, &labels, selected, |i| hovers[i], appear);
+    let rects = p.popover_scrolled(
+        x,
+        list.y,
+        width,
+        list.h,
+        scroll,
+        &labels,
+        selected,
+        |i| hovers[i],
+        appear,
+    );
+    // Only the part inside the list takes the pointer.
+    let (top, bottom) = (list.y, list.y + list.h);
     for (i, r) in rects.into_iter().enumerate() {
-        out.hits.push((r, Target::Choice(i)));
+        let (y0, y1) = (r.y.max(top), r.bottom().min(bottom));
+        if y1 > y0 {
+            out.hits.push((Rect::new(r.x, y0, r.w, y1 - y0), Target::Choice(i)));
+        }
     }
+}
+
+/// Gap between an open dropdown's list and its button.
+const DROPDOWN_GAP: f32 = 4.0;
+/// Room kept between an open dropdown's list and the window's edges.
+const DROPDOWN_MARGIN: f32 = 8.0;
+/// A choice's height, and the padding above the first one, as
+/// `Painter::popover_scrolled` lays them out.
+const CHOICE_ROW: f32 = 36.0;
+const CHOICE_PAD: f32 = 6.0;
+
+/// Where an open dropdown's list goes: its top, its height, and how far its
+/// choices can scroll.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DropdownBox {
+    pub y: f32,
+    pub h: f32,
+    pub max_scroll: f32,
+}
+
+/// The list of `count` choices for a button from `anchor_top` to
+/// `anchor_bottom`, in a window `window_h` tall. It goes below the button
+/// when all of it fits there, else above when there's more room above, else
+/// below. It's cut to the room it gets, and its choices scroll.
+pub fn dropdown_box(
+    window_h: f32,
+    anchor_top: f32,
+    anchor_bottom: f32,
+    count: usize,
+) -> DropdownBox {
+    let full = Painter::popover_height(count);
+    let below = anchor_bottom + DROPDOWN_GAP;
+    let room_below = (window_h - DROPDOWN_MARGIN - below).max(0.0);
+    let room_above = (anchor_top - DROPDOWN_GAP - DROPDOWN_MARGIN).max(0.0);
+    let above = full > room_below && room_above > room_below;
+    let room = if above { room_above } else { room_below };
+    let h = full.min(room);
+    let y = if above {
+        anchor_top - DROPDOWN_GAP - h
+    } else {
+        below
+    };
+    DropdownBox {
+        y,
+        h,
+        max_scroll: (full - h).max(0.0),
+    }
+}
+
+/// The scroll that brings choice `index` into `b`, moving the list no more
+/// than it must from `scroll`.
+pub fn dropdown_reveal(scroll: f32, index: usize, b: DropdownBox) -> f32 {
+    let top = CHOICE_PAD + CHOICE_ROW * index as f32;
+    let bottom = top + CHOICE_ROW;
+    scroll
+        .min(top)
+        .max(bottom - b.h)
+        .clamp(0.0, b.max_scroll)
+}
+
+/// The scroll an open dropdown starts at: its selected choice in view.
+pub fn dropdown_open_scroll(
+    window_h: f32,
+    anchor: Rect,
+    count: usize,
+    selected: Option<usize>,
+) -> f32 {
+    let b = dropdown_box(window_h, anchor.y, anchor.bottom(), count);
+    dropdown_reveal(0.0, selected.unwrap_or(0), b)
 }
 
 #[cfg(test)]
@@ -2042,5 +2122,87 @@ mod tests {
         );
         ui.config.appearance.color_scheme = cnde_config::ColorScheme::Light;
         render(&ui, "custom-light");
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    /// A 40px button with its top at `top`.
+    fn anchor(top: f32) -> Rect {
+        Rect::new(500.0, top, 200.0, 40.0)
+    }
+
+    #[test]
+    fn short_list_opens_below_unscrolled() {
+        // 3 choices fit under a button near the top.
+        let b = dropdown_box(680.0, 100.0, 140.0, 3);
+        assert_eq!(b.y, 144.0);
+        assert_eq!(b.h, Painter::popover_height(3));
+        assert_eq!(b.max_scroll, 0.0);
+    }
+
+    #[test]
+    fn long_list_flips_up_when_there_is_more_room_above() {
+        // 35 choices, a button near the bottom of the window.
+        let b = dropdown_box(680.0, 600.0, 640.0, 35);
+        assert_eq!(b.y + b.h, 600.0 - DROPDOWN_GAP, "ends just above the button");
+        assert!(b.y >= DROPDOWN_MARGIN);
+        assert_eq!(b.max_scroll, Painter::popover_height(35) - b.h);
+    }
+
+    #[test]
+    fn long_list_stays_below_when_there_is_more_room_below() {
+        // A button near the top of a short window: below, cut to fit.
+        let b = dropdown_box(400.0, 60.0, 100.0, 35);
+        assert_eq!(b.y, 104.0);
+        assert_eq!(b.y + b.h, 400.0 - DROPDOWN_MARGIN);
+        assert!(b.max_scroll > 0.0);
+    }
+
+    #[test]
+    fn list_never_leaves_the_window() {
+        for window_h in [200.0, 400.0, 680.0, 1440.0] {
+            for top in [0.0, 50.0, 200.0, 350.0, 600.0] {
+                // The button itself is in the window.
+                if top + 40.0 > window_h {
+                    continue;
+                }
+                for count in [1, 5, 35, 80] {
+                    let b = dropdown_box(window_h, top, top + 40.0, count);
+                    assert!(b.h >= 0.0 && b.y >= 0.0, "{window_h} {top} {count}: {b:?}");
+                    assert!(b.y + b.h <= window_h, "{window_h} {top} {count}: {b:?}");
+                    assert!(b.max_scroll >= 0.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reveal_moves_the_list_only_as_far_as_needed() {
+        let b = DropdownBox {
+            y: 0.0,
+            h: 200.0,
+            max_scroll: 500.0,
+        };
+        // Already in view: no change.
+        assert_eq!(dropdown_reveal(0.0, 0, b), 0.0);
+        // Choice 10 is far below: scrolled just far enough to show its bottom.
+        let s = dropdown_reveal(0.0, 10, b);
+        assert_eq!(s, CHOICE_PAD + CHOICE_ROW * 11.0 - 200.0);
+        // Choice 3 is above a list scrolled past it: its top meets the edge.
+        assert_eq!(dropdown_reveal(300.0, 3, b), CHOICE_PAD + CHOICE_ROW * 3.0);
+        // Never past the ends of the list.
+        assert_eq!(dropdown_reveal(0.0, 34, b), 500.0);
+    }
+
+    #[test]
+    fn opening_scrolls_the_selected_choice_into_view() {
+        let s = dropdown_open_scroll(400.0, anchor(60.0), 35, Some(30));
+        let b = dropdown_box(400.0, 60.0, 100.0, 35);
+        assert!(CHOICE_PAD + CHOICE_ROW * 31.0 - s <= b.h);
+        assert!(s <= b.max_scroll);
+        assert_eq!(dropdown_open_scroll(400.0, anchor(60.0), 35, None), 0.0);
     }
 }
