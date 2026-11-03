@@ -14,6 +14,8 @@ const OWN_PATH: &str = "/org/cnde/Settings";
 /// with this activation token (maybe empty).
 pub struct Show {
     pub page: Option<Page>,
+    /// Search for this (`Some("")` just focuses the search field).
+    pub search: Option<String>,
     pub token: String,
 }
 
@@ -24,6 +26,15 @@ struct Instance {
 #[interface(name = "org.cnde.Settings")]
 impl Instance {
     fn show(&self, page: String, startup_id: String) {
+        // "search:<text>" is a search rather than a page name.
+        if let Some(text) = page.strip_prefix("search:") {
+            let _ = self.tx.send(Show {
+                page: None,
+                search: Some(text.to_string()),
+                token: startup_id,
+            });
+            return;
+        }
         let page = (!page.is_empty())
             .then(|| {
                 let found = Page::from_name(&page);
@@ -35,12 +46,13 @@ impl Instance {
             .flatten();
         let _ = self.tx.send(Show {
             page,
+            search: None,
             token: startup_id,
         });
     }
 }
 
-/// Hand `page` to a running Settings; true if there was one (the caller
+/// Hand `page` (a page name, or "search:<text>") to a running Settings; true if there was one (the caller
 /// then exits).
 pub fn forward(page: Option<&str>) -> bool {
     let Ok(conn) = Connection::session() else {

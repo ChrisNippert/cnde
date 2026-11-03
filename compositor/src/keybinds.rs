@@ -187,6 +187,39 @@ impl Combo {
     }
 }
 
+/// Whether `sym` is a modifier key (any of them), which isn't a combo yet.
+pub fn is_modifier_sym(sym: Keysym) -> bool {
+    (keysyms::KEY_Shift_L..=keysyms::KEY_Hyper_R).contains(&sym.raw())
+        || sym.raw() == keysyms::KEY_ISO_Level3_Shift
+}
+
+/// The combo as the config writes it ("Super+Ctrl+Shift+S"), for Settings'
+/// shortcut capture. The inverse of `for_mod_key`: nested, Alt stands for
+/// Super and Alt+Ctrl for Super+Alt.
+pub fn combo_string(mod_key: ModKey, mods: &ModifiersState, sym: Keysym) -> String {
+    let (mut logo, mut alt, mut ctrl) = (mods.logo, mods.alt, mods.ctrl);
+    if mod_key == ModKey::Alt && alt {
+        alt = ctrl;
+        ctrl = false;
+        logo = true;
+    }
+    let mut shift = mods.shift;
+    let mut raw = sym.raw();
+    if raw == keysyms::KEY_ISO_Left_Tab {
+        raw = keysyms::KEY_Tab;
+        shift = true;
+    }
+    let mut out = String::new();
+    for (on, name) in [(logo, "Super"), (ctrl, "Ctrl"), (alt, "Alt"), (shift, "Shift")] {
+        if on {
+            out.push_str(name);
+            out.push('+');
+        }
+    }
+    out.push_str(&xkb::keysym_get_name(Keysym::new(lower(raw))));
+    out
+}
+
 /// What a bound key does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Bound {
@@ -366,6 +399,23 @@ mod tests {
     fn built(toml: &str, mod_key: ModKey) -> Shortcuts {
         let config = cnde_config::Config::parse(toml).unwrap();
         Shortcuts::build(&config.shortcuts, mod_key)
+    }
+
+    #[test]
+    fn captured_combos_parse_back() {
+        let m = mods(true, false, false, true);
+        let text = combo_string(ModKey::Super, &m, Keysym::from(keysyms::KEY_S));
+        assert_eq!(text, "Super+Shift+s");
+        assert_eq!(parse_combo(&text), parse_combo("Super+Shift+S"));
+        let tab = combo_string(ModKey::Super, &mods(false, true, false, true), Keysym::from(keysyms::KEY_ISO_Left_Tab));
+        assert_eq!(tab, "Alt+Shift+Tab");
+        // Nested, Alt is the mod key and Alt+Ctrl is Super+Alt.
+        let nested = combo_string(ModKey::Alt, &mods(false, true, false, false), Keysym::from(keysyms::KEY_Left));
+        assert_eq!(nested, "Super+Left");
+        let nested = combo_string(ModKey::Alt, &mods(false, true, true, false), Keysym::from(keysyms::KEY_Left));
+        assert_eq!(nested, "Super+Alt+Left");
+        assert!(is_modifier_sym(Keysym::from(keysyms::KEY_Super_L)));
+        assert!(!is_modifier_sym(Keysym::from(keysyms::KEY_a)));
     }
 
     #[test]

@@ -180,6 +180,23 @@ impl State {
                     }
                     return FilterResult::Forward;
                 }
+                // Settings is capturing a shortcut: the next combo goes to
+                // it instead of running. The escape hatch still works.
+                if state.ipc.capture.is_some() && !state.lock.is_locked() {
+                    let sym = handle
+                        .raw_latin_sym_or_raw_current_sym()
+                        .unwrap_or(handle.modified_sym());
+                    if is_mod || keybinds::is_modifier_sym(sym) {
+                        state.mod_tap_armed = false;
+                        return FilterResult::Forward;
+                    }
+                    if !(mods.ctrl && mods.alt && sym.raw() == keysyms::KEY_BackSpace) {
+                        state.suppressed_keys.push(keycode);
+                        let combo = keybinds::combo_string(mod_key, mods, sym);
+                        state.send_captured_shortcut(combo);
+                        return FilterResult::Intercept(None);
+                    }
+                }
                 // VT switching comes from the keymap (Ctrl+Alt+Fn produces
                 // XF86Switch_VT_n), so it's matched on the modified keysym.
                 if let Some(action) = keybinds::vt_switch(handle.modified_sym()) {

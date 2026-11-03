@@ -12,6 +12,8 @@ mod defaults;
 mod mixer;
 mod pages;
 mod power_mode;
+mod search;
+mod shortcuts;
 mod sound;
 mod view;
 mod wallpapers;
@@ -145,6 +147,10 @@ struct App {
     /// the monitor started.
     arranging: Option<((f64, f64), (i32, i32))>,
     last_header_click: Option<Instant>,
+    /// The connection asking the compositor for the next key combo; closing
+    /// it ends the capture.
+    capture: Option<std::os::unix::net::UnixStream>,
+    capture_tx: channel::Sender<String>,
     error_timer: Option<RegistrationToken>,
     /// Commands for the Wi-Fi worker, started when its page first opens.
     wifi: Option<std::sync::mpsc::Sender<wifi::Command>>,
@@ -185,12 +191,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let arg = std::env::args().nth(1);
+    // `cnde-settings <page>` or `cnde-settings --search <text>`; the second
+    // goes to a running window as "search:<text>".
+    let mut args = std::env::args().skip(1);
+    let arg = match args.next() {
+        Some(flag) if flag == "--search" => {
+            Some(format!("search:{}", args.collect::<Vec<_>>().join(" ")))
+        }
+        Some(flag) if flag.starts_with("--search=") => {
+            Some(format!("search:{}", &flag["--search=".len()..]))
+        }
+        other => other,
+    };
+    let search = arg
+        .as_deref()
+        .and_then(|a| a.strip_prefix("search:"))
+        .map(str::to_string);
     // One window: a running Settings takes the page instead.
     if dbus::forward(arg.as_deref()) {
         return Ok(());
     }
     let page = arg
+        .filter(|_| search.is_none())
         .and_then(|name| {
             let page = Page::from_name(&name);
             if page.is_none() {
@@ -253,11 +275,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(page) = show.page {
                     app.show_page(page);
                 }
+                if let Some(text) = show.search {
+                    app.ui.search = text.clone();
+                    app.ui.scroll = 0.0;
+                    app.edit_field(Key::Search, text);
+                }
                 app.raise(show.token);
                 app.redraw();
             }
         })?;
     dbus::serve(show_tx);
+
+    // The key combo Settings asked the compositor to hand over.
+    let (capture_tx, capture_rx) = channel::channel::<String>();
+    event_loop
+        .handle()
+        .insert_source(capture_rx, |event, _, app: &mut App| {
+            if let channel::Event::Msg(combo) = event {
+                app.shortcut_captured(&combo);
+                app.redraw();
+            }
+        })?;
 
     // Wallpaper thumbnails, decoded off the main thread.
     let (thumb_tx, thumb_rx) = channel::channel();
@@ -339,7 +377,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scroll: 0.0,
             hover: None,
             popover: None,
-            edit: None,
+            edit: search.as_ref().map(|text| Edit {
+                key: Key::Search,
+                cursor: text.chars().count(),
+                text: text.clone(),
+                int: false,
+            }),
+            search: search.unwrap_or_default(),
+            capturing: None,
+            shortcut_note: None,
             error: None,
             rounded: true,
             frosted,
@@ -386,6 +432,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dragging: None,
         arranging: None,
         last_header_click: None,
+        capture: None,
+        capture_tx,
         error_timer: None,
         wifi: None,
         bluetooth: None,
@@ -1195,6 +1243,10 @@ impl App {
 
     fn press(&mut self, position: (f64, f64), serial: u32) {
         let target = self.painted.hit(position);
+        // A click anywhere gives up waiting for a shortcut.
+        if self.ui.capturing.is_some() {
+            self.stop_capture();
+        }
 
         // An open dropdown takes the click: a choice, or closing it.
         if let Some(key) = self.ui.popover.take() {
@@ -1243,7 +1295,12 @@ impl App {
         };
         match target {
             Target::Page(page) => {
+                self.clear_search();
                 self.show_page(page);
+            }
+            Target::Search => {
+                let text = self.ui.search.clone();
+                self.edit_field(Key::Search, text);
             }
             Target::Mixer(hit) => self.press_mixer(hit, position),
             Target::Back => self.open_sub_page(None),
@@ -1289,6 +1346,7 @@ impl App {
                         let value = if row.is_on() { off } else { on };
                         self.write(&[(row.key.clone(), value.clone())]);
                     }
+                    Control::Shortcut => self.start_capture(row.key.clone()),
                     Control::Dropdown(_) => {
                         self.ui.popover = Some(row.key.clone());
                         self.res.anim.restart(
@@ -1515,6 +1573,10 @@ impl App {
         let Some(edit) = self.ui.edit.take() else {
             return;
         };
+        // The search text is kept as it's typed.
+        if edit.key == Key::Search {
+            return;
+        }
         // Passwords are taken exactly as typed; the join form's other
         // fields aren't config either.
         if let Key::Wifi(key @ WifiKey::Join(field)) = &edit.key {
@@ -1562,8 +1624,26 @@ impl App {
             self.exit.stop();
             return;
         }
+        if ctrl && matches!(event.keysym, Keysym::f | Keysym::F) {
+            self.commit_edit();
+            let text = self.ui.search.clone();
+            self.edit_field(Key::Search, text);
+            self.redraw();
+            return;
+        }
         if event.keysym == Keysym::Escape {
-            if self.ui.popover.take().is_some() || self.ui.edit.take().is_some() {
+            if self.ui.capturing.is_some() {
+                self.stop_capture();
+                self.redraw();
+            } else if self.ui.popover.take().is_some() {
+                self.redraw();
+            } else if let Some(edit) = self.ui.edit.take() {
+                if edit.key == Key::Search {
+                    self.clear_search();
+                }
+                self.redraw();
+            } else if self.ui.searching() {
+                self.clear_search();
                 self.redraw();
             } else if self.ui.sub_page().is_some() {
                 self.open_sub_page(None);
@@ -1632,6 +1712,14 @@ impl App {
                 edit.cursor += text.chars().count();
             }
         }
+        // The results follow the search text as it's typed.
+        if let Some(edit) = &self.ui.edit
+            && edit.key == Key::Search
+            && edit.text != self.ui.search
+        {
+            self.ui.search = edit.text.clone();
+            self.ui.scroll = 0.0;
+        }
         self.redraw();
     }
 
@@ -1655,6 +1743,97 @@ impl App {
             self.cursor = icon;
             let _ = pointer.set_cursor(&self.conn, icon);
         }
+    }
+
+    fn clear_search(&mut self) {
+        if self.ui.edit.as_ref().is_some_and(|e| e.key == Key::Search) {
+            self.ui.edit = None;
+        }
+        if !self.ui.search.is_empty() {
+            self.ui.search.clear();
+            self.ui.scroll = 0.0;
+        }
+    }
+
+    /// Ask the compositor for the next key combo (it would otherwise run
+    /// it), to bind to `key`'s action.
+    fn start_capture(&mut self, key: Key) {
+        use std::io::{BufRead, Write};
+        self.stop_capture();
+        self.ui.shortcut_note = None;
+        let Some(path) = std::env::var_os(cnde_ipc::SOCKET_ENV) else {
+            self.show_error("Changing shortcuts needs cnde's compositor".into());
+            return;
+        };
+        let connected = std::os::unix::net::UnixStream::connect(path).and_then(|mut stream| {
+            stream.write_all(&cnde_ipc::encode(&cnde_ipc::Request::CaptureShortcut))?;
+            Ok((stream.try_clone()?, stream))
+        });
+        let Ok((reader, stream)) = connected else {
+            self.show_error("Can't reach the compositor".into());
+            return;
+        };
+        let tx = self.capture_tx.clone();
+        let _ = std::thread::Builder::new()
+            .name("capture".into())
+            .spawn(move || {
+                for line in std::io::BufReader::new(reader)
+                    .split(b'\n')
+                    .map_while(Result::ok)
+                {
+                    if let Some(cnde_ipc::Event::ShortcutCaptured { combo }) =
+                        cnde_ipc::decode(&line)
+                    {
+                        let _ = tx.send(combo);
+                        return;
+                    }
+                }
+            });
+        self.capture = Some(stream);
+        self.ui.capturing = Some(key);
+    }
+
+    fn stop_capture(&mut self) {
+        if let Some(stream) = self.capture.take() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+        self.ui.capturing = None;
+    }
+
+    /// The combo the compositor caught: write it as the action's first, or
+    /// say why not. Escape cancels; Backspace turns the action off.
+    fn shortcut_captured(&mut self, combo: &str) {
+        let Some(key) = self.ui.capturing.clone() else {
+            return;
+        };
+        self.stop_capture();
+        let Key::Shortcut(name) = key else {
+            return;
+        };
+        let current = self
+            .ui
+            .config
+            .shortcuts
+            .bindings
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        let keys = match combo {
+            "Escape" => return,
+            "BackSpace" => Vec::new(),
+            combo => {
+                let note = shortcuts::refuse(combo).map(str::to_string).or_else(|| {
+                    shortcuts::conflict(&self.ui.config.shortcuts, name, combo)
+                        .map(|other| format!("{combo} is already used by \"{other}\""))
+                });
+                if let Some(note) = note {
+                    self.ui.shortcut_note = Some((key, note));
+                    return;
+                }
+                shortcuts::with_first(&current, combo)
+            }
+        };
+        self.write(&[(key, Value::Str(keys.join(", ")))]);
     }
 
     /// Start typing in the text field after the one for `key`; false if
