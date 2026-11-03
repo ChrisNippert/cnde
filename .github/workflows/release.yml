@@ -44,6 +44,10 @@ jobs:
       - name: Set up a build user
         run: |
           useradd -m builder
+          # Fat LTO links use a lot of memory; one at a time fits the runner.
+          install -d -o builder -g builder /home/builder/.cargo
+          printf '[build]\njobs = 1\n' > /home/builder/.cargo/config.toml
+          chown builder: /home/builder/.cargo/config.toml
           chown -R builder: .
           sudo -u builder git config --global --add safe.directory '*'
           git config --global --add safe.directory '*'
