@@ -107,6 +107,7 @@ pub static ENTRIES: &[Entry] = &[
     option("Rounded corners", "tiling", "Tiling", "Rounded corners", &["tiled", "shadows", "tiles"]),
     option("Snap zones", "windows", "Windows", "Snap zone", &["edge", "half"]),
     option("Focus follows mouse", "windows", "Windows", "Focus follows mouse", &["hover", "focus on hover", "sloppy focus"]),
+    option("Focused window shadow", "windows", "Windows", "Focused window shadow", &["drop shadow", "window shadow", "focused"]),
     option("Title bar buttons", "windows", "Windows", "Title bar buttons", &["minimize", "maximize", "close"]),
     option("Workspaces", "windows", "Windows", "Workspaces", &["virtual desktops", "monitors"]),
     option("Clock format", "top bar", "Top Bar", "Clock format", &["time", "date", "24 hour"]),
@@ -115,6 +116,8 @@ pub static ENTRIES: &[Entry] = &[
     option("On-screen keyboard", "accessibility", "Accessibility", "On-screen keyboard", &["touch keyboard", "virtual keyboard"]),
     option("Dock position", "dock", "Dock", "Position", &["bottom", "left", "right"]),
     option("Dock icon size", "dock", "Dock", "Icon size", &["size"]),
+    option("Dock corner radius", "dock", "Dock", "Corner radius", &["rounded", "corners"]),
+    option("App drawer icon size", "dock", "Dock", "App drawer icon size", &["app grid", "overview", "icons"]),
     option("Event sounds", "sound", "Sound", "Event sounds", &["alert", "notification sound"]),
     option("Default terminal", "default apps", "Default Apps", "Terminal", &["terminal emulator"]),
 ];
@@ -197,6 +200,13 @@ mod tests {
         assert_eq!(titles("blue")[0], "Bluetooth");
         assert!(titles("trackpad").contains(&"Touchpad"));
         assert!(titles("zzz").is_empty());
+    }
+
+    #[test]
+    fn finds_new_appearance_controls() {
+        assert!(titles("focused window shadow").contains(&"Focused window shadow"));
+        assert!(titles("app drawer").contains(&"App drawer icon size"));
+        assert!(titles("corner radius").contains(&"Dock corner radius"));
     }
 
     #[test]

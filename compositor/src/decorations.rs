@@ -61,6 +61,8 @@ const BORDER: f64 = 6.0;
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// How far a press on the bar moves before it becomes a drag.
 const DRAG_THRESHOLD: f64 = 4.0;
+const SHADOW_HALO: f32 = 18.0;
+const SHADOW_LAYERS: u32 = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Part {
@@ -125,6 +127,14 @@ fn part_at(width: f64, x: f64, all: bool, tiled: bool) -> Part {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShadowKey {
+    width: i32,
+    height: i32,
+    scale: u64,
+    radius: u32,
+}
+
 /// A bar's last drawing, redrawn when anything shown on it changes.
 pub struct Titlebar {
     key: Key,
@@ -157,6 +167,10 @@ pub struct Decorations {
     pub all_buttons: bool,
     /// The overview's close button, per scale and hover state.
     close_buttons: Vec<((u64, bool), MemoryRenderBuffer)>,
+    /// Recently used focused-window shadow shapes, keyed by size and scale.
+    shadows: Vec<(ShadowKey, MemoryRenderBuffer)>,
+    /// Draw a shadow behind the focused floating window.
+    pub focused_shadow: bool,
     /// Averages windows drawn small (`render::window_elements`).
     pub downscale: crate::downscale::Downscale,
 }
@@ -321,6 +335,86 @@ impl Decorations {
         )))
     }
 
+    /// A soft shadow behind a focused floating window. `rect` is the
+    /// unzoomed window frame; its shadow follows overview and workspace
+    /// animations with it.
+    pub fn shadow_element(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        rect: Rectangle<f64, Logical>,
+        zoom: crate::render::Zoom,
+        output_loc: Point<f64, Logical>,
+        scale: Scale<f64>,
+        alpha: f32,
+    ) -> Option<OutputElement> {
+        if !self.focused_shadow || rect.size.w <= 0.0 || rect.size.h <= 0.0 {
+            return None;
+        }
+        let width = rect.size.w.round().clamp(1.0, MAX_WIDTH as f64) as i32;
+        let height = rect.size.h.round().clamp(1.0, MAX_WIDTH as f64) as i32;
+        let radius = cnde_ui::Theme::for_appearance(&self.appearance)
+            .window_radius
+            .round()
+            .max(0.0) as u32;
+        let key = ShadowKey {
+            width,
+            height,
+            scale: scale.x.to_bits(),
+            radius,
+        };
+        if !self.shadows.iter().any(|(cached, _)| *cached == key) {
+            let buffer = self.paint_shadow(key, scale.x)?;
+            if self.shadows.len() == 16 {
+                self.shadows.remove(0);
+            }
+            self.shadows.push((key, buffer));
+        }
+        let buffer = &self.shadows.iter().find(|(cached, _)| *cached == key)?.1;
+        let frame = Rectangle::new(rect.loc, Size::from((width as f64, height as f64)));
+        let halo = SHADOW_HALO as f64;
+        let outer = Rectangle::new(
+            Point::from((frame.loc.x - halo, frame.loc.y - halo)),
+            Size::from((frame.size.w + halo * 2.0, frame.size.h + halo * 2.0)),
+        );
+        let mapped = zoom.apply(outer);
+        let location = (mapped.loc - output_loc).to_physical(scale);
+        let pixels = (
+            ((width as f64 + halo * 2.0) * scale.x).round(),
+            ((height as f64 + halo * 2.0) * scale.y).round(),
+        );
+        let element = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            location,
+            buffer,
+            Some(alpha),
+            Some(Rectangle::from_size(Size::from(pixels))),
+            Some(outer.size.to_i32_round()),
+            Kind::Unspecified,
+        )
+        .map_err(|err| warn!(?err, "can't upload a window shadow"))
+        .ok()?;
+        Some(OutputElement::Titlebar(RescaleRenderElement::from_element(
+            element,
+            location.to_i32_round(),
+            Scale {
+                x: zoom.scale_x,
+                y: zoom.scale_y,
+            },
+        )))
+    }
+
+    fn paint_shadow(&mut self, key: ShadowKey, scale: f64) -> Option<MemoryRenderBuffer> {
+        let (w, h, pixels) = shadow_pixels(key, scale)?;
+        Some(MemoryRenderBuffer::from_slice(
+            &pixels,
+            Fourcc::Abgr8888,
+            (w as i32, h as i32),
+            1,
+            Transform::Normal,
+            None,
+        ))
+    }
+
     fn paint(&mut self, key: &Key) -> Option<MemoryRenderBuffer> {
         let scale = f64::from_bits(key.scale);
         let (w, h) = (
@@ -352,6 +446,33 @@ impl Decorations {
             None,
         ))
     }
+}
+
+fn shadow_pixels(key: ShadowKey, scale: f64) -> Option<(u32, u32, Vec<u8>)> {
+    let logical_width = key.width as f32 + SHADOW_HALO * 2.0;
+    let logical_height = key.height as f32 + SHADOW_HALO * 2.0;
+    let (w, h) = (
+        (logical_width as f64 * scale).round() as u32,
+        (logical_height as f64 * scale).round() as u32,
+    );
+    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    {
+        let mut canvas = Canvas::new(&mut pixels, w, h, scale as f32)?;
+        canvas.clear(Color::rgba(0, 0, 0, 0.0));
+        for layer in (0..=SHADOW_LAYERS).rev() {
+            let spread = layer as f32 * SHADOW_HALO / SHADOW_LAYERS as f32;
+            let alpha = 0.012 + (1.0 - spread / SHADOW_HALO) * 0.07;
+            canvas.rounded_rect(
+                SHADOW_HALO - spread,
+                SHADOW_HALO - spread + 2.0,
+                key.width as f32 + spread * 2.0,
+                key.height as f32 + spread * 2.0,
+                key.radius as f32 + spread,
+                Color::rgba(0, 0, 0, alpha),
+            );
+        }
+    }
+    Some((w, h, pixels))
 }
 
 /// libadwaita's header bar colours.
@@ -802,5 +923,19 @@ mod tests {
         let content = content_rect(rect, HEIGHT);
         assert_eq!(content.loc.y, 32 + HEIGHT);
         assert_eq!(content.size.h, 600 - HEIGHT);
+    }
+
+    #[test]
+    fn focused_shadow_renders_outside_the_window_bounds() {
+        let key = ShadowKey {
+            width: 80,
+            height: 60,
+            scale: 1.0f64.to_bits(),
+            radius: 12,
+        };
+        let (width, _, pixels) = shadow_pixels(key, 1.0).unwrap();
+        let alpha = |x: u32, y: u32| pixels[((y * width + x) * 4 + 3) as usize];
+        assert_eq!(alpha(0, 0), 0);
+        assert!(alpha(width / 2, 4) > 0);
     }
 }

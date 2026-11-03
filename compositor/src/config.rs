@@ -127,6 +127,7 @@ impl State {
         }
         animation::set_speed(self.config.animations.speed);
         self.decorations.appearance = self.config.appearance.clone();
+        self.decorations.focused_shadow = self.config.windows.focused_shadow;
         self.decorations.all_buttons =
             self.config.appearance.window_buttons == cnde_config::WindowButtons::All;
         if old.is_some_and(|old| old.appearance.titlebars != self.config.appearance.titlebars) {
