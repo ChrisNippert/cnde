@@ -212,6 +212,7 @@ impl State {
             // is cut from (see udev.rs).
             let wallpaper = self.wallpapers.element(renderer, &backend.output);
             let wallpaper = wallpaper.map(render::OutputElement::Wallpaper);
+            self.live_blur.set_frost(self.config.appearance.frost);
             let live = self.config.live_blur();
             let backdrop = match output_geo {
                 Some(geo) => crate::overview::backdrop(
