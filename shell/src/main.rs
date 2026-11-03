@@ -24,6 +24,7 @@ mod panel;
 mod polkit;
 mod quick_settings;
 mod screenshot;
+mod settings_search;
 mod sounds;
 mod status;
 mod tray;
@@ -809,6 +810,12 @@ impl App {
     }
 
     fn launch(&mut self, id: &str) {
+        // A Settings page or option from the search.
+        if let Some(entry) = settings_search::by_id(id) {
+            apps::open_settings_with(settings_search::args(entry));
+            self.close_overview();
+            return;
+        }
         if let Some(app) = self.apps.iter().find(|a| a.id == id) {
             let terminal = std::env::var("TERMINAL").unwrap_or_else(|_| "alacritty".into());
             apps::launch(app, &terminal);
@@ -1377,7 +1384,7 @@ impl App {
                     .is_some_and(|b| b.is_low(self.config.power.low_battery)),
                 solid,
                 mode: self.config.panel.mode,
-                clear: self.config.panel.clear,
+                style: self.config.panel.style(),
                 backdrop_light,
                 tint,
                 edge_line: self.config.panel.edge_line,

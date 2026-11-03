@@ -258,12 +258,25 @@ fn in_path(program: &str) -> bool {
 
 /// Apps matching `query`, best first. `launches` (id -> count) breaks ties
 /// in favour of what you actually use.
+#[cfg(test)]
 pub fn search<'a>(
     apps: &'a [App],
     query: &str,
     launches: &HashMap<String, u32>,
     limit: usize,
 ) -> Vec<&'a App> {
+    scored(apps, query, launches)
+        .into_iter()
+        .take(limit)
+        .map(|(_, app)| app)
+        .collect()
+}
+
+fn scored<'a>(
+    apps: &'a [App],
+    query: &str,
+    launches: &HashMap<String, u32>,
+) -> Vec<(u32, &'a App)> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
         return Vec::new();
@@ -278,7 +291,33 @@ pub fn search<'a>(
         .collect();
     // Highest score first; equal scores alphabetically (the input order).
     scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-    scored.into_iter().take(limit).map(|(_, app)| app).collect()
+    scored
+}
+
+/// Result IDs for `query`: apps, with Settings pages and options ranked in
+/// among them (see `settings_search`) when `settings` is true. An app wins
+/// a tie.
+pub fn search_ids(
+    apps: &[App],
+    query: &str,
+    launches: &HashMap<String, u32>,
+    limit: usize,
+    settings: bool,
+) -> Vec<String> {
+    let mut hits: Vec<(u32, String)> = scored(apps, query, launches)
+        .into_iter()
+        .map(|(score, app)| (score, app.id.clone()))
+        .collect();
+    if settings {
+        let query = query.trim().to_lowercase();
+        hits.extend(
+            crate::settings_search::search(&query)
+                .into_iter()
+                .map(|(score, entry)| (score, entry.id())),
+        );
+        hits.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    }
+    hits.into_iter().take(limit).map(|(_, id)| id).collect()
 }
 
 fn score(app: &App, query: &str) -> Option<u32> {
@@ -415,11 +454,16 @@ pub fn settings_installed() -> bool {
 
 /// Start cnde-settings (on `page`, e.g. "dock").
 pub fn open_settings(page: Option<&str>) {
+    open_settings_with(page);
+}
+
+/// Start cnde-settings with command line arguments.
+pub fn open_settings_with<'a>(args: impl IntoIterator<Item = &'a str>) {
     let Some(program) = settings_program() else {
         return;
     };
     let result = Command::new(&program)
-        .args(page)
+        .args(args)
         .current_dir(std::env::var_os("HOME").unwrap_or_else(|| "/".into()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -562,5 +606,33 @@ mod tests {
         assert_eq!(names("image"), ["GNU Image Manipulation Program"]);
         assert_eq!(names("gimp"), ["GNU Image Manipulation Program"]);
         assert!(names("zzz").is_empty());
+    }
+
+    #[test]
+    fn settings_rank_below_name_matches_above_weak_ones() {
+        let apps: Vec<App> = [
+            ("Night Owl", "Notes", "owl"),
+            ("Weather", "Forecast", "weather"),
+            ("Terminal", "Console", "term"),
+        ]
+        .iter()
+        .map(|(name, generic, exec)| {
+            app(&format!(
+                "[Desktop Entry]\nType=Application\nName={name}\nGenericName={generic}\nExec={exec}\n"
+            ))
+            .unwrap()
+        })
+        .collect();
+        let none = HashMap::new();
+        let ids = |q: &str, settings| search_ids(&apps, q, &none, 10, settings);
+        // A name that starts with the query beats the Settings entry.
+        let found = ids("night", true);
+        assert_eq!(found[0], "test.desktop");
+        assert!(found[1].starts_with("cnde-settings:"));
+        // Settings off: apps only.
+        assert_eq!(ids("night", false).len(), 1);
+        let found = ids("dark", true);
+        assert_eq!(found[0], "cnde-settings:option:Dark style");
+        assert_eq!(ids("night light", true)[0], "cnde-settings:option:Night light");
     }
 }

@@ -138,8 +138,8 @@ impl DockFrost {
         if config.dock_frosted() {
             wanted.push((cnde_ipc::dock::NAMESPACE, dock_radius, None));
         }
-        // A clear bar shows the wallpaper itself, not frost.
-        if config.panel_frosted() && !config.panel.clear {
+        // Clear and island bars show the wallpaper, not a frosted strip.
+        if config.panel_frosted() && config.panel.style() == cnde_config::PanelStyle::Full {
             // Just the bar, not the shadow a rounded one casts below it.
             wanted.push(("cnde-panel", 0.0, Some(config.panel.height as i32)));
         }
