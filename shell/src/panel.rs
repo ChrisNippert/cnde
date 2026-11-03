@@ -715,15 +715,56 @@ impl Panel {
             canvas.text(fonts, text, x.round(), text_y, color);
         }
 
-        // Tray icons, just left of the status button: inline ones, and in
-        // the collapsed style a chevron (and any wanting attention).
-        self.tray_regions.clear();
-        self.chevron_region = None;
-        let (inline, hidden) = tray::split(tray, tray_mode);
+        // Right to left from the status button: the on-screen keyboard, the
+        // layout label, then the tray. Each item sits left of the last, so
+        // `tray_start` ends at the leftmost one.
         let gap = theme.status_spacing;
         let slot = icon + gap;
         let mut tray_start = region.0;
+
+        // The on-screen keyboard's button, just left of the status button.
+        self.keyboard_region = None;
         let mut right = region.0 - TRAY_GAP;
+        if keyboard_button && self.edit.is_none() {
+            let a = right - slot;
+            let b = right;
+            self.keyboard_region = Some((a, b));
+            self.button_background(
+                &mut canvas,
+                theme,
+                (a, b),
+                height,
+                Button::Keyboard,
+                keyboard_open,
+            );
+            canvas.icon(icons, "input-keyboard-symbolic", a + gap / 2.0, icon_y, icon, fg);
+            right = a;
+            tray_start = a;
+        }
+
+        // The keyboard layout, left of the keyboard button.
+        self.layout_region = None;
+        if let Some(label) = layout {
+            let mut text = fonts.layout(label, theme.font_size, Weight::Bold, scale as f32);
+            let b = right - if tray_start < region.0 { TRAY_GAP / 2.0 } else { 0.0 };
+            let a = b - text.width - pad * 2.0;
+            self.layout_region = Some((a, b));
+            self.button_background(&mut canvas, theme, (a, b), height, Button::Layout, false);
+            let y = ((height - text.height) / 2.0).round();
+            canvas.text(fonts, &mut text, (a + pad).round(), y, fg);
+            tray_start = a;
+        }
+
+        // Tray icons, left of the keyboard items: inline ones, and in the
+        // collapsed style a chevron (and any wanting attention).
+        self.tray_regions.clear();
+        self.chevron_region = None;
+        let (inline, hidden) = tray::split(tray, tray_mode);
+        let mut right = if tray_start < region.0 {
+            tray_start - TRAY_GAP
+        } else {
+            right
+        };
         if !hidden.is_empty() {
             let a = right - slot;
             self.chevron_region = Some((a, right));
@@ -760,37 +801,6 @@ impl Panel {
                 self.tray_regions.push((i, x, x + slot));
                 x += slot;
             }
-        }
-
-        // The keyboard layout, left of the tray.
-        self.layout_region = None;
-        if let Some(label) = layout {
-            let mut text = fonts.layout(label, theme.font_size, Weight::Bold, scale as f32);
-            let b = tray_start - if tray_start < region.0 { 0.0 } else { TRAY_GAP };
-            let a = b - text.width - pad * 2.0;
-            self.layout_region = Some((a, b));
-            self.button_background(&mut canvas, theme, (a, b), height, Button::Layout, false);
-            let y = ((height - text.height) / 2.0).round();
-            canvas.text(fonts, &mut text, (a + pad).round(), y, fg);
-            tray_start = a;
-        }
-
-        // The on-screen keyboard's button, left of the tray.
-        self.keyboard_region = None;
-        if keyboard_button && self.edit.is_none() {
-            let a = tray_start - TRAY_GAP / 2.0 - slot;
-            let b = a + slot;
-            self.keyboard_region = Some((a, b));
-            self.button_background(
-                &mut canvas,
-                theme,
-                (a, b),
-                height,
-                Button::Keyboard,
-                keyboard_open,
-            );
-            canvas.icon(icons, "input-keyboard-symbolic", a + gap / 2.0, icon_y, icon, fg);
-            tray_start = a;
         }
 
         // Editing: a Done button left of the status icons.
