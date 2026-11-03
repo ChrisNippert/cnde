@@ -2364,6 +2364,14 @@ fn windows(c: &Config, d: &Config) -> Vec<Group> {
                 )
                 .sub("Split halves the last window for each new one; Main + Stack stacks the rest beside one main window"),
                 Row::new(
+                    "tiling.open_at_pointer",
+                    "New windows open at the pointer",
+                    Control::switch(),
+                    Value::Bool(t.open_at_pointer),
+                    Value::Bool(dt.open_at_pointer),
+                )
+                .sub("A new tiled window goes beside the tile under the mouse, not the focused one"),
+                Row::new(
                     "tiling.master_ratio",
                     "First window width",
                     Control::Slider {

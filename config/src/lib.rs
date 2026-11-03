@@ -1069,6 +1069,9 @@ pub struct Tiling {
     pub gap: u32,
     /// Logical pixels between tiled windows and the screen's edges.
     pub outer_gap: u32,
+    /// New tiled windows open next to the tile under the pointer instead of
+    /// the focused one.
+    pub open_at_pointer: bool,
 }
 
 impl Default for Tiling {
@@ -1080,6 +1083,7 @@ impl Default for Tiling {
             master_ratio: 0.5,
             gap: 8,
             outer_gap: 8,
+            open_at_pointer: false,
         }
     }
 }
