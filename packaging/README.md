@@ -33,14 +33,15 @@ source (`packaging/arch`) or use the AUR's `cnde-git`.
 ### Setting up the signing key (maintainer)
 
 ```sh
-gpg --quick-gen-key "cnde repository" ed25519 sign never   # empty passphrase
+gpg --quick-gen-key "cnde repository" ed25519 sign never   # a passphrase is fine
 gpg --armor --export "cnde repository" > packaging/cnde-repo.asc
 gpg --armor --export-secret-keys "cnde repository"         # -> secret REPO_GPG_KEY
 gpg --list-keys --with-colons "cnde repository" | awk -F: '/^fpr/ {print $10; exit}'
                                                            # -> secret REPO_GPG_KEY_ID
 ```
 
-Add both secrets under the GitHub repository's Settings → Secrets and
+If the key has a passphrase, add it as a third secret, `REPO_GPG_PASSPHRASE`.
+Add the secrets under the GitHub repository's Settings → Secrets and
 variables → Actions, and commit `cnde-repo.asc`. The release workflow
 skips the repository until the secrets are there.
 

@@ -8,9 +8,10 @@
 #   and the signed cnde.db (see packaging/README.md for the pacman.conf
 #   lines). Its old packages are replaced.
 #
-# Signing needs two repository secrets: REPO_GPG_KEY (an armored private
-# key without a passphrase, kept only for this) and REPO_GPG_KEY_ID (its
-# fingerprint). Without them the repo step is skipped.
+# Signing needs repository secrets: REPO_GPG_KEY (an armored private key,
+# kept only for this), REPO_GPG_KEY_ID (its fingerprint) and, if the key has
+# a passphrase, REPO_GPG_PASSPHRASE. Without the first two the repo step is
+# skipped.
 name: Release
 
 on:
@@ -52,11 +53,27 @@ jobs:
           sudo -u builder git config --global --add safe.directory '*'
           git config --global --add safe.directory '*'
 
+      # CI has no terminal to ask for a passphrase on, so gpg reads it from a
+      # file (REPO_GPG_PASSPHRASE, empty for a key without one). repo-add
+      # runs gpg itself and picks this up too.
       - name: Import the signing key
         if: env.HAS_KEY == 'true'
         env:
           REPO_GPG_KEY: ${{ secrets.REPO_GPG_KEY }}
-        run: printf '%s\n' "$REPO_GPG_KEY" | sudo -u builder gpg --batch --import
+          REPO_GPG_PASSPHRASE: ${{ secrets.REPO_GPG_PASSPHRASE }}
+          KEY: ${{ secrets.REPO_GPG_KEY_ID }}
+        run: |
+          gnupg=/home/builder/.gnupg
+          install -d -m 700 -o builder -g builder "$gnupg"
+          printf '%s' "$REPO_GPG_PASSPHRASE" > "$gnupg/passphrase"
+          printf 'allow-loopback-pinentry\n' > "$gnupg/gpg-agent.conf"
+          printf 'batch\npinentry-mode loopback\npassphrase-file %s/passphrase\n' "$gnupg" \
+              > "$gnupg/gpg.conf"
+          chown builder: "$gnupg"/passphrase "$gnupg"/gpg-agent.conf "$gnupg"/gpg.conf
+          chmod 600 "$gnupg"/passphrase
+          printf '%s\n' "$REPO_GPG_KEY" | sudo -u builder gpg --batch --import
+          # Fail now, not after the hour-long build, if the key can't sign.
+          echo test | sudo -u builder gpg --local-user "$KEY" --detach-sign -o /dev/null
 
       # The tag's version (v0.1.0-beta1 is 0.1.0beta1, which pacman sorts
       # before 0.1.0), in place of the checkout's pkgver().
