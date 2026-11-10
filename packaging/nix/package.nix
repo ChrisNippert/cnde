@@ -2,6 +2,7 @@
   lib,
   rustPlatform,
   pkg-config,
+  writeShellScript,
   libinput,
   libxkbcommon,
   udev,
@@ -15,6 +16,25 @@
 
 let
   root = ../..;
+  cnde-session = writeShellScript "cnde-session" ''
+    systemctl --user import-environment \
+      WAYLAND_DISPLAY \
+      XDG_CURRENT_DESKTOP \
+      XDG_SESSION_TYPE \
+      XDG_SESSION_DESKTOP || true
+
+    systemctl --user start nixos-fake-graphical-session.target || exit 1
+
+    cleanup() {
+      systemctl --user stop nixos-fake-graphical-session.target || true
+    }
+    trap cleanup EXIT
+
+    export RUST_BACKTRACE=1
+
+    script_dir="$(dirname -- "$0")"
+    "$script_dir/cnde-compositor"
+  '';
 in
 rustPlatform.buildRustPackage {
   pname = "cnde";
@@ -67,9 +87,12 @@ rustPlatform.buildRustPackage {
   doCheck = false;
 
   postInstall = ''
+    install -Dm755 ${cnde-session} $out/bin/cnde-session
+
     install -Dm644 data/cnde.desktop $out/share/wayland-sessions/cnde.desktop
     substituteInPlace $out/share/wayland-sessions/cnde.desktop \
-      --replace-fail "cnde-compositor" "$out/bin/cnde-compositor"
+      --replace-fail "Exec=env RUST_BACKTRACE=1 cnde-compositor" \
+                     "Exec=$out/bin/cnde-session"
 
     install -Dm644 data/org.freedesktop.impl.portal.desktop.cnde.service \
       $out/share/dbus-1/services/org.freedesktop.impl.portal.desktop.cnde.service
@@ -90,13 +113,15 @@ rustPlatform.buildRustPackage {
   # drivers behind it through /run/opengl-driver.
   postFixup = ''
     for bin in $out/bin/*; do
-      patchelf --add-rpath ${
-        lib.makeLibraryPath [
-          libGL
-          libxkbcommon
-          wayland
-        ]
-      } "$bin"
+      if file "$bin" | grep -q ELF; then
+        patchelf --add-rpath ${
+          lib.makeLibraryPath [
+            libGL
+            libxkbcommon
+            wayland
+          ]
+        } "$bin"
+      fi
     done
   '';
 
